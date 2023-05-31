@@ -1,0 +1,164 @@
+.TH "BLKDEACTIVATE" "8" "LVM TOOLS #VERSION#" "Red Hat, Inc" "\""
+.
+.SH NAME
+.
+blkdeactivate \(em utility to deactivate block devices
+.
+.SH SYNOPSIS
+.
+.ad l
+.nh
+.B blkdeactivate
+.RB [ -d
+.IR dm_options ]
+.RB [ -e ]
+.RB [ -h ]
+.RB [ -l
+.IR lvm_options ]
+.RB [ -m
+.IR mpath_options ]
+.RB [ -r
+.IR mdraid_options ]
+.RB [ -o
+.IR vdo_options ]
+.RB [ -u ]
+.RB [ -v ]
+.RI [ device ]
+.hy
+.ad b
+.
+.SH DESCRIPTION
+.
+The blkdeactivate utility deactivates block devices. For mounted
+block devices, it attempts to unmount it automatically before
+trying to deactivate. The utility currently supports
+device-mapper devices (DM), including LVM volumes and
+software RAID MD devices. LVM volumes are handled directly
+using the \fBlvm\fP(8) command, the rest of device-mapper
+based devices are handled using the \fBdmsetup\fP(8) command.
+MD devices are handled using the \fBmdadm\fP(8) command.
+.
+.SH OPTIONS
+.
+.TP
+.BR -d | --dmoptions " " \fIdm_options
+Comma separated list of device-mapper specific options.
+Accepted \fBdmsetup\fP(8) options are:
+.RS
+.TP
+.B retry
+Retry removal several times in case of failure.
+.TP
+.B force
+Force device removal.
+.RE
+.
+.TP
+.BR -e | --errors
+Show errors reported from tools called by \fBblkdeactivate\fP. Without this
+option, any error messages from these external tools are suppressed and the
+\fBblkdeactivate\fP itself provides only a summary message to indicate
+the device was skipped.
+.
+.TP
+.BR -h | --help
+Display the help text.
+.
+.TP
+.BR -l | --lvmoptions " " \fIlvm_options
+Comma-separated list of LVM specific options:
+.RS
+.TP
+.B retry
+Retry removal several times in case of failure.
+.TP
+.B wholevg
+Deactivate the whole LVM Volume Group when processing a Logical Volume.
+Deactivating the Volume Group as a whole is quicker than deactivating
+each Logical Volume separately.
+.RE
+.
+.TP
+.BR -r | --mdraidoptions " " \fImdraid_options
+Comma-separated list of MD RAID specific options:
+.RS
+.TP
+.B wait
+Wait MD device's resync, recovery or reshape action to complete
+before deactivation.
+.RE
+.
+.TP
+.BR -m | --mpathoptions " " \fImpath_options
+Comma-separated list of device-mapper multipath specific options:
+.RS
+.TP
+.B disablequeueing
+Disable queueing on all multipath devices before deactivation.
+This avoids a situation where blkdeactivate may end up waiting if
+all the paths are unavailable for any underlying device-mapper multipath
+device.
+.RE
+.
+.TP
+.BR -o | --vdooptions " " \fIvdo_options
+Comma-separated list of VDO specific options:
+.RS
+.TP
+.BR configfile = \fIfile
+Use specified VDO configuration file.
+.RE
+.
+.TP
+.BR -u | --umount
+Unmount a mounted device before trying to deactivate it.
+Without this option used, a device that is mounted is not deactivated.
+.
+.TP
+.BR -v ", " --verbose
+Run in verbose mode. Use \fB-vv\fP for even more verbose mode.
+.
+.SH EXAMPLES
+.
+Deactivate all supported block devices found in the system, skipping mounted
+devices.
+.br
+#
+.B blkdeactivate
+.P
+Deactivate all supported block devices found in the system, unmounting any
+mounted devices first, if possible.
+.br
+#
+.B blkdeactivate -u
+.P
+Deactivate the device /dev/vg/lvol0 together with all its holders, unmounting
+any mounted devices first, if possible.
+.br
+#
+.B blkdeactivate -u /dev/vg/lvol0
+.P
+Deactivate all supported block devices found in the system. If the deactivation
+of a device-mapper device fails, retry it. Deactivate the whole
+Volume Group at once when processing an LVM Logical Volume.
+.br
+#
+.B blkdeactivate -u -d retry -l wholevg
+.P
+Deactivate all supported block devices found in the system. If the deactivation
+of a device-mapper device fails, retry it and force removal.
+.br
+#
+.B blkdeactivate -d force,retry
+.
+.SH SEE ALSO
+.
+.nh
+.ad l
+.BR dmsetup (8),
+.BR lsblk (8),
+.BR lvm (8),
+.BR mdadm (8),
+.BR multipathd (8),
+.BR vdo (8),
+.BR umount (8)
