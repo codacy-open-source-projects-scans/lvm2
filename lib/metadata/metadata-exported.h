@@ -277,6 +277,9 @@
 
 #define lv_is_removed(lv)	(((lv)->status & LV_REMOVED) ? 1 : 0)
 
+#define lv_is_zero(lv) 		((dm_list_size(&lv->segments) == 1) && seg_is_zero(first_seg(lv)))
+#define lv_is_error(lv)		((dm_list_size(&lv->segments) == 1) && seg_is_error(first_seg(lv)))
+
 /* Recognize component LV (matching lib/misc/lvm-string.c _lvname_has_reserved_component_string()) */
 #define lv_is_component(lv) (lv_is_cache_origin(lv) || \
 			     lv_is_writecache_origin(lv) || \
@@ -879,9 +882,15 @@ struct logical_volume *find_pool_lv(const struct logical_volume *lv);
 int thin_pool_is_active(const struct logical_volume *lv);
 int thin_pool_supports_external_origin(const struct lv_segment *pool_seg, const struct logical_volume *external_lv);
 int thin_pool_feature_supported(const struct logical_volume *lv, int feature);
+int thin_pool_prepare_metadata(struct logical_volume *metadata_lv,
+			       uint32_t chunk_size,
+			       uint64_t data_blocks,
+			       uint64_t data_begin,
+			       uint64_t data_length);
 int update_thin_pool_lv(struct logical_volume *lv, int activate);
 
 int recalculate_pool_chunk_size_with_dev_hints(struct logical_volume *pool_lv,
+					       struct logical_volume *pool_data_lv,
 					       int chunk_size_calc_policy);
 int validate_cache_chunk_size(struct cmd_context *cmd, uint32_t chunk_size);
 int validate_thin_pool_chunk_size(struct cmd_context *cmd, uint32_t chunk_size);

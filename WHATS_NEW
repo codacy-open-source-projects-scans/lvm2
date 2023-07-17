@@ -1,5 +1,15 @@
 version 2.03.22 - 
 =================================
+  Improve VDO and Thin support with lvmlockd.
+  Handle 'lvextend --usepolicies' for pools for all activation variants.
+  Fix memleak in vgchange autoactivation setup.
+  Update py-compile building script.
+  Support conversion from thick to fully provisioned thin LV.
+  Cache/Thin-pool can use error and zero volumes for testing.
+  Individual thin volume can be cached, but cannot take snapshot.
+  Better internal support for handling error and zero target (for testing).
+  Resize COW above trimmed maximal size is does not return error.
+  Support parsing of vdo geometry format version 4.
   Add lvm.conf thin_restore and cache_restore settings.
   Enhance lvm_import_vdo and use snapshot when converting VDO volume.
   Fix parsed of VDO metadata.
@@ -147,7 +157,7 @@ Version 2.03.12 - 07th May 2021
   Fix IMSM MD RAID detection on 4k devices.
   Check for presence of VDO target before starting any conversion.
   Support metatadata profiles with volume VDO pool conversions.
-  Support -Zn for conversion of already formated VDO pools.
+  Support -Zn for conversion of already formatted VDO pools.
   Avoid removing LVs on error path of lvconvert during creation volumes.
   Fix crashing lvdisplay when thin volume was waiting for merge.
   Support option --errorwhenfull when converting volume to thin-pool.
@@ -3233,7 +3243,7 @@ Version 2.02.68 - 23rd June 2010
   Add device name and offset to raw_read_mda_header error messages.
   Honour log argument when down-converting stacked mirror.
   Sleep to workaround clvmd -S race: socket closed early and server drops cmd.
-  Use early udev synchronisation and update of dev nodes for clustered mirrors.
+  Use early udev synchronization and update of dev nodes for clustered mirrors.
   Remove incorrect inclusion of kdev_t.h from cmirrord/functions.h.
   Add man pages for lvmconf and non-existent lvmsadc and lvmsar tools.
   Exit successfully when using -o help (but not -o +help) with LVM reports.

@@ -356,17 +356,10 @@ int validate_lv_cache_create_origin(const struct logical_volume *origin_lv)
 		return 0;
 	}
 
-	/*
-	 * Only linear, striped or raid supported.
-	 * FIXME Tidy up all these type restrictions.
-	 */
 	if (lv_is_cache_type(origin_lv) ||
 	    lv_is_mirror_type(origin_lv) ||
-	    lv_is_thin_volume(origin_lv) || lv_is_thin_pool_metadata(origin_lv) ||
 	    lv_is_merging_origin(origin_lv) ||
-	    lv_is_cow(origin_lv) || lv_is_merging_cow(origin_lv) ||
-	    /* TODO: think about enabling caching of a single thin volume */
-	    (lv_is_virtual(origin_lv) && !lv_is_vdo(origin_lv))) {
+	    lv_is_cow(origin_lv) || lv_is_merging_cow(origin_lv)) {
 		log_error("Cache is not supported with %s segment type of the original logical volume %s.",
 			  lvseg_name(first_seg(origin_lv)), display_lvname(origin_lv));
 		return 0;
@@ -428,7 +421,7 @@ struct logical_volume *lv_cache_create(struct logical_volume *pool_lv,
 	if (!(segtype = get_segtype_from_string(cmd, SEG_TYPE_NAME_CACHE)))
 		return_NULL;
 
-	if (!insert_layer_for_lv(cmd, cache_lv, CACHE, "_corig"))
+	if (!insert_layer_for_lv(cmd, cache_lv, 0, "_corig"))
 		return_NULL;
 
 	seg = first_seg(cache_lv);
@@ -1229,6 +1222,7 @@ int cache_set_params(struct lv_segment *seg,
 		if (!pool_seg->chunk_size &&
 		    /* TODO: some calc_policy solution for cache ? */
 		    !recalculate_pool_chunk_size_with_dev_hints(pool_seg->lv,
+								seg_lv(pool_seg, 0),
 								THIN_CHUNK_SIZE_CALC_METHOD_GENERIC))
 			return_0;
 	}
@@ -1248,12 +1242,23 @@ int cache_set_params(struct lv_segment *seg,
 int wipe_cache_pool(struct logical_volume *cache_pool_lv)
 {
 	int r;
+	struct logical_volume *cache_data_lv;
 
 	/* Only unused cache-pool could be activated and wiped */
 	if (lv_is_used_cache_pool(cache_pool_lv) || lv_is_cache_vol(cache_pool_lv)) {
 		log_error(INTERNAL_ERROR "Failed to wipe cache pool for volume %s.",
 			  display_lvname(cache_pool_lv));
 		return 0;
+	}
+
+	cache_data_lv = (lv_is_cache_pool(cache_pool_lv)) ?
+		seg_lv(first_seg(cache_pool_lv), 0) : cache_pool_lv;
+
+	if (cache_data_lv && seg_cannot_be_zeroed(first_seg(cache_data_lv))) {
+		log_debug("Skipping wipe of %s volume with %s segtype.",
+			  display_lvname(cache_data_lv),
+			  first_seg(cache_data_lv)->segtype->name);
+		return 1;
 	}
 
 	cache_pool_lv->status |= LV_TEMPORARY;

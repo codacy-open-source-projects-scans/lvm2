@@ -53,22 +53,32 @@ comma = ,
 RUN := $(shell find -L $(srcdir) -regextype posix-egrep \( -path \*/shell/\*.sh -or -path \*/api/\*.sh -or -path \*/unit/\*.sh \) -and -regex "$(srcdir)/.*($(subst $(comma),|,$(T))).*" -and -not -regex "$(srcdir)/.*($(subst $(comma),|,$(S))).*" | $(SORT))
 RUN_BASE = $(subst $(srcdir)/,,$(RUN))
 
+ifeq ("@BUILD_DMEVENTD@", "yes")
+DMEVENTD_TOOLS :=\
+ daemons/dmeventd/dmeventd
+endif
+
 ifeq ("@BUILD_LVMPOLLD@", "yes")
 LVMPOLLD_RUN_BASE = $(RUN_BASE)
 LVMPOLLD_NDEV_FLAVOUR = ,ndev-lvmpolld
 LVMPOLLD_UDEV_FLAVOUR = ,udev-lvmpolld
+LVMPOLLD_TOOLS :=\
+ daemons/lvmpolld/lvmpolld
 endif
 
 ifeq ("@BUILD_LVMLOCKD@", "yes")
 LVMLOCKD_RUN_BASE = $(RUN_BASE)
 LVMLOCKD_UDEV_FLAVOUR = ,udev-lvmlockd-test
+LVMLOCKD_TOOLS :=\
+ daemons/lvmlockd/lvmlockd\
+ daemons/lvmlockd/lvmlockctl
 endif
 
 # Shell quote;
 SHELL_PATH_SQ := $(subst ','\'',$(SHELL_PATH))
 
 ifeq ("@UDEV_SYNC@", "yes")
-dm_udev_synchronisation = 1
+dm_udev_synchronization = 1
 endif
 
 all: .tests-stamp
@@ -204,9 +214,10 @@ LIB_LVMLOCKD_CONF :=\
 
 LIB_MKE2FS_CONF := mke2fs.conf
 
-LVM_TOOLS :=\
- daemons/dmeventd/dmeventd\
- daemons/lvmpolld/lvmpolld\
+LVM_TOOLS := \
+ $(LVMPOLLD_TOOLS)\
+ $(LVMLOCKD_TOOLS)\
+ $(DMEVENTD_TOOLS)\
  libdm/dm-tools/dmsetup
 
 LVM_PROFILES := $(addsuffix .profile,\
@@ -287,7 +298,7 @@ lib/flavour-%: $(srcdir)/lib/flavour-%.sh .lib-dir-stamp
 
 lib/paths-common: $(srcdir)/Makefile.in Makefile .lib-dir-stamp
 	$(SHOW) "    [PATHS] $@"
-	$(Q) echo 'DM_UDEV_SYNCHRONISATION=$(dm_udev_synchronisation)' >> $@-t
+	$(Q) echo 'DM_UDEV_SYNCHRONIZATION=$(dm_udev_synchronization)' >> $@-t
 	$(Q) echo 'LVMPOLLD_PIDFILE="@LVMPOLLD_PIDFILE@"' >> $@-t
 	$(Q) echo 'DMEVENTD_PIDFILE="@DMEVENTD_PIDFILE@"' >> $@-t
 	$(Q) echo 'LVM_TEST_THIN_CHECK_CMD=$${LVM_TEST_THIN_CHECK_CMD-@THIN_CHECK_CMD@}' >> $@-t
@@ -298,7 +309,7 @@ lib/paths-common: $(srcdir)/Makefile.in Makefile .lib-dir-stamp
 	$(Q) echo 'LVM_TEST_CACHE_DUMP_CMD=$${LVM_TEST_CACHE_DUMP_CMD-@CACHE_DUMP_CMD@}' >> $@-t
 	$(Q) echo 'LVM_TEST_CACHE_REPAIR_CMD=$${LVM_TEST_CACHE_REPAIR_CMD-@CACHE_REPAIR_CMD@}' >> $@-t
 	$(Q) echo 'LVM_TEST_CACHE_RESTORE_CMD=$${LVM_TEST_CACHE_RESTORE_CMD-@CACHE_RESTORE_CMD@}' >> $@-t
-	$(Q) echo 'export DM_UDEV_SYNCHRONISATION THIN RAID CACHE\' >> $@-t
+	$(Q) echo 'export DM_UDEV_SYNCHRONIZATION THIN RAID CACHE\' >> $@-t
 	$(Q) echo ' LVM_TEST_THIN_CHECK_CMD LVM_TEST_THIN_DUMP_CMD LVM_TEST_THIN_REPAIR_CMD LVM_TEST_THIN_RESTORE_CMD\' >> $@-t
 	$(Q) echo ' LVM_TEST_CACHE_CHECK_CMD LVM_TEST_CACHE_DUMP_CMD LVM_TEST_CACHE_REPAIR_CMD LVM_TEST_CACHE_RESTORE_CMD' >> $@-t
 	$(Q) mv $@-t $@

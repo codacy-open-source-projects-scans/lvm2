@@ -210,7 +210,7 @@ STACKTRACE() {
 }
 
 init_udev_transaction() {
-	if test "$DM_UDEV_SYNCHRONISATION" = 1; then
+	if test "$DM_UDEV_SYNCHRONIZATION" = 1; then
 		local cookie
 		cookie=$(dmsetup udevcreatecookie)
 		# Cookie is not generated if udev is not running!
@@ -219,14 +219,14 @@ init_udev_transaction() {
 }
 
 finish_udev_transaction() {
-	if test "$DM_UDEV_SYNCHRONISATION" = 1 && test -n "${DM_UDEV_COOKIE-}" ; then
+	if test "$DM_UDEV_SYNCHRONIZATION" = 1 && test -n "${DM_UDEV_COOKIE-}" ; then
 		dmsetup udevreleasecookie || true
 		unset DM_UDEV_COOKIE
 	fi
 }
 
 teardown_udev_cookies() {
-	if test "$DM_UDEV_SYNCHRONISATION" = 1; then
+	if test "$DM_UDEV_SYNCHRONIZATION" = 1; then
 		# Delete any cookies created more than 10 minutes ago
 		# and not used in the last 10 minutes.
 		# Log only non-zero semaphores count
@@ -302,9 +302,7 @@ if test -z "${installed_testsuite+varset}"; then
     *)
 	PATH="$abs_top_builddir/test/lib:$abs_top_builddir/test/api:$PATH"
 	LVM_BINARY=$(which lvm)
-	LD_LIBRARY_PATH=$(find -L "$abs_top_builddir/libdm/" "$abs_top_builddir/tools/"\
-		"$abs_top_builddir/daemons/" \
-		-name "*.so" -printf "%h:")"$LD_LIBRARY_PATH"
+	LD_LIBRARY_PATH="$abs_top_builddir/daemons/dmeventd:$abs_top_builddir/tools:$abs_top_builddir/libdm:$LD_LIBRARY_PATH"
 	export PATH LD_LIBRARY_PATH LVM_BINARY ;;
     esac
 fi

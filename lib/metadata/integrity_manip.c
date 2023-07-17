@@ -385,7 +385,7 @@ static int _set_integrity_block_size(struct cmd_context *cmd, struct logical_vol
 		 */
 		rv = fs_block_size_and_type(pathname, &fs_block_size, NULL, NULL);
 		if (!rv || !fs_block_size) {
-			int use_bs;
+			unsigned use_bs;
 
 			if (lbs_4k && pbs_4k) {
 				use_bs = 4096;
@@ -677,7 +677,7 @@ int lv_add_integrity_to_raid(struct logical_volume *lv, struct integrity_setting
 		 * but gets a new integrity segment, in place of the segments
 		 * that were moved to lv_iorig.
 		 */
-		if (!insert_layer_for_lv(cmd, lv_image, INTEGRITY, "_iorig"))
+		if (!insert_layer_for_lv(cmd, lv_image, 0, "_iorig"))
 			goto_bad;
 
 		lv_image->status |= INTEGRITY;

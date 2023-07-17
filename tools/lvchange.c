@@ -156,8 +156,11 @@ static int _lvchange_monitoring(struct cmd_context *cmd,
 			log_verbose("Monitoring LV %s", display_lvname(lv));
 		else
 			log_verbose("Unmonitoring LV %s", display_lvname(lv));
-		if (!monitor_dev_for_events(cmd, lv, 0, dmeventd_monitor_mode()))
-			return_0;
+		if (!monitor_dev_for_events(cmd, lv, 0, dmeventd_monitor_mode())) {
+			log_error("Failed to change monitoring for %s volume.",
+				  display_lvname(lv));
+			return 0;
+		}
 	}
 
 	return 1;
@@ -357,7 +360,7 @@ static int _lvchange_resync(struct cmd_context *cmd, struct logical_volume *lv)
 		init_dmeventd_monitor(monitored);
 	init_mirror_in_sync(0);
 	if (!sync_local_dev_names(cmd))
-		log_warn("Failed to sync local dev names.");
+		log_warn("WARNING: Failed to sync local dev names.");
 
 	log_very_verbose("Starting resync of %s%s%s%s %s.",
 			 (active) ? "active " : "",

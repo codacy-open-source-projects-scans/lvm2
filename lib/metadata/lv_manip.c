@@ -5586,6 +5586,7 @@ static int _lvresize_adjust_extents(struct logical_volume *lv,
 				seg_size = lp->extents - existing_logical_extents;	// Recalculate
 				if (lp->extents == existing_logical_extents) {
 					/* Signal that normal resizing is not required */
+					lp->size_changed = 1;
 					return 1;
 				}
 			}
@@ -8212,7 +8213,17 @@ int move_lv_segments(struct logical_volume *lv_to,
 		     struct logical_volume *lv_from,
 		     uint64_t set_status, uint64_t reset_status)
 {
-	const uint64_t MOVE_BITS = (RAID | MIRROR | THIN_VOLUME | CACHE | LV_VDO);
+	const uint64_t MOVE_BITS = (CACHE |
+				    CACHE_POOL |
+				    INTEGRITY |
+				    LV_CACHE_VOL |
+				    LV_VDO |
+				    LV_VDO_POOL |
+				    MIRROR |
+				    RAID |
+				    THIN_POOL |
+				    THIN_VOLUME |
+				    WRITECACHE);
 	struct lv_segment *seg;
 
 	dm_list_iterate_items(seg, &lv_to->segments)
@@ -8359,7 +8370,7 @@ struct logical_volume *insert_layer_for_lv(struct cmd_context *cmd,
 					   uint64_t status,
 					   const char *layer_suffix)
 {
-	static const char _suffixes[][8] = { "_tdata", "_cdata", "_corig", "_wcorig", "_vdata" };
+	static const char _suffixes[][10] = { "_tdata", "_cdata", "_corig", "_wcorig", "_vdata", "_tpool%d" };
 	int r;
 	char name[NAME_LEN];
 	struct dm_str_list *sl;
@@ -9291,7 +9302,7 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 		init_mirror_in_sync(lp->nosync);
 
 		if (lp->nosync) {
-			log_warn("WARNING: New %s won't be synchronised. "
+			log_warn("WARNING: New %s won't be synchronized. "
 				 "Don't read what you didn't write!",
 				 lp->segtype->name);
 			status |= LV_NOTSYNCED;
@@ -9456,7 +9467,8 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 		first_seg(lv)->discards = lp->discards;
 		if ((first_seg(lv)->crop_metadata = lp->crop_metadata) == THIN_CROP_METADATA_NO)
 			lv->status |= LV_CROP_METADATA;
-		if (!recalculate_pool_chunk_size_with_dev_hints(lv, lp->thin_chunk_size_calc_policy)) {
+		if (!recalculate_pool_chunk_size_with_dev_hints(lv, seg_lv(first_seg(lv), 0),
+								lp->thin_chunk_size_calc_policy)) {
 			stack;
 			goto revert_new_lv;
 		}

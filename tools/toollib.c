@@ -211,7 +211,7 @@ static int _ignore_vg(struct cmd_context *cmd,
 			}
 			return 1;
 		} else {
-			log_warn("Skipping clustered VG %s.", vg_name);
+			log_warn("WARNING: Skipping clustered VG %s.", vg_name);
 			if (!_printed_clustered_vg_advice) {
 				_printed_clustered_vg_advice = 1;
 				log_error("See lvmlockd(8) for changing a clvm/clustered VG to a shared VG.");
@@ -565,7 +565,7 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 		if (vp_new->system_id && cmd->system_id &&
 		    strcmp(vp_new->system_id, cmd->system_id)) {
 			if (*vp_new->system_id)
-				log_warn("VG with system ID %s might become inaccessible as local system ID is %s",
+				log_warn("WARNING: VG with system ID %s might become inaccessible as local system ID is %s",
 					 vp_new->system_id, cmd->system_id);
 			else
 				log_warn("WARNING: A VG without a system ID allows unsafe access from other hosts.");
@@ -584,7 +584,7 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 
 		if (vp_new->system_id && cmd->system_id &&
 		    strcmp(vp_new->system_id, cmd->system_id)) {
-			log_warn("VG with system ID %s might become inaccessible as local system ID is %s",
+			log_warn("WARNING: VG with system ID %s might become inaccessible as local system ID is %s",
 				 vp_new->system_id, cmd->system_id);
 		}
 	}
@@ -904,7 +904,7 @@ void lv_spawn_background_polling(struct cmd_context *cmd,
 
 	/* Ensure there is nothing waiting on cookie */
 	if (!sync_local_dev_names(cmd))
-		log_warn("Failed to sync local dev names.");
+		log_warn("WARNING: Failed to sync local dev names.");
 
 	if (lv_is_pvmove(lv))
 		lv_mirr = lv;
@@ -1498,13 +1498,13 @@ static int _get_one_writecache_setting(struct cmd_context *cmd, struct writecach
 		return 0;
 	}
 
-	log_warn("Unrecognized writecache setting \"%s\" may cause activation failure.", key);
+	log_warn("WARNING: Unrecognized writecache setting \"%s\" may cause activation failure.", key);
 	if (yes_no_prompt("Use unrecognized writecache setting? [y/n]: ") == 'n') {
 		log_error("Aborting writecache conversion.");
 		return 0;
 	}
 
-	log_warn("Using unrecognized writecache setting: %s = %s.", key, val);
+	log_warn("WARNING: Using unrecognized writecache setting: %s = %s.", key, val);
 
 	settings->new_key = dm_pool_strdup(cmd->mem, key);
 	settings->new_val = dm_pool_strdup(cmd->mem, val);
@@ -1524,7 +1524,7 @@ int get_writecache_settings(struct cmd_context *cmd, struct writecache_settings 
 	char key[64];
 	char val[64];
 	int num;
-	int pos;
+	unsigned pos;
 	int rn;
 	int found = 0;
 
@@ -1854,7 +1854,7 @@ int get_and_validate_major_minor(const struct cmd_context *cmd,
 				 *major, cmd->dev_types->device_mapper_major);
 		}
 		/* Stay with dynamic major:minor if minor is not specified. */
-		*major = (*minor == -1) ? -1 : cmd->dev_types->device_mapper_major;
+		*major = (*minor == -1) ? -1 : (int)cmd->dev_types->device_mapper_major;
 	}
 
 	if ((*minor != -1) && !validate_major_minor(cmd, fmt, *major, *minor))
@@ -2746,10 +2746,16 @@ static int _lv_is_prop(struct cmd_context *cmd, struct logical_volume *lv, int l
 		return lv_is_cache_origin(lv);
 	case is_merging_cow_LVP:
 		return lv_is_merging_cow(lv);
+	case is_cow_LVP:
+		return lv_is_cow(lv);
 	case is_cow_covering_origin_LVP:
 		return lv_is_cow_covering_origin(lv);
 	case is_visible_LVP:
 		return lv_is_visible(lv);
+	case is_error_LVP:
+		return lv_is_error(lv);
+	case is_zero_LVP:
+		return lv_is_zero(lv);
 	case is_historical_LVP:
 		return lv_is_historical(lv);
 	case is_raid_with_tracking_LVP:
@@ -2813,9 +2819,9 @@ static int _lv_is_type(struct cmd_context *cmd, struct logical_volume *lv, int l
 	case integrity_LVT:
 		return seg_is_integrity(seg);
 	case error_LVT:
-		return !strcmp(seg->segtype->name, SEG_TYPE_NAME_ERROR);
+		return seg_is_error(seg);
 	case zero_LVT:
-		return !strcmp(seg->segtype->name, SEG_TYPE_NAME_ZERO);
+		return seg_is_zero(seg);
 	default:
 		log_error(INTERNAL_ERROR "unknown lv type value lvt_enum %d", lvt_enum);
 	}
@@ -2873,9 +2879,9 @@ int get_lvt_enum(struct logical_volume *lv)
 	if (seg_is_integrity(seg))
 		return integrity_LVT;
 
-	if (!strcmp(seg->segtype->name, SEG_TYPE_NAME_ERROR))
+	if (seg_is_error(seg))
 		return error_LVT;
-	if (!strcmp(seg->segtype->name, SEG_TYPE_NAME_ZERO))
+	if (seg_is_zero(seg))
 		return zero_LVT;
 
 	return 0;
@@ -2995,10 +3001,10 @@ static int _check_lv_types(struct cmd_context *cmd, struct logical_volume *lv, i
 		int lvt_enum = get_lvt_enum(lv);
 		struct lv_type *type = get_lv_type(lvt_enum);
 		if (!type) {
-			log_warn("Command on LV %s does not accept LV type unknown (%d).",
+			log_warn("WARNING: Command on LV %s does not accept LV type unknown (%d).",
 				 display_lvname(lv), lvt_enum);
 		} else {
-			log_warn("Command on LV %s does not accept LV type %s.",
+			log_warn("WARNING: Command on LV %s does not accept LV type %s.",
 				 display_lvname(lv), type->name);
 		}
 	}
@@ -3109,7 +3115,7 @@ static int _check_lv_rules(struct cmd_context *cmd, struct logical_volume *lv)
 		if (rule->check_opts && (rule->rule == RULE_INVALID) && opts_match_count) {
 			memset(buf, 0, sizeof(buf));
 			opt_array_to_str(cmd, rule->check_opts, rule->check_opts_count, buf, sizeof(buf));
-			log_warn("Command on LV %s has invalid use of option %s.",
+			log_warn("WARNING: Command on LV %s has invalid use of option %s.",
 				 display_lvname(lv), buf);
 			ret = 0;
 		}
@@ -3119,7 +3125,7 @@ static int _check_lv_rules(struct cmd_context *cmd, struct logical_volume *lv)
 		if (rule->check_opts && (rule->rule == RULE_REQUIRE) && opts_unmatch_count)  {
 			memset(buf, 0, sizeof(buf));
 			opt_array_to_str(cmd, rule->check_opts, rule->check_opts_count, buf, sizeof(buf));
-			log_warn("Command on LV %s requires option %s.",
+			log_warn("WARNING: Command on LV %s requires option %s.",
 				 display_lvname(lv), buf);
 			ret = 0;
 		}
@@ -3128,10 +3134,10 @@ static int _check_lv_rules(struct cmd_context *cmd, struct logical_volume *lv)
 
 		if (rule->check_lvt_bits && (rule->rule == RULE_INVALID) && lv_types_match_bits) {
 			if (rule->opts_count)
-				log_warn("Command on LV %s uses options invalid with LV type %s.",
+				log_warn("WARNING: Command on LV %s uses options invalid with LV type %s.",
 				 	 display_lvname(lv), lvtype ? lvtype->name : "unknown");
 			else
-				log_warn("Command on LV %s with invalid LV type %s.",
+				log_warn("WARNING: Command on LV %s with invalid LV type %s.",
 				 	 display_lvname(lv), lvtype ? lvtype->name : "unknown");
 			ret = 0;
 		}
@@ -3142,10 +3148,10 @@ static int _check_lv_rules(struct cmd_context *cmd, struct logical_volume *lv)
 			memset(buf, 0, sizeof(buf));
 			_lvt_bits_to_str(rule->check_lvt_bits, buf, sizeof(buf));
 			if (rule->opts_count)
-				log_warn("Command on LV %s uses options that require LV types %s.",
+				log_warn("WARNING: Command on LV %s uses options that require LV types %s.",
 					 display_lvname(lv), buf);
 			else
-				log_warn("Command on LV %s does not accept LV type %s. Required LV types are %s.",
+				log_warn("WARNING: Command on LV %s does not accept LV type %s. Required LV types are %s.",
 					 display_lvname(lv), lvtype ? lvtype->name : "unknown", buf);
 			ret = 0;
 		}
@@ -3156,10 +3162,10 @@ static int _check_lv_rules(struct cmd_context *cmd, struct logical_volume *lv)
 			memset(buf, 0, sizeof(buf));
 			_lvp_bits_to_str(lv_props_match_bits, buf, sizeof(buf));
 			if (rule->opts_count)
-				log_warn("Command on LV %s uses options that are invalid with LV properties: %s.",
+				log_warn("WARNING: Command on LV %s uses options that are invalid with LV properties: %s.",
 				 	 display_lvname(lv), buf);
 			else
-				log_warn("Command on LV %s is invalid on LV with properties: %s.",
+				log_warn("WARNING: Command on LV %s is invalid on LV with properties: %s.",
 				 	 display_lvname(lv), buf);
 			ret = 0;
 		}
@@ -3170,10 +3176,10 @@ static int _check_lv_rules(struct cmd_context *cmd, struct logical_volume *lv)
 			memset(buf, 0, sizeof(buf));
 			_lvp_bits_to_str(lv_props_unmatch_bits, buf, sizeof(buf));
 			if (rule->opts_count)
-				log_warn("Command on LV %s uses options that require LV properties: %s.",
+				log_warn("WARNING: Command on LV %s uses options that require LV properties: %s.",
 				 	 display_lvname(lv), buf);
 			else
-				log_warn("Command on LV %s requires LV with properties: %s.",
+				log_warn("WARNING: Command on LV %s requires LV with properties: %s.",
 				 	 display_lvname(lv), buf);
 			ret = 0;
 		}

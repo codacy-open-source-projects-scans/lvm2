@@ -126,6 +126,7 @@ static const struct command_function _command_functions[CMD_COUNT] = {
 	{ lvconvert_to_thinpool_CMD,			lvconvert_to_pool_cmd },
 	{ lvconvert_to_cachepool_CMD,			lvconvert_to_pool_cmd },
 	{ lvconvert_to_thin_with_external_CMD,		lvconvert_to_thin_with_external_cmd },
+	{ lvconvert_to_thin_with_data_CMD,		lvconvert_to_thin_with_data_cmd },
 	{ lvconvert_to_cache_with_cachevol_CMD,		lvconvert_to_cache_with_cachevol_cmd },
 	{ lvconvert_to_cache_with_device_CMD,		lvconvert_to_cache_with_cachevol_cmd },
 	{ lvconvert_to_cache_with_cachepool_CMD,	lvconvert_to_cache_with_cachepool_cmd },
@@ -2619,7 +2620,7 @@ static int _get_current_settings(struct cmd_context *cmd)
 		if (!strcmp(search_mode, "none") || !strcmp(search_mode, "auto") || !strcmp(search_mode, "all"))
 			cmd->search_for_devnames = search_mode;
 		else {
-			log_warn("Ignoring unknown search_for_devnames setting, using %s.", DEFAULT_SEARCH_FOR_DEVNAMES);
+			log_warn("WARNING: Ignoring unknown search_for_devnames setting, using %s.", DEFAULT_SEARCH_FOR_DEVNAMES);
 			cmd->search_for_devnames = DEFAULT_SEARCH_FOR_DEVNAMES;
 		}
 	}
@@ -3062,7 +3063,7 @@ static void _init_md_checks(struct cmd_context *cmd)
 	         !strcmp(md_check, "full"))
 		cmd->md_component_checks = md_check;
 	else {
-		log_warn("Ignoring unknown md_component_checks setting, using auto.");
+		log_warn("WARNING: Ignoring unknown md_component_checks setting, using auto.");
 		cmd->md_component_checks = "auto";
 	}
 
