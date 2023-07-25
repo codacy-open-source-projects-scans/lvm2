@@ -19,8 +19,6 @@
 #include "lib/metadata/metadata.h"
 #include "lvconvert_poll.h"
 
-#define MAX_PDATA_ARGS	10	/* Max number of accepted args for d-m-p-d tools */
-
 typedef enum {
 	/* Split:
 	 *   For a mirrored or raid LV, split mirror into two mirrors, optionally tracking
@@ -2338,17 +2336,14 @@ static int _lvconvert_thin_pool_repair(struct cmd_context *cmd,
 				       struct logical_volume *pool_lv,
 				       struct dm_list *pvh, int poolmetadataspare)
 {
-	const char *dmdir = dm_dir();
 	const char *thin_dump =
 		find_config_tree_str_allow_empty(cmd, global_thin_dump_executable_CFG, NULL);
-	const char *thin_repair =
-		find_config_tree_str_allow_empty(cmd, global_thin_repair_executable_CFG, NULL);
-	const struct dm_config_node *cn;
-	const struct dm_config_value *cv;
 	int ret = 0, status;
 	int args = 0;
-	const char *argv[MAX_PDATA_ARGS + 7]; /* Max supported args */
-	char *dm_name, *trans_id_str;
+	const char *argv[DEFAULT_MAX_EXEC_ARGS + 7] = { /* Max supported args */
+		find_config_tree_str_allow_empty(cmd, global_thin_repair_executable_CFG, NULL)
+	};
+	char *trans_id_str;
 	char meta_path[PATH_MAX];
 	char pms_path[PATH_MAX];
 	uint64_t trans_id;
@@ -2357,9 +2352,15 @@ static int _lvconvert_thin_pool_repair(struct cmd_context *cmd,
 	struct pipe_data pdata;
 	FILE *f;
 
-	if (!thin_repair || !thin_repair[0]) {
-		log_error("Thin repair commnand is not configured. Repair is disabled.");
-		return 0; /* Checking disabled */
+	if (!argv[0] || !*argv[0]) {
+		log_error("Thin repair command is not configured. Repair is disabled.");
+		return 0;
+	}
+
+	if (thin_pool_is_active(pool_lv)) {
+		log_error("Cannot repair active pool %s.  Use lvchange -an first.",
+			  display_lvname(pool_lv));
+		return 0;
 	}
 
 	pmslv = pool_lv->vg->pool_metadata_spare_lv;
@@ -2374,50 +2375,25 @@ static int _lvconvert_thin_pool_repair(struct cmd_context *cmd,
 		pmslv = pool_lv->vg->pool_metadata_spare_lv;
 	}
 
-	if (!(dm_name = dm_build_dm_name(cmd->mem, mlv->vg->name,
-					 mlv->name, NULL)) ||
-	    (dm_snprintf(meta_path, sizeof(meta_path), "%s/%s", dmdir, dm_name) < 0)) {
+	if (dm_snprintf(meta_path, sizeof(meta_path), "%s%s/%s",
+			cmd->dev_dir, mlv->vg->name, mlv->name) < 0) {
 		log_error("Failed to build thin metadata path.");
 		return 0;
 	}
 
-	if (!(dm_name = dm_build_dm_name(cmd->mem, pmslv->vg->name,
-					 pmslv->name, NULL)) ||
-	    (dm_snprintf(pms_path, sizeof(pms_path), "%s/%s", dmdir, dm_name) < 0)) {
+	if (dm_snprintf(pms_path, sizeof(pms_path), "%s%s/%s",
+			cmd->dev_dir, pmslv->vg->name, pmslv->name) < 0) {
 		log_error("Failed to build pool metadata spare path.");
 		return 0;
 	}
 
-	if (!(cn = find_config_tree_array(cmd, global_thin_repair_options_CFG, NULL))) {
-		log_error(INTERNAL_ERROR "Unable to find configuration for global/thin_repair_options");
-		return 0;
-	}
+	if (!prepare_exec_args(cmd, argv, &args, global_thin_repair_options_CFG))
+		return_0;
 
-	for (cv = cn->v; cv && args < MAX_PDATA_ARGS; cv = cv->next) {
-		if (cv->type != DM_CFG_STRING) {
-			log_error("Invalid string in config file: "
-				  "global/thin_repair_options");
-			return 0;
-		}
-		argv[++args] = cv->v.str;
-	}
-
-	if (args >= MAX_PDATA_ARGS) {
-		log_error("Too many options for thin repair command.");
-		return 0;
-	}
-
-	argv[0] = thin_repair;
 	argv[++args] = "-i";
 	argv[++args] = meta_path;
 	argv[++args] = "-o";
 	argv[++args] = pms_path;
-	argv[++args] = NULL;
-
-	if (thin_pool_is_active(pool_lv)) {
-		log_error("Active pools cannot be repaired.  Use lvchange -an first.");
-		return 0;
-	}
 
 	if (!activate_lv(cmd, pmslv)) {
 		log_error("Cannot activate pool metadata spare volume %s.",
@@ -2439,7 +2415,7 @@ static int _lvconvert_thin_pool_repair(struct cmd_context *cmd,
 	}
 
 	/* Check matching transactionId when thin-pool is used by lvm2 (transactionId != 0) */
-	if (first_seg(pool_lv)->transaction_id && thin_dump[0]) {
+	if (first_seg(pool_lv)->transaction_id && thin_dump && thin_dump[0]) {
 		argv[0] = thin_dump;
 		argv[1] = pms_path;
 		argv[2] = NULL;
@@ -2455,13 +2431,15 @@ static int _lvconvert_thin_pool_repair(struct cmd_context *cmd,
 			    (trans_id_str = strstr(meta_path, "transaction=\"")) &&
 			    (sscanf(trans_id_str + 13, FMTu64, &trans_id) == 1) &&
 			    (trans_id != first_seg(pool_lv)->transaction_id) &&
-			    ((trans_id - 1) != first_seg(pool_lv)->transaction_id))
+			    ((trans_id - 1) != first_seg(pool_lv)->transaction_id)) {
 				log_error("Transaction id " FMTu64 " from pool \"%s/%s\" "
 					  "does not match repaired transaction id "
 					  FMTu64 " from %s.",
 					  first_seg(pool_lv)->transaction_id,
 					  pool_lv->vg->name, pool_lv->name, trans_id,
 					  pms_path);
+				ret = 0;
+			}
 
 			(void) pipe_close(&pdata); /* killing pipe */
 		}
@@ -2484,16 +2462,6 @@ deactivate_pmslv:
 	if (!ret)
 		return 0;
 
-	if (pmslv == pool_lv->vg->pool_metadata_spare_lv) {
-		pool_lv->vg->pool_metadata_spare_lv = NULL;
-		pmslv->status &= ~POOL_METADATA_SPARE;
-		lv_set_visible(pmslv);
-	}
-
-	/* Try to allocate new pool metadata spare LV */
-	if (!handle_pool_metadata_spare(pool_lv->vg, 0, pvh, poolmetadataspare))
-		stack;
-
 	if (dm_snprintf(meta_path, sizeof(meta_path), "%s_meta%%d", pool_lv->name) < 0) {
 		log_error("Can't prepare new metadata name for %s.", pool_lv->name);
 		return 0;
@@ -2504,8 +2472,22 @@ deactivate_pmslv:
 		return 0;
 	}
 
+	if (pmslv == pool_lv->vg->pool_metadata_spare_lv) {
+		pool_lv->vg->pool_metadata_spare_lv = NULL;
+		pmslv->status &= ~POOL_METADATA_SPARE;
+		lv_set_visible(pmslv);
+	}
+
+	/* Try to allocate new pool metadata spare LV */
+	if (!handle_pool_metadata_spare(pool_lv->vg, 0, pvh, poolmetadataspare))
+		stack;
+
 	if (!detach_pool_metadata_lv(first_seg(pool_lv), &mlv))
 		return_0;
+
+	/* TODO: change default to skip */
+	lv_set_activation_skip(mlv, 1, arg_int_value(cmd, setactivationskip_ARG, 0));
+	mlv->status &= ~LVM_WRITE; /* read-only metadata backup */
 
 	/* Swap _pmspare and _tmeta name */
 	if (!swap_lv_identifiers(cmd, mlv, pmslv))
@@ -2538,15 +2520,11 @@ static int _lvconvert_cache_repair(struct cmd_context *cmd,
 				   struct logical_volume *cache_lv,
 				   struct dm_list *pvh, int poolmetadataspare)
 {
-	const char *dmdir = dm_dir();
-	const char *cache_repair =
-		find_config_tree_str_allow_empty(cmd, global_cache_repair_executable_CFG, NULL);
-	const struct dm_config_node *cn;
-	const struct dm_config_value *cv;
 	int ret = 0, status;
 	int args = 0;
-	const char *argv[MAX_PDATA_ARGS + 7]; /* Max supported args */
-	char *dm_name;
+	const char *argv[DEFAULT_MAX_EXEC_ARGS + 7] = { /* Max supported args */
+		find_config_tree_str_allow_empty(cmd, global_cache_repair_executable_CFG, NULL)
+	};
 	char meta_path[PATH_MAX];
 	char pms_path[PATH_MAX];
 	struct logical_volume *pool_lv;
@@ -2558,11 +2536,16 @@ static int _lvconvert_cache_repair(struct cmd_context *cmd,
 		return 0;
 	}
 
+	if (lv_is_active(cache_lv)) {
+		log_error("Only inactive cache can be repaired.");
+		return 0;
+	}
+
 	pool_lv = lv_is_cache_pool(cache_lv) ? cache_lv : first_seg(cache_lv)->pool_lv;
 	mlv = first_seg(pool_lv)->metadata_lv;
 
-	if (!cache_repair || !cache_repair[0]) {
-		log_error("Cache repair commnand is not configured. Repair is disabled.");
+	if (!argv[0] || !*argv[0]) {
+		log_error("Cache repair command is not configured. Repair is disabled.");
 		return 0; /* Checking disabled */
 	}
 
@@ -2578,50 +2561,25 @@ static int _lvconvert_cache_repair(struct cmd_context *cmd,
 		pmslv = cache_lv->vg->pool_metadata_spare_lv;
 	}
 
-	if (!(dm_name = dm_build_dm_name(cmd->mem, mlv->vg->name,
-					 mlv->name, NULL)) ||
-	    (dm_snprintf(meta_path, sizeof(meta_path), "%s/%s", dmdir, dm_name) < 0)) {
+	if (dm_snprintf(meta_path, sizeof(meta_path), "%s%s/%s",
+			cmd->dev_dir, mlv->vg->name, mlv->name) < 0) {
 		log_error("Failed to build cache metadata path.");
 		return 0;
 	}
 
-	if (!(dm_name = dm_build_dm_name(cmd->mem, pmslv->vg->name,
-					 pmslv->name, NULL)) ||
-	    (dm_snprintf(pms_path, sizeof(pms_path), "%s/%s", dmdir, dm_name) < 0)) {
+	if (dm_snprintf(pms_path, sizeof(pms_path), "%s%s/%s",
+			cmd->dev_dir, pmslv->vg->name, pmslv->name) < 0) {
 		log_error("Failed to build pool metadata spare path.");
 		return 0;
 	}
 
-	if (!(cn = find_config_tree_array(cmd, global_cache_repair_options_CFG, NULL))) {
-		log_error(INTERNAL_ERROR "Unable to find configuration for global/cache_repair_options");
-		return 0;
-	}
+	if (!prepare_exec_args(cmd, argv, &args, global_cache_repair_options_CFG))
+		return_0;
 
-	for (cv = cn->v; cv && args < MAX_PDATA_ARGS; cv = cv->next) {
-		if (cv->type != DM_CFG_STRING) {
-			log_error("Invalid string in config file: "
-				  "global/cache_repair_options");
-			return 0;
-		}
-		argv[++args] = cv->v.str;
-	}
-
-	if (args >= MAX_PDATA_ARGS) {
-		log_error("Too many options for cache repair command.");
-		return 0;
-	}
-
-	argv[0] = cache_repair;
 	argv[++args] = "-i";
 	argv[++args] = meta_path;
 	argv[++args] = "-o";
 	argv[++args] = pms_path;
-	argv[++args] = NULL;
-
-	if (lv_is_active(cache_lv)) {
-		log_error("Only inactive cache can be repaired.");
-		return 0;
-	}
 
 	if (!activate_lv(cmd, pmslv)) {
 		log_error("Cannot activate pool metadata spare volume %s.",
@@ -2645,12 +2603,6 @@ static int _lvconvert_cache_repair(struct cmd_context *cmd,
 	/* TODO: any active validation of cache-pool metadata? */
 
 deactivate_mlv:
-	if (!sync_local_dev_names(cmd)) {
-		log_error("Failed to sync local devices before deactivating LV %s.",
-			  display_lvname(mlv));
-		return 0;
-	}
-
 	if (!deactivate_lv(cmd, mlv)) {
 		log_error("Cannot deactivate pool metadata volume %s.",
 			  display_lvname(mlv));
@@ -2658,12 +2610,6 @@ deactivate_mlv:
 	}
 
 deactivate_pmslv:
-	if (!sync_local_dev_names(cmd)) {
-		log_error("Failed to sync local devices before deactivating LV %s.",
-			  display_lvname(pmslv));
-		return 0;
-	}
-
 	if (!deactivate_lv(cmd, pmslv)) {
 		log_error("Cannot deactivate pool metadata spare volume %s.",
 			  display_lvname(pmslv));
@@ -2672,6 +2618,16 @@ deactivate_pmslv:
 
 	if (!ret)
 		return 0;
+
+	if (dm_snprintf(meta_path, sizeof(meta_path), "%s_meta%%d", pool_lv->name) < 0) {
+		log_error("Can't prepare new metadata name for %s.", display_lvname(pool_lv));
+		return 0;
+	}
+
+	if (!generate_lv_name(cache_lv->vg, meta_path, pms_path, sizeof(pms_path))) {
+		log_error("Can't generate new name for %s.", meta_path);
+		return 0;
+	}
 
 	if (pmslv == cache_lv->vg->pool_metadata_spare_lv) {
 		cache_lv->vg->pool_metadata_spare_lv = NULL;
@@ -2683,18 +2639,12 @@ deactivate_pmslv:
 	if (!handle_pool_metadata_spare(cache_lv->vg, 0, pvh, poolmetadataspare))
 		stack;
 
-	if (dm_snprintf(meta_path, sizeof(meta_path), "%s_meta%%d", cache_lv->name) < 0) {
-		log_error("Can't prepare new metadata name for %s.", cache_lv->name);
-		return 0;
-	}
-
-	if (!generate_lv_name(cache_lv->vg, meta_path, pms_path, sizeof(pms_path))) {
-		log_error("Can't generate new name for %s.", meta_path);
-		return 0;
-	}
-
 	if (!detach_pool_metadata_lv(first_seg(pool_lv), &mlv))
 		return_0;
+
+	/* TODO: change default to skip */
+	lv_set_activation_skip(mlv, 1, arg_int_value(cmd, setactivationskip_ARG, 0));
+	mlv->status &= ~LVM_WRITE; /* read-only metadata backup */
 
 	/* Swap _pmspare and _cmeta name */
 	if (!swap_lv_identifiers(cmd, mlv, pmslv))
@@ -6039,8 +5989,8 @@ static int _set_writecache_block_size(struct cmd_context *cmd,
 		goto out;
 	}
 
-	if (dm_snprintf(pathname, sizeof(pathname), "%s/%s/%s", cmd->dev_dir,
-			lv->vg->name, lv->name) < 0) {
+	if (dm_snprintf(pathname, sizeof(pathname), "%s%s/%s",
+			cmd->dev_dir, lv->vg->name, lv->name) < 0) {
 		log_error("Path name too long to get LV block size %s", display_lvname(lv));
 		goto bad;
 	}

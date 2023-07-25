@@ -2605,6 +2605,8 @@ static int _lv_activate(struct cmd_context *cmd, const char *lvid_s,
 	if (!lv_is_visible(lv) && lv_is_component(lv)) {
 		laopts->read_only = 1;
 		laopts->component_lv = lv;
+	} else if (lv_is_pool_metadata_spare(lv)) {
+		laopts->component_lv = lv;
 	} else if (filter)
 		laopts->read_only = _passes_readonly_filter(cmd, lv);
 
@@ -2721,16 +2723,16 @@ static int _remove_dm_dev_by_name(const char *name)
 /* Work all segments of @lv removing any existing, closed "*-missing_N_0" sub devices. */
 static int _lv_remove_any_missing_subdevs(struct logical_volume *lv)
 {
-	if (lv) {
-		uint32_t seg_no = 0;
-		char name[257];
-		struct lv_segment *seg;
+	char name[NAME_LEN];
+	struct lv_segment *seg;
+	uint32_t seg_no = 0;
 
+	if (lv) {
 		dm_list_iterate_items(seg, &lv->segments) {
 			if (dm_snprintf(name, sizeof(name), "%s-%s-missing_%u_0", seg->lv->vg->name, seg->lv->name, seg_no) < 0)
 				return_0;
 			if (!_remove_dm_dev_by_name(name))
-				return 0;
+				return_0;
 
 			seg_no++;
 		}
@@ -2748,10 +2750,10 @@ int lv_deactivate_any_missing_subdevs(const struct logical_volume *lv)
 	for (s = 0; s < seg->area_count; s++) {
 		if (seg_type(seg, s) == AREA_LV &&
 		    !_lv_remove_any_missing_subdevs(seg_lv(seg, s)))
-			return 0;
+			return_0;
 		if (seg->meta_areas && seg_metatype(seg, s) == AREA_LV &&
 		    !_lv_remove_any_missing_subdevs(seg_metalv(seg, s)))
-			return 0;
+			return_0;
 	}
 
 	return 1;
