@@ -2332,6 +2332,17 @@ static int _lvconvert_merge_thin_snapshot(struct cmd_context *cmd,
 	return 1;
 }
 
+static void _swap_lv_uuid(struct logical_volume *lv1, struct logical_volume *lv2)
+{
+	union lvid lvid;
+
+	if (lv1 && lv2) {
+		lvid = lv1->lvid;
+		lv1->lvid = lv2->lvid;
+		lv2->lvid = lvid;
+	}
+}
+
 static int _lvconvert_thin_pool_repair(struct cmd_context *cmd,
 				       struct logical_volume *pool_lv,
 				       struct dm_list *pvh, int poolmetadataspare)
@@ -2500,6 +2511,9 @@ deactivate_pmslv:
 	if (!lv_rename_update(cmd, mlv, pms_path, 0))
 		return_0;
 
+	/* Preserve UUID for _pmspare if possible */
+	_swap_lv_uuid(mlv, mlv->vg->pool_metadata_spare_lv);
+
 	if (!vg_write(pool_lv->vg) || !vg_commit(pool_lv->vg))
 		return_0;
 
@@ -2656,6 +2670,9 @@ deactivate_pmslv:
 	/* Used _cmeta (now _pmspare) becomes _meta%d */
 	if (!lv_rename_update(cmd, mlv, pms_path, 0))
 		return_0;
+
+	/* Preserve UUID for _pmspare if possible */
+	_swap_lv_uuid(mlv, mlv->vg->pool_metadata_spare_lv);
 
 	if (!vg_write(cache_lv->vg) || !vg_commit(cache_lv->vg))
 		return_0;
@@ -2818,6 +2835,7 @@ static int _lvconvert_swap_pool_metadata(struct cmd_context *cmd,
 	struct lv_type *lvtype;
 	char meta_name[NAME_LEN];
 	const char *swap_name;
+	const char *swap_lock_args;
 	uint32_t chunk_size;
 	int is_thinpool;
 	int is_cachepool;
@@ -2872,19 +2890,29 @@ static int _lvconvert_swap_pool_metadata(struct cmd_context *cmd,
 	if (!lockd_lv(cmd, lv, "ex", 0))
 		return 0;
 
+	/* If new metadata LV is inactive here, ensure it's not active elsewhere */
+	if (!lockd_lv(cmd, metadata_lv, "ex", 0)) {
+		log_error("New pool metadata LV %s cannot be locked.", display_lvname(metadata_lv));
+		return 0;
+	}
+
 	if (!deactivate_lv(cmd, metadata_lv)) {
 		log_error("Aborting. Failed to deactivate %s.",
 			  display_lvname(metadata_lv));
 		return 0;
 	}
 
-	if (!lockd_lv(cmd, metadata_lv, "un", 0)) {
-		log_error("Failed to unlock LV %s.", display_lvname(metadata_lv));
-		return 0;
+	/*
+	 * metadata_lv is currently an independent LV with its own lockd lock allocated.
+	 * A pool metadata LV does not have its own lockd lock (only the pool LV does.)
+	 * Since the LV name and uuid are exchanged between the old and new metadata LVs,
+	 * the lvmlockd lock can just be moved between the two LVs, so the new indepdent
+	 * LV (former metadata LV) gets the lock that was used for old independent LV.
+	 */
+	if (vg_is_shared(vg) && metadata_lv->lock_args) {
+		swap_lock_args = metadata_lv->lock_args;
+		metadata_lv->lock_args = NULL;
 	}
-
-        metadata_lv->lock_args = NULL;
-
 
 	seg = first_seg(lv);
 
@@ -2932,23 +2960,19 @@ static int _lvconvert_swap_pool_metadata(struct cmd_context *cmd,
 	if (!detach_pool_metadata_lv(seg, &prev_metadata_lv))
 		return_0;
 
-	swap_name = metadata_lv->name;
-
-	if (!lv_rename_update(cmd, metadata_lv, "pvmove_tmeta", 0))
-		return_0;
-
-	/* Give the previous metadata LV the name of the LV replacing it. */
-
-	if (!lv_rename_update(cmd, prev_metadata_lv, swap_name, 0))
-		return_0;
-
-	/* Rename deactivated metadata LV to have _tmeta suffix */
-
-	if (!lv_rename_update(cmd, metadata_lv, meta_name, 0))
-		return_0;
+	if (!swap_lv_identifiers(cmd, metadata_lv, prev_metadata_lv))
+                return_0;
 
 	if (!attach_pool_metadata_lv(seg, metadata_lv))
 		return_0;
+
+	/*
+	 * The previous metadata LV will now be an independent LV so it now
+	 * requires a lockd lock, and gets the lock from the LV that's becoming
+	 * the new metadata LV.
+	 */
+	if (is_lockd_type(vg->lock_type))
+		prev_metadata_lv->lock_args = swap_lock_args;
 
 	if (!vg_write(vg) || !vg_commit(vg))
 		return_0;
@@ -6256,7 +6280,7 @@ int lvconvert_writecache_attach_single(struct cmd_context *cmd,
 
 	if (!_writecache_zero(cmd, lv_fast)) {
 		log_error("LV %s could not be zeroed.", display_lvname(lv_fast));
-		return ECMD_FAILED;
+		goto bad;
 	}
 
 	/*
@@ -6266,10 +6290,10 @@ int lvconvert_writecache_attach_single(struct cmd_context *cmd,
 	 */
 	if (dm_snprintf(cvol_name, sizeof(cvol_name), "%s_cvol", lv_fast->name) < 0) {
 		log_error("Can't prepare new metadata name for %s.", display_lvname(lv_fast));
-		return ECMD_FAILED;
+		goto bad;
 	}
 	if (!lv_rename_update(cmd, lv_fast, cvol_name, 0))
-		return_ECMD_FAILED;
+		goto_bad;
 
 	lv_fast->status |= LV_CACHE_VOL;
 
@@ -6369,24 +6393,26 @@ int lvconvert_to_cache_with_cachevol_cmd(struct cmd_context *cmd, int argc, char
 
 static int _lvconvert_integrity_remove(struct cmd_context *cmd, struct logical_volume *lv)
 {
-	int ret = 0;
-
-	if (!lv_is_integrity(lv) && !lv_is_raid(lv)) {
+	if (!lv_is_integrity(lv)) {
 		log_error("LV does not have integrity.");
-		return ECMD_FAILED;
+		return 0;
+	}
+
+	if (!lv_is_raid(lv)) {
+		log_error("Cannot remove integrity from non raid type LV %s.",
+			  display_lvname(lv));
+		return 0;
 	}
 
 	/* ensure it's not active elsewhere. */
 	if (!lockd_lv(cmd, lv, "ex", 0))
-		return_ECMD_FAILED;
+		return_0;
 
-	if (lv_is_raid(lv))
-		ret = lv_remove_integrity_from_raid(lv);
-	if (!ret)
-		return_ECMD_FAILED;
+	if (!lv_remove_integrity_from_raid(lv))
+		return_0;
 
 	log_print_unless_silent("Logical volume %s has removed integrity.", display_lvname(lv));
-	return ECMD_PROCESSED;
+	return 1;
 }
 
 static int _lvconvert_integrity_add(struct cmd_context *cmd, struct logical_volume *lv,
@@ -6394,7 +6420,6 @@ static int _lvconvert_integrity_add(struct cmd_context *cmd, struct logical_volu
 {
 	struct volume_group *vg = lv->vg;
 	struct dm_list *use_pvh;
-	int ret = 0;
 
 	/* ensure it's not active elsewhere. */
 	if (!lockd_lv(cmd, lv, "ex", 0))
@@ -6412,9 +6437,13 @@ static int _lvconvert_integrity_add(struct cmd_context *cmd, struct logical_volu
 		return 0;
 	}
 
-	if (lv_is_raid(lv))
-		ret = lv_add_integrity_to_raid(lv, set, use_pvh, NULL);
-	if (!ret)
+	if (!lv_is_raid(lv)) {
+		log_error("Cannot add integrity to non raid type LV %s.",
+			  display_lvname(lv));
+		return 0;
+	}
+
+	if (!lv_add_integrity_to_raid(lv, set, use_pvh, NULL))
 		return_0;
 
 	log_print_unless_silent("Logical volume %s has added integrity.", display_lvname(lv));
@@ -6425,10 +6454,8 @@ static int _lvconvert_integrity_single(struct cmd_context *cmd,
 					struct logical_volume *lv,
 					struct processing_handle *handle)
 {
-	struct integrity_settings settings;
-	int ret = 0;
-
-	memset(&settings, 0, sizeof(settings));
+	struct integrity_settings settings = { 0 };
+	int ret;
 
 	if (!integrity_mode_set(arg_str_value(cmd, raidintegritymode_ARG, NULL), &settings))
 		return_ECMD_FAILED;
@@ -6442,7 +6469,8 @@ static int _lvconvert_integrity_single(struct cmd_context *cmd,
 		ret = _lvconvert_integrity_remove(cmd, lv);
 
 	if (!ret)
-		return ECMD_FAILED;
+		return_ECMD_FAILED;
+
 	return ECMD_PROCESSED;
 }
 
