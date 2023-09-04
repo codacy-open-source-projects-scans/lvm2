@@ -86,7 +86,7 @@ dmsetup \(em low level logical volume management
 .  IR count ]
 .  RB [ --interval
 .  IR seconds ]
-.  RB [ --noheadings ]
+.  RB [ --noheadings | --headings ]
 .  RB [ -o
 .  IR fields ]
 .  RB [ -O | --sort
@@ -513,6 +513,13 @@ rules).
 .TP
 .B --noheadings
 Suppress the headings line when using columnar output.
+.
+.TP
+.BR --headings " " none | abbrev | full | 0 | 1 | 2
+Type of headings line to use for columnar output.
+\fBnone\fP or \fB0\fP: No headings.
+\fBabbrev\fP or \fB1\fP: Column name abbreviations.
+\fBfull\fP or \fB2\fP: Full column names.
 .
 .TP
 .B --noflush
