@@ -24,7 +24,7 @@ expect_failure() {
 }
 
 check_daemon_in_builddir() {
-	# skip if we don't have our own deamon...
+	# skip if we don't have our own daemon...
 	if test -z "${installed_testsuite+varset}"; then
 		(which "$1" 2>/dev/null | grep "$abs_builddir" >/dev/null ) || skip "$1 is not in executed path."
 	fi
@@ -239,8 +239,8 @@ prepare_lvmpolld() {
 	echo $! > LOCAL_LVMPOLLD
 	for i in {200..0} ; do
 		test -e "$TESTDIR/lvmpolld.socket" && break
-		echo -n .;
-		sleep .1;
+		echo -n .
+		sleep .1
 	done # wait for the socket
 	test "$i" -gt 0 || die "Startup of lvmpolld is too slow."
 	echo ok
@@ -274,7 +274,7 @@ prepare_lvmdbusd() {
 
 	kill_sleep_kill_ LOCAL_LVMDBUSD 0
 
-        # FIXME: This is not correct! Daemon is auto started.
+	# FIXME: This is not correct! Daemon is auto started.
 	echo -n "## checking lvmdbusd is NOT running..."
 	if pgrep -f -l lvmdbusd | grep python3 || pgrep -x -l lvmdbusd ; then
 		skip "Cannot run lvmdbusd while existing lvmdbusd process exists"
@@ -314,6 +314,12 @@ prepare_lvmdbusd() {
 	lvmconf "global/notify_dbus = 1"
 
 	test "${LVM_DEBUG_LVMDBUS:-0}" != "0" && lvmdbusdebug="--debug"
+
+	# Currently do not interfere with lvmdbusd testing of the file logging
+	unset LVM_LOG_FILE_EPOCH
+	unset LVM_LOG_FILE_MAX_LINES
+	unset LVM_EXPECTED_EXIT_STATUS
+
 	"$daemon" $lvmdbusdebug > debug.log_LVMDBUSD_out 2>&1 &
 	local pid=$!
 
@@ -395,10 +401,10 @@ teardown_devs_prefixed() {
 	# 2nd. loop is trying --force removal which can possibly 'unstuck' some bloked operations
 	for i in 0 1; do
 		test "$i" = 1 && test "$stray" = 0 && break  # no stray device removal
+		local progress=1
 
 		while :; do
 			local sortby="name"
-			local progress=0
 
 			# HACK: sort also by minors - so we try to close 'possibly later' created device first
 			test "$i" = 0 || sortby="-minor"
@@ -424,8 +430,10 @@ teardown_devs_prefixed() {
 
 			test "$progress" = 1 || break
 
+			sleep .1
 			udev_wait
 			wait
+			progress=0
 		done # looping till there are some removed devices
 	done
 }
@@ -1446,8 +1454,7 @@ extend_filter_md() {
 	for rx in "$@"; do
 		filter=$(echo "$filter" | sed -e "s:\\[:[ \"$rx\", :")
 	done
-	lvmconf "$filter"
-	lvmconf "devices/scan = [ \"$DM_DEV_DIR\", \"/dev\" ]"
+	lvmconf "$filter" "devices/scan = [ \"$DM_DEV_DIR\", \"/dev\" ]"
 }
 
 extend_filter_LVMTEST() {
