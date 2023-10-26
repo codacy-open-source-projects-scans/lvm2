@@ -167,6 +167,7 @@ DEFAULT_LOCK_DIR = @DEFAULT_LOCK_DIR@
 DEFAULT_RUN_DIR = @DEFAULT_RUN_DIR@
 DEFAULT_PID_DIR = @DEFAULT_PID_DIR@
 DEFAULT_MANGLING = @MANGLING@
+DEFAULT_DMEVENTD_EXIT_ON_PATH = @DEFAULT_DMEVENTD_EXIT_ON_PATH@
 
 #----------------------------------------------------------------------
 # From http://blog.melski.net/tag/debugging-makefiles/
@@ -372,7 +373,10 @@ SUBDIRS.cflow := $(SUBDIRS:=.cflow)
 SUBDIRS.clean := $(SUBDIRS:=.clean)
 SUBDIRS.distclean := $(SUBDIRS:=.distclean)
 
-TARGETS += $(LIB_SHARED) $(LIB_STATIC)
+TARGETS += $(LIB_STATIC)
+ifeq ("@SHARED_LINK@", "yes")
+  TARGETS += $(LIB_SHARED)
+endif
 
 INTERNAL_LIBS = \
 	$(top_builddir)/libdaemon/client/libdaemonclient.a \

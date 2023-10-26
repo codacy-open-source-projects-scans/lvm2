@@ -38,10 +38,16 @@ for i in securetest dmsecuretest ; do
 # 2nd. retry with already exiting DM node - exercize error path also wipes
 for j in empty existing ; do
 
+rm -f cmdout
 "$i" "$dev1" "$DMTEST" >cmdout 2>&1 &
 PID=$!
-sleep .5
+for k in $(seq 1 10); do
+	lines=$(wc -l < cmdout 2>/dev/null || true)
+	test "${lines:-0}" = "0" || break
+	sleep .1
+done
 
+# 0 8192 crypt aes-xts-plain64 434e0cbab02ca68ffba9268222c3789d703fe62427b78b308518b3228f6a2122 0 253:0 8192
 # crypt device should be loaded
 dmsetup status "$DMTEST"
 
@@ -49,7 +55,7 @@ dmsetup status "$DMTEST"
 gcore "$PID" | tee out || skip
 
 # check we capture core while  dmsecuretest was already sleeping
-grep "nanosleep" out || grep kernel_vsyscall out
+grep -e "nanosleep\|kernel_vsyscall" out
 kill "$PID" || true
 wait
 

@@ -189,7 +189,6 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 		int search_count = 0;
 		int update_needed = 0;
 		int serial_update_needed = 0;
-		int invalid = 0;
 
 		unlink_searched_devnames(cmd);
 
@@ -231,8 +230,8 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 		 * from use_devices does not pass the filters that have been
 		 * run just above.
 		 */
-		device_ids_validate(cmd, NULL, &invalid, 1);
-		if (invalid)
+		device_ids_validate(cmd, NULL, 1, 0);
+		if (cmd->device_ids_invalid)
 			update_needed = 1;
 
 		/*
@@ -283,7 +282,7 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 		 * Find and fix any devname entries that have moved to a
 		 * renamed device.
 		 */
-		device_ids_find_renamed_devs(cmd, &found_devs, &search_count, 1);
+		device_ids_refresh(cmd, &found_devs, &search_count, 1);
 
 		if (search_count && !strcmp(cmd->search_for_devnames, "none"))
 			log_print("Not searching for missing devnames, search_for_devnames=\"none\".");

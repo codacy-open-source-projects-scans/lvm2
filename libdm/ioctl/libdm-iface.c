@@ -403,7 +403,7 @@ static void _close_control_fd(void)
 {
 	if (_control_fd != -1) {
 		if (close(_control_fd) < 0)
-			log_sys_error("close", "_control_fd");
+			log_sys_debug("close", "_control_fd");
 		_control_fd = -1;
 	}
 }
@@ -1478,7 +1478,7 @@ static int _create_and_load_v4(struct dm_task *dmt)
 {
 	struct dm_info info;
 	struct dm_task *task;
-	int r;
+	int r, ioctl_errno = 0;
 	uint32_t cookie;
 
 	/* Use new task struct to create the device */
@@ -1504,8 +1504,10 @@ static int _create_and_load_v4(struct dm_task *dmt)
 	task->cookie_set = dmt->cookie_set;
 	task->add_node = dmt->add_node;
 
-	if (!dm_task_run(task))
+	if (!dm_task_run(task)) {
+		ioctl_errno = task->ioctl_errno;
 		goto_bad;
+	}
 
 	if (!dm_task_get_info(task, &info) || !info.exists)
 		goto_bad;
@@ -1536,6 +1538,8 @@ static int _create_and_load_v4(struct dm_task *dmt)
 	task->ima_measurement = dmt->ima_measurement;
 
 	r = dm_task_run(task);
+	if (!r)
+		ioctl_errno = task->ioctl_errno;
 
 	task->head = NULL;
 	task->tail = NULL;
@@ -1582,11 +1586,17 @@ static int _create_and_load_v4(struct dm_task *dmt)
 	if (!dm_task_run(dmt))
 		log_error("Failed to revert device creation.");
 
+	if (ioctl_errno != 0)
+		dmt->ioctl_errno =  ioctl_errno;
+
 	return 0;
 
       bad:
 	dm_task_destroy(task);
 	_udev_complete(dmt);
+
+	if (ioctl_errno != 0)
+		dmt->ioctl_errno =  ioctl_errno;
 
 	return 0;
 }
@@ -2045,7 +2055,21 @@ int dm_task_get_errno(struct dm_task *dmt)
 	return dmt->ioctl_errno;
 }
 
-int dm_task_run(struct dm_task *dmt)
+#if defined(GNU_SYMVER)
+/*
+ * Enforce new version 1_02_197 of dm_task_run() that propagates
+ * ioctl() errno is being linked to app.
+ */
+DM_EXPORT_SYMBOL_BASE(dm_task_run)
+int dm_task_run_base(struct dm_task *dmt);
+int dm_task_run_base(struct dm_task *dmt)
+{
+	return dm_task_run(dmt);
+}
+#endif
+
+DM_EXPORT_NEW_SYMBOL(int, dm_task_run, 1_02_197)
+	(struct dm_task *dmt)
 {
 	struct dm_ioctl *dmi;
 	unsigned command;

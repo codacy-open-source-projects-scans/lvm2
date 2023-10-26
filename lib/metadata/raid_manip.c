@@ -2922,7 +2922,7 @@ static int _raid_allow_extraction(struct logical_volume *lv,
 	char *sync_action;
 	struct lv_segment *seg = first_seg(lv);
 
-	/* If in-sync or hanlding repairs, allow to proceed. */
+	/* If in-sync or handling repairs, allow to proceed. */
 	if (_raid_in_sync(lv) || lv->vg->cmd->handles_missing_pvs)
 		return 1;
 
@@ -3113,9 +3113,26 @@ static int _raid_remove_images(struct logical_volume *lv, int yes,
 	struct dm_list removed_lvs;
 
 	if (new_count == 1) {
+		uint32_t s;
 		struct lv_segment *seg = first_seg(lv);
 
-		if (seg_is_raid1(seg) && !lv_raid_image_in_sync(seg_lv(seg, 0))) {
+		if (!seg_is_raid1(seg)) {
+			log_error("%s called on non-raid1 LV.", display_lvname(lv));
+			return 0;
+		}
+
+		for (s = 0; s < seg->area_count; s++) {
+			if (seg_type(seg, s) == AREA_UNASSIGNED)
+				continue;
+
+			if (lv_raid_image_in_sync(seg_lv(seg, s))) {
+				_swap_areas(seg->areas + 0, seg->areas + s);
+				break;
+			}
+
+		}
+
+		if (s >= seg->area_count) {
 			log_error("%s is out-of-sync!  Please try refreshing first.", display_lvname(lv));
 			return 0;
 		}

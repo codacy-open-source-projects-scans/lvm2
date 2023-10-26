@@ -202,9 +202,7 @@ prepare_clvmd() {
 }
 
 prepare_dmeventd() {
-	if pgrep dmeventd ; then
-		skip "Cannot test dmeventd with real dmeventd ($(pgrep dmeventd)) running."
-	fi
+	test -n "$RUNNING_DMEVENTD" && skip "Cannot test dmeventd with real dmeventd ($RUNNING_DMEVENTD) running."
 
 	check_daemon_in_builddir dmeventd
 	lvmconf "activation/monitoring = 1"
@@ -319,6 +317,7 @@ prepare_lvmdbusd() {
 	unset LVM_LOG_FILE_EPOCH
 	unset LVM_LOG_FILE_MAX_LINES
 	unset LVM_EXPECTED_EXIT_STATUS
+	export LVM_DBUSD_TEST_SKIP_SIGNAL=1
 
 	"$daemon" $lvmdbusdebug > debug.log_LVMDBUSD_out 2>&1 &
 	local pid=$!
@@ -497,6 +496,7 @@ kill_sleep_kill_() {
 	if test -s "$pidfile" ; then
 		pid=$(< "$pidfile")
 		rm -f "$pidfile"
+		test "$pidfile" = "LOCAL_LVMDBUSD" && killall -9 lvmdbusd || true
 		kill -TERM "$pid" 2>/dev/null || return 0
 		for i in {0..10} ; do
 			ps "$pid" >/dev/null || return 0
@@ -831,7 +831,7 @@ mdadm_assemble() {
 		STRACE="strace -f -o /dev/null"
 	}
 
-	$STRACE mdadm --assemble "$@"
+	$STRACE mdadm --assemble "$@" || { test -n "$STRACE" && skip "Timing failure" ; false ; }
 	udev_wait
 }
 
@@ -1039,29 +1039,25 @@ prepare_devs() {
 	echo -n "## preparing $n devices..."
 
 	local size=$(( devsize * 2048 )) # sectors
-	local count=0
-	rm -f CREATE_FAILED
-	init_udev_transaction
-	for i in $(seq 1 "$n"); do
-		local name="${PREFIX}$pvname$i"
+	local table=()
+	local concise=()
+	for i in $(seq 0 $(( n - 1 )) ); do
+		local name="${PREFIX}$pvname$(( i + 1 ))"
 		local dev="$DM_DEV_DIR/mapper/$name"
-		DEVICES[count]=$dev
-		count=$((  count + 1 ))
+		DEVICES[i]=$dev
 		# If the backing device number can meet the requirement for PV devices,
 		# then allocate a dedicated backing device for PV; otherwise, rollback
 		# to use single backing device for device-mapper.
 		if [ -n "$LVM_TEST_BACKING_DEVICE" ] && [ "$n" -le ${#BACKING_DEVICE_ARRAY[@]} ]; then
-			echo 0 $size linear "${BACKING_DEVICE_ARRAY[$(( count - 1 ))]}" $(( header_shift * 2048 )) > "$name.table"
+			table[i]="0 $size linear "${BACKING_DEVICE_ARRAY[i]}" $(( header_shift * 2048 ))"
 		else
-			echo 0 $size linear "$BACKING_DEV" $(( ( i - 1 ) * size + ( header_shift * 2048 ) )) > "$name.table"
+			table[i]="0 $size linear "$BACKING_DEV" $(( i * size + ( header_shift * 2048 ) ))"
 		fi
-		dmsetup create -u "TEST-$name" "$name" "$name.table" || touch CREATE_FAILED &
-		test -f CREATE_FAILED && break;
+		concise[i]="$name,TEST-$name,,,${table[i]}"
+		echo "${table[i]}" > "$name.table"
 	done
-	wait
-	finish_udev_transaction
 
-	if test -f CREATE_FAILED ; then
+	dmsetup create --concise "$(printf '%s;' "${concise[@]}")" || {
 		if test -z "$LVM_TEST_BACKING_DEVICE"; then
 			echo "failed"
 			return 1
@@ -1070,7 +1066,7 @@ prepare_devs() {
 		rm -f BACKING_DEV CREATE_FAILED
 		prepare_devs "$@"
 		return $?
-	fi
+	}
 
 	if [ -n "$LVM_TEST_BACKING_DEVICE" ]; then
 		for d in "${BACKING_DEVICE_ARRAY[@]}"; do
@@ -1090,9 +1086,9 @@ prepare_devs() {
 	done
 
 	if test -n "$LVM_TEST_DEVICES_FILE"; then
-		mkdir -p "$TESTDIR/etc/lvm/devices" || true
-		rm "$TESTDIR/etc/lvm/devices/system.devices" || true
-		touch "$TESTDIR/etc/lvm/devices/system.devices"
+		mkdir -p "$LVM_SYSTEM_DIR/devices" || true
+		rm -f "$LVM_SYSTEM_DIR/devices/system.devices"
+		touch "$LVM_SYSTEM_DIR/devices/system.devices"
 		for d in "${DEVICES[@]}"; do
 			lvmdevices --adddev "$d" || true
 		done
@@ -1738,6 +1734,7 @@ thin_pool_error_works_32() {
 }
 
 thin_restore_needs_more_volumes() {
+	# Note: new version prints thin_restore first
 	case $("$LVM_TEST_THIN_RESTORE_CMD" -V) in
 		# With older version of thin-tool we got slightly more compact metadata
 		0.[0-6]*|0.7.0*) return 0 ;;
@@ -1747,13 +1744,15 @@ thin_restore_needs_more_volumes() {
 }
 
 udev_wait() {
-	pgrep udev >/dev/null || return 0
-	which udevadm &>/dev/null || return 0
-	if test -n "${1-}" ; then
-		udevadm settle --exit-if-exists="$1" 2>/dev/null || true
-	else
-		udevadm settle --timeout=15 2>/dev/null || true
-	fi
+	local arg="--timeout=15"
+	test -n "${1-}" && arg="--exit-if-exists=$1"
+
+	test -f UDEV_PID || {
+		pgrep udev >UDEV_PID 2>/dev/null || return 0
+		which udevadm &>/dev/null || { echo "" >UDEV_PID ; return 0 ; }
+	}
+
+	test ! -s UDEV_PID || { udevadm settle "$arg" 2>/dev/null || true ; }
 }
 
 # wait_for_sync <VG/LV>
@@ -1956,6 +1955,17 @@ have_cache() {
 		echo "TEST WARNING: Reconfiguring" "${CONF[@]}"
 		lvmconf "${CONF[@]}"
 	fi
+}
+
+# detect if lvm2 was compiled with FSINFO support by checking for '--fs checksize'
+# if passed 'skip' keyword - print
+have_fsinfo() {
+	local r
+	r=$(not lvresize --fs checksize -L+1 $vg/unknownlvname 2>&1) || die "lvresize must fail!"
+
+	case "$r" in
+	*"Unknown --fs value"*) return 1 ;;
+	esac
 }
 
 have_tool_at_least() {

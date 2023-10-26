@@ -552,6 +552,8 @@ void fini_fifos(struct dm_event_fifos *fifos)
 		if (close(fifos->server))
 			log_sys_debug("close", fifos->server_path);
 	}
+
+	fifos->client = fifos->server = -1;
 }
 
 /* Get uuid of a device */
@@ -844,6 +846,7 @@ int dm_event_get_registered_device(struct dm_event_handler *dmevh, int next)
 int dm_event_get_version(struct dm_event_fifos *fifos, int *version) {
 	char *p;
 	struct dm_event_daemon_message msg = { 0 };
+	int ret = 0;
 
 	if (daemon_talk(fifos, &msg, DM_EVENT_CMD_HELLO, NULL, NULL, 0, 0))
 		return 0;
@@ -851,13 +854,17 @@ int dm_event_get_version(struct dm_event_fifos *fifos, int *version) {
 	*version = 0;
 
 	if (!p || !(p = strchr(p, ' '))) /* Message ID */
-		return 0;
+		goto out;
 	if (!(p = strchr(p + 1, ' '))) /* HELLO */
-		return 0;
+		goto out;
 	if ((p = strchr(p + 1, ' '))) /* HELLO, once more */
 		*version = atoi(p);
 
-	return 1;
+	ret = 1;
+out:
+	free(msg.data);
+
+	return ret;
 }
 
 void dm_event_log_set(int debug_log_level, int use_syslog)
@@ -872,11 +879,11 @@ void dm_event_log(const char *subsys, int level, const char *file,
 {
 	static int _abort_on_internal_errors = -1;
 	static pthread_mutex_t _log_mutex = PTHREAD_MUTEX_INITIALIZER;
-	static time_t start = 0;
+	static long long _start = 0;
 	const char *indent = "";
 	FILE *stream = log_stderr(level) ? stderr : stdout;
 	int prio;
-	time_t now;
+	long long now, now_nsec;
 	int log_with_debug = 0;
 
 	if (subsys[0] == '#') {
@@ -923,17 +930,28 @@ void dm_event_log(const char *subsys, int level, const char *file,
 	if (_use_syslog) {
 		vsyslog(prio, format, ap);
 	} else {
-		now = time(NULL);
-		if (!start)
-			start = now;
-		now -= start;
-		if (_debug_level)
-			fprintf(stream, "[%2lld:%02lld] %8x:%-6s%s",
-				(long long)now / 60, (long long)now % 60,
+		if (_debug_level) {
+#define _NSEC_PER_SEC (1000000000LL)
+#ifdef HAVE_REALTIME
+			struct timespec mono_time = { 0 };
+			if (clock_gettime(CLOCK_MONOTONIC, &mono_time) == 0)
+				now = mono_time.tv_sec * _NSEC_PER_SEC + mono_time.tv_nsec;
+			else
+#endif
+				now = time(NULL) * _NSEC_PER_SEC;
+
+			if (!_start)
+				_start = now;
+			now -= _start;
+			now_nsec = now %_NSEC_PER_SEC;
+			now /= _NSEC_PER_SEC;
+			fprintf(stream, "[%2lld:%02lld.%06lld] %8x:%-6s%s",
+				now / 60, now % 60, now_nsec / 1000,
 				// TODO: Maybe use shorter ID
 				// ((int)(pthread_self()) >> 6) & 0xffff,
 				(int)pthread_self(), subsys,
 				(_debug_level > 3) ? "" : indent);
+		}
 		if (_debug_level > 3)
 			fprintf(stream, "%28s:%4d %s", file, line, indent);
 		vfprintf(stream, _(format), ap);

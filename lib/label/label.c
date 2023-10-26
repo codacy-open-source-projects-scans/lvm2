@@ -1092,11 +1092,12 @@ int label_scan_vg_online(struct cmd_context *cmd, const char *vgname,
 	if (cmd->enable_devices_list)
 		device_ids_match_device_list(cmd);
 
-	if (cmd->enable_devices_file && device_ids_use_devname(cmd)) {
+	if (cmd->enable_devices_file &&
+	    (device_ids_use_devname(cmd) || cmd->device_ids_refresh_trigger)) {
 		relax_deviceid_filter = 1;
 		cmd->filter_deviceid_skip = 1;
 		/* PVIDs read from devs matched to devices file below instead. */
-		log_debug("Skipping device_id filtering due to devname ids.");
+		log_debug("Skipping device_id filtering");
 	}
 
 	/*
@@ -1255,7 +1256,6 @@ int label_scan(struct cmd_context *cmd)
 	struct device_list *devl, *devl2;
 	struct device *dev;
 	uint64_t max_metadata_size_bytes;
-	int device_ids_invalid = 0;
 	int using_hints;
 	int create_hints = 0; /* NEWHINTS_NONE */
 
@@ -1457,7 +1457,7 @@ int label_scan(struct cmd_context *cmd)
 	 * Check if the devices_file content is up to date and
 	 * if not update it.
 	 */
-	device_ids_validate(cmd, &scan_devs, &device_ids_invalid, 0);
+	device_ids_validate(cmd, &scan_devs, 0, using_hints);
 
 	dm_list_iterate_items_safe(devl, devl2, &all_devs) {
 		dm_list_del(&devl->list);
@@ -1493,7 +1493,7 @@ int label_scan(struct cmd_context *cmd)
 	 * (create_hints variable has NEWHINTS_X value which indicates
 	 * the reason for creating the new hints.)
 	 */
-	if (create_hints && !device_ids_invalid)
+	if (create_hints && !cmd->device_ids_invalid)
 		write_hint_file(cmd, create_hints);
 
 	return 1;

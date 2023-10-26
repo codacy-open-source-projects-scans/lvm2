@@ -16,6 +16,10 @@ SKIP_WITH_LVMPOLLD=1
 
 . lib/inittest
 
+aux lvmconf 'devices/global_filter = [ "a|.*|" ]' \
+            'devices/filter = [ "a|.*|" ]'
+
+
 SYS_DIR="sys"
 # requires trailing / to match dm
 aux lvmconf "devices/device_id_sysfs_dir = \"$PWD/$SYS_DIR/\"" \
@@ -34,16 +38,18 @@ DEV1_NAA3=naa.553b13644430344b4e3f486d32647962
 create_base() {
 	mkdir -p "$SYS_DIR/dev/block"
 
-	echo -n "0083 009c 0201 0020 4c56 4d54 5354 2020 \
-	204c 554e 2038 3039 7741 4c56 4d54 5354 \
-	6f20 2020 2020 2020 0103 0010 600a 0980 \
-	3830 3877 413f 4e70 4959 2e6e 0102 0010 \
-	3f4e 7049 592d 6f00 00a0 9737 3038 7741 \
-	0113 0010 600a 0980 0000 0002 ac18 5424 \
-	0000 0dbd 0114 0004 0101 0005 0115 0004 \
-	0000 03ec 0328 0028 6e61 612e 3535 3342 \
-	3133 3634 3434 3330 3334 3442 3445 3346 \
-	3438 3644 3332 3634 3739 3632 0000 0000" | xxd -r -p > "$SYS_DIR/dev1_vpd_pg83"
+	xxd -r -p > "$SYS_DIR/dev1_vpd_pg83" <<- EOF
+	0083 009c 0201 0020 4c56 4d54 5354 2020
+	204c 554e 2038 3039 7741 4c56 4d54 5354
+	6f20 2020 2020 2020 0103 0010 600a 0980
+	3830 3877 413f 4e70 4959 2e6e 0102 0010
+	3f4e 7049 592d 6f00 00a0 9737 3038 7741
+	0113 0010 600a 0980 0000 0002 ac18 5424
+	0000 0dbd 0114 0004 0101 0005 0115 0004
+	0000 03ec 0328 0028 6e61 612e 3535 3342
+	3133 3634 3434 3330 3334 3442 3445 3346
+	3438 3644 3332 3634 3739 3632 0000 0000
+	EOF
 }
 
 remove_base() {
@@ -246,11 +252,13 @@ cleanup_sysfs
 rm "$DF"
 aux wipefs_a "$DEV1"
 mkdir -p "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device"
-echo -n "7431 302e 4154 4120 2020 2020 5642 4f58 \
-2048 4152 4444 4953 4b20 2020 2020 2020 \
-2020 2020 2020 2020 2020 2020 2020 2020 \
-2020 2020 5642 3963 3130 6433 3138 2d31 \
-3838 6439 6562 6320 0a" | xxd -r -p > "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device/wwid"
+xxd -r -p > "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device/wwid" <<- EOF
+	7431 302e 4154 4120 2020 2020 5642 4f58
+	2048 4152 4444 4953 4b20 2020 2020 2020
+	2020 2020 2020 2020 2020 2020 2020 2020
+	2020 2020 5642 3963 3130 6433 3138 2d31
+	3838 6439 6562 6320 0a
+EOF
 cat "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device/wwid"
 lvmdevices --adddev "$DEV1"
 cat "$DF"
@@ -271,11 +279,13 @@ cleanup_sysfs
 rm "$DF"
 aux wipefs_a "$DEV1"
 mkdir -p "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device"
-echo -n "7431 302e 4154 4120 2020 2020 5642 4f58 \
-2048 4152 4444 4953 4b20 2020 2020 2020 \
-2020 2020 2020 2020 2020 2020 2020 2020 \
-2020 2020 5642 3963 3130 6433 3138 2d31 \
-3838 6439 6562 6320 0a" | xxd -r -p > "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device/wwid"
+xxd -r -p > "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device/wwid" <<- EOF
+	7431 302e 4154 4120 2020 2020 5642 4f58
+	2048 4152 4444 4953 4b20 2020 2020 2020
+	2020 2020 2020 2020 2020 2020 2020 2020
+	2020 2020 5642 3963 3130 6433 3138 2d31
+	3838 6439 6562 6320 0a
+EOF
 cat "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device/wwid"
 lvmdevices --adddev "$DEV1"
 cat "$DF"
@@ -318,11 +328,13 @@ cleanup_sysfs
 rm "$DF"
 aux wipefs_a "$DEV1"
 mkdir -p "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device"
-echo -n "7431 302e 4154 4120 2020 2020 5642 4f58 \
-2048 4152 4444 4953 4b20 2020 2020 2020 \
-2020 2020 2020 2020 2020 2020 2020 2020 \
-2020 2020 5642 3963 3130 6433 3138 2d31 \
-3838 6439 6562 5f20 0a" | xxd -r -p > "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device/wwid"
+xxd -r -p > "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device/wwid" <<- EOF
+	7431 302e 4154 4120 2020 2020 5642 4f58
+	2048 4152 4444 4953 4b20 2020 2020 2020
+	2020 2020 2020 2020 2020 2020 2020 2020
+	2020 2020 5642 3963 3130 6433 3138 2d31
+	3838 6439 6562 5f20 0a
+EOF
 cat "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device/wwid"
 # The wwid has an actual underscore char (5f) followed by a space char (20)
 # 9.1 converts the trailing space to an underscore
@@ -427,6 +439,137 @@ vgremove $vg
 rm "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device/wwid"
 cleanup_sysfs
 
+#
+# Simply rename a device using IDNAME=devname
+# use a new device name where a device exists
+# on the system with that name so that there
+# will be an initial, incorrect match of the
+# devices file entry with IDNAME=/dev/sdb to
+# the /dev/sdb that exists on the system.
+#
+# FIXME: this assumes that /dev/sdb exists on the system
+# and is not the same as DEV1.  To do this correctly
+# we need to find the name of some device on the
+# system other than DEV1.
+#
+
+rm "$DF"
+aux wipefs_a "$DEV1"
+touch "$DF"
+pvcreate "$DEV1"
+vgcreate $vg1 "$DEV1"
+cat "$DF"
+grep "IDTYPE=devname" "$DF" | tee out
+grep "IDNAME=$DEV1" out
+mkdir -p "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device"
+pvs -o+uuid,deviceidtype,deviceid "$DEV1"
+# Rename device, simulating reboot
+sed -e "s|IDNAME=$DEV1|IDNAME=/dev/sdb|" "$DF" > tmpdf
+sed -e "s|DEVNAME=$DEV1|DEVNAME=/dev/sdb|" tmpdf > "$DF"
+cat "$DF"
+# pvs will find PV on DEV1 and fix IDNAME
+pvs -o+uuid,deviceidtype,deviceid | tee out
+grep "$DEV1" out
+grep "IDTYPE=devname" "$DF" | tee out
+grep "IDNAME=$DEV1" out
+cleanup_sysfs
+
+#
+# Simply rename a device using IDNAME=devname
+# use a new device name where a device does not
+# exist on the system with that name
+#
+# This assumes that /dev/sdxx does not exist on the system.
+#
+
+rm "$DF"
+aux wipefs_a "$DEV1"
+touch "$DF"
+pvcreate "$DEV1"
+vgcreate $vg1 "$DEV1"
+cat "$DF"
+grep "IDTYPE=devname" "$DF" | tee out
+grep "IDNAME=$DEV1" out
+mkdir -p "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device"
+pvs -o+uuid,deviceidtype,deviceid "$DEV1"
+# Rename device, simulating reboot
+sed -e "s|IDNAME=$DEV1|IDNAME=/dev/sdxx|" "$DF" > tmpdf
+sed -e "s|DEVNAME=$DEV1|DEVNAME=/dev/sdxx|" tmpdf > "$DF"
+cat "$DF"
+# pvs will find PV on DEV1 and fix IDNAME
+pvs -o+uuid,deviceidtype,deviceid | tee out
+grep "$DEV1" out
+grep "IDTYPE=devname" "$DF" | tee out
+grep "IDNAME=$DEV1" out
+cleanup_sysfs
+
+#
+# Test wwid containing "QEMU HARDDISK".
+# These wwids were once ignored.  When the qemu wwid
+# was ignored, the dev would likely have used IDTYPE=devname.
+# When that dev is renamed on reboot, it needs to be found
+# on the device with the qemu wwid.
+# The original logic behind search_for_devnames="auto" would
+# have ignored any device with a wwid when searching for the
+# renamed device (since devs with wwids would not use the
+# devname idtype.)  However, in this case, a device with the
+# qemu wwid does use the devname idtype and needs to be checked,
+# so it's a special case in the code to look at devs with
+# any qemu wwid.
+#
+aux lvmconf "devices/search_for_devnames = \"auto\""
+
+rm "$DF"
+aux wipefs_a "$DEV1"
+touch "$DF"
+pvcreate "$DEV1"
+vgcreate $vg1 "$DEV1"
+cat "$DF"
+grep "IDTYPE=devname" "$DF" | tee out
+grep "IDNAME=$DEV1" out
+mkdir -p "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device"
+echo -n "0QEMU QEMU  HARDDISK  1" > "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device/wwid"
+pvs -o+uuid,deviceidtype,deviceid "$DEV1"
+# Rename device, simulating reboot
+sed -e "s|IDNAME=$DEV1|IDNAME=/dev/sdx|" "$DF" > tmpdf
+sed -e "s|DEVNAME=$DEV1|DEVNAME=/dev/sdx|" tmpdf > "$DF"
+cat "$DF"
+# pvs will find PV on DEV1 and fix IDNAME
+pvs -o+uuid,deviceidtype,deviceid | tee out
+grep "$DEV1" out
+grep "IDTYPE=devname" "$DF" | tee out
+grep "IDNAME=$DEV1" out
+rm "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device/wwid"
+cleanup_sysfs
+
+# set search_for_devnames="auto"
+# set wwid with QEMU HARDDISK for the disk
+# add disk to system.devices, should use the wwid
+# pvs should find the disk by wwid
+# rename the DEVNAME field
+# pvs should fix DEVNAME field
+
+rm "$DF"
+aux wipefs_a "$DEV1"
+mkdir -p "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device"
+echo -n "t10.ATA     QEMU HARDDISK                           QM00002            " > "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device/wwid"
+touch "$DF"
+pvcreate "$DEV1"
+vgcreate $vg1 "$DEV1"
+cat "$DF"
+grep 'IDTYPE=sys_wwid' "$DF" | tee out
+grep "QEMU_HARDDISK" out
+pvs -o+uuid,deviceidtype,deviceid | tee out
+grep "$DEV1" out
+grep sys_wwid out
+grep "QEMU_HARDDISK" out
+sed -e "s|DEVNAME=$DEV1|DEVNAME=/dev/sdx|" "$DF" > tmpdf
+cp tmpdf "$DF"
+cat "$DF"
+pvs -o+uuid,deviceidtype,deviceid "$DEV1"
+grep "DEVNAME=$DEV1" "$DF"
+rm "$SYS_DIR/dev/block/$MAJOR1:$MINOR1/device/wwid"
+cleanup_sysfs
 
 
 

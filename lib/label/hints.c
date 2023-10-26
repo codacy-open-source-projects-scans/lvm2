@@ -468,6 +468,7 @@ int validate_hints(struct cmd_context *cmd, struct dm_list *hints)
 	struct hint *hint;
 	struct dev_iter *iter;
 	struct device *dev;
+	int valid_hints = 0;
 	int ret = 1;
 
 	/* No commands are using hints. */
@@ -477,6 +478,8 @@ int validate_hints(struct cmd_context *cmd, struct dm_list *hints)
 	/* This command does not use hints. */
 	if (!cmd->use_hints && !cmd->pvscan_recreate_hints)
 		return 0;
+
+	log_debug("Validating hints");
 
 	if (lvmcache_has_duplicate_devs()) {
 		log_debug("Hints not used with duplicate pvs");
@@ -527,6 +530,8 @@ int validate_hints(struct cmd_context *cmd, struct dm_list *hints)
 				  dev->pvid, hint->pvid);
 			ret = 0;
 		}
+
+		valid_hints++;
 	}
 	dev_iter_destroy(iter);
 
@@ -574,6 +579,14 @@ int validate_hints(struct cmd_context *cmd, struct dm_list *hints)
 			ret = 0;
 			continue;
 		}
+	}
+
+	/*
+	 * hints considered invalid if none are used.
+	 */
+	if (!valid_hints) {
+		log_debug("Invalid hints: none used.");
+		ret = 0;
 	}
 
 out:
@@ -681,8 +694,9 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 	char devpath[PATH_MAX];
 	FILE *fp;
 	struct dev_iter *iter;
+	struct dev_use *du;
 	struct hint hint;
-	struct hint *alloc_hint;
+	struct hint *alloc_hint, *hp;
 	struct device *dev;
 	char *split[HINT_LINE_WORDS];
 	char *name, *pvid, *devn, *vgname, *p, *filter_str = NULL;
@@ -884,6 +898,32 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 			  read_hash, read_count, calc_hash, calc_count);
 		*needs_refresh = 1;
 		return 1;
+	}
+
+	/*
+	 * Check that the dev in each hint is a dev that's matched to a
+	 * devices file entry.
+	 */
+	if (cmd->enable_devices_file) {
+		dm_list_iterate_items(hp, hints) {
+			if (!(du = get_du_for_devname(cmd, hp->name))) {
+				log_debug("ignore hints: no devices file entry for %s", hp->name);
+				*needs_refresh = 1;
+				return 1;
+			}
+			if (!du->dev) {
+				log_debug("ignore hints: no device matches devices file entry for %s", hp->name);
+				*needs_refresh = 1;
+				return 1;
+			}
+			if (hp->devt != du->dev->dev) {
+				log_debug("ignore hints: devno %d:%d does not match %d:%d for %s",
+					  (int)MAJOR(hp->devt), (int)MINOR(hp->devt),
+					  (int)MAJOR(du->dev->dev), (int)MINOR(du->dev->dev), hp->name);
+				*needs_refresh = 1;
+				return 1;
+			}
+		}
 	}
 
 	log_debug("accept hints found %d", dm_list_size(hints));

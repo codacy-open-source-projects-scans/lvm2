@@ -318,7 +318,10 @@ SUBDIRS.cflow := $(SUBDIRS:=.cflow)
 SUBDIRS.clean := $(SUBDIRS:=.clean)
 SUBDIRS.distclean := $(SUBDIRS:=.distclean)
 
-TARGETS += $(LIB_SHARED) $(LIB_STATIC)
+TARGETS += $(LIB_STATIC)
+ifeq ("@SHARED_LINK@", "yes")
+  TARGETS += $(LIB_SHARED)
+endif
 
 all: $(SUBDIRS) $(TARGETS)
 
