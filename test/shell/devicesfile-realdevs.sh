@@ -86,6 +86,7 @@ for dev in "${REAL_DEVICES[@]}"; do
 	pvid=`pvs $dev --noheading -o uuid | tr -d - | awk '{print $1}'`
 
 	sys_wwid_file="/sys/dev/block/$maj:$min/device/wwid"
+	sys_wwid_nvme_file="/sys/dev/block/$maj:$min/wwid"
 	sys_serial_file="/sys/dev/block/$maj:$min/device/serial"
 	sys_dm_uuid_file="/sys/dev/block/$maj:$min/dm/uuid"
 	sys_md_uuid_file="/sys/dev/block/$maj:$min/md/uuid"
@@ -93,6 +94,9 @@ for dev in "${REAL_DEVICES[@]}"; do
 
 	if test -e $sys_wwid_file; then
 		sys_file=$sys_wwid_file
+		idtype="sys_wwid"
+	elif test -e $sys_wwid_nvme_file; then
+		sys_file=$sys_wwid_nvme_file
 		idtype="sys_wwid"
 	elif test -e $sys_serial_file; then
 		sys_file=$sys_serial_file
@@ -304,8 +308,6 @@ pvid1=`pvs $dev1 --noheading -o uuid | tr -d - | awk '{print $1}'`
 pvid2=`pvs $dev2 --noheading -o uuid | tr -d - | awk '{print $1}'`
 test "$pvid1" != "$pvid2" || die "same uuid"
 
-id1=`pvs $dev1 --noheading -o deviceid | tr -d - | awk '{print $1}'`
-id2=`pvs $dev2 --noheading -o deviceid | tr -d - | awk '{print $1}'`
 test "$id1" != "$id2" || die "same device id"
 
 grep $dev1 $DF

@@ -120,6 +120,398 @@ static void _search_devs_for_pvids(struct cmd_context *cmd, struct dm_list *sear
 	}
 }
 
+static char *_part_str(struct dev_use *du)
+{
+	static char _part_str_buf[64];
+
+	if (du->part)
+		snprintf(_part_str_buf, 63, " PART=%d", du->part);
+	else
+		_part_str_buf[0] = '\0';
+
+	return _part_str_buf;
+}
+
+static void _print_check(struct cmd_context *cmd)
+{
+	struct dm_list use_old;
+	struct dm_list use_new;
+	struct dm_list done_old;
+	struct dm_list done_new;
+	struct dev_use *du_old, *du_new;
+	int pvid_same;
+	int idname_same;
+	int idtype_same;
+	int devname_same;
+	int part_same;
+	char *part;
+
+	dm_list_init(&use_old);
+	dm_list_init(&use_new);
+	dm_list_init(&done_old);
+	dm_list_init(&done_new);
+
+	dm_list_splice(&use_new, &cmd->use_devices);
+	device_ids_read(cmd);
+	dm_list_splice(&use_old, &cmd->use_devices);
+	dm_list_init(&cmd->use_devices);
+
+	/*
+	 * Check entries with proper id types.
+	 */
+restart1:
+	dm_list_iterate_items(du_old, &use_old) {
+		if (du_old->idtype == DEV_ID_TYPE_DEVNAME)
+			continue;
+		dm_list_iterate_items(du_new, &use_new) {
+			if (du_new->idtype == DEV_ID_TYPE_DEVNAME)
+				continue;
+
+			if (du_old->idtype != du_new->idtype)
+				continue;
+
+			if (!du_old->idname || !du_new->idname)
+				continue;
+
+			if (du_old->part != du_new->part)
+				continue;
+
+			if (!strcmp(du_old->idname, du_new->idname)) {
+				part = _part_str(du_old);
+
+				/*
+				 * Old and new entries match based on device id.
+				 * Possible differences between old and new:
+				 * DEVNAME mismatch can be common.
+				 * PVID mismatch is not common, but can
+				 * happen from something like dd of one
+				 * PV to another.
+				 */
+
+				if (!du_new->dev) {
+					/* We can't know the new pvid and devname without a device. */
+					log_print_unless_silent("IDTYPE=%s IDNAME=%s DEVNAME=%s PVID=%s%s: device not found",
+						idtype_to_str(du_old->idtype),
+						du_old->idname,
+						du_old->devname ?: "none",
+						du_old->pvid ?: "none",
+						part);
+					goto next1;
+				}
+
+				pvid_same = (du_old->pvid && du_new->pvid && !strcmp(du_old->pvid, du_new->pvid)) || (!du_old->pvid && !du_new->pvid);
+				devname_same = (du_old->devname && du_new->devname && !strcmp(du_old->devname, du_new->devname)) || (!du_old->devname && !du_new->devname);
+
+				if (pvid_same && devname_same) {
+					log_verbose("IDTYPE=%s IDNAME=%s DEVNAME=%s PVID=%s%s: no change",
+						    idtype_to_str(du_new->idtype),
+						    du_new->idname,
+						    du_new->devname ?: "none",
+						    du_new->pvid ?: "none",
+						    part);
+
+				} else if (!pvid_same && !devname_same) {
+					log_print_unless_silent("IDTYPE=%s IDNAME=%s DEVNAME=%s (old %s) PVID=%s (old %s)%s: update",
+						idtype_to_str(du_new->idtype),
+						du_new->idname,
+						du_new->devname ?: "none",
+						du_old->devname ?: "none",
+						du_new->pvid ?: "none",
+						du_old->pvid ?: "none",
+						part);
+
+				} else if (pvid_same && !devname_same) {
+					log_print_unless_silent("IDTYPE=%s IDNAME=%s DEVNAME=%s (old %s) PVID=%s%s: update",
+						idtype_to_str(du_new->idtype),
+						du_new->idname,
+						du_new->devname ?: "none",
+						du_old->devname ?: "none",
+						du_new->pvid ?: "none",
+						part);
+
+				} else if (!pvid_same && devname_same) {
+					log_print_unless_silent("IDTYPE=%s IDNAME=%s DEVNAME=%s PVID=%s (old %s)%s: update",
+						idtype_to_str(du_new->idtype),
+						du_new->idname,
+						du_new->devname ?: "none",
+						du_new->pvid ?: "none",
+						du_old->pvid ?: "none",
+						part);
+				}
+			next1:
+				dm_list_del(&du_old->list);
+				dm_list_del(&du_new->list);
+				dm_list_add(&done_old, &du_old->list);
+				dm_list_add(&done_new, &du_new->list);
+				goto restart1;
+			}
+		}
+	}
+
+	/*
+	 * Check entries with devname id type.
+	 */
+restart2:
+	dm_list_iterate_items(du_old, &use_old) {
+		if (du_old->idtype != DEV_ID_TYPE_DEVNAME)
+			continue;
+		dm_list_iterate_items(du_new, &use_new) {
+			if (du_new->idtype != DEV_ID_TYPE_DEVNAME)
+				continue;
+
+			if (!du_old->pvid || !du_new->pvid)
+				continue;
+
+			if (du_old->part != du_new->part)
+				continue;
+
+			if (!memcmp(du_old->pvid, du_new->pvid, strlen(du_old->pvid))) {
+				part = _part_str(du_old);
+
+				/*
+				 * Old and new entries match based on PVID.
+				 * IDNAME and DEVNAME might not match.
+				 */
+
+				if (!du_new->dev) {
+					/* We can't know the new idname and devname without a device. */
+					log_print_unless_silent("IDTYPE=%s IDNAME=%s DEVNAME=%s PVID=%s%s: device not found",
+						idtype_to_str(du_old->idtype),
+						du_old->idname ?: "none",
+						du_old->devname ?: "none",
+						du_old->pvid,
+						part);
+					goto next2;
+				}
+
+				idname_same = (du_old->idname && du_new->idname && !strcmp(du_old->idname, du_new->idname)) || (!du_old->idname && !du_new->idname);
+				devname_same = (du_old->devname && du_new->devname && !strcmp(du_old->devname, du_new->devname)) || (!du_old->devname && !du_new->devname);
+
+				if (idname_same && devname_same) {
+					log_verbose("IDTYPE=%s IDNAME=%s DEVNAME=%s PVID=%s%s: no change",
+						    idtype_to_str(du_new->idtype),
+						    du_new->idname ?: "none",
+						    du_new->devname ?: "none",
+						    du_new->pvid,
+						    part);
+
+				} else if (!idname_same && !devname_same) {
+					log_print_unless_silent("IDTYPE=%s IDNAME=%s (old %s) DEVNAME=%s (old %s) PVID=%s%s: update",
+						    idtype_to_str(du_new->idtype),
+						    du_new->idname ?: "none",
+						    du_old->idname ?: "none",
+						    du_new->devname ?: "none",
+						    du_old->devname ?: "none",
+						    du_new->pvid,
+						    part);
+
+				} else if (idname_same && !devname_same) {
+					log_print_unless_silent("IDTYPE=%s IDNAME=%s DEVNAME=%s (old %s) PVID=%s%s: update",
+						    idtype_to_str(du_new->idtype),
+						    du_new->idname ?: "none",
+						    du_new->devname ?: "none",
+						    du_old->devname ?: "none",
+						    du_new->pvid,
+						    part);
+
+				} else if (!idname_same && devname_same) {
+					log_print_unless_silent("IDTYPE=%s IDNAME=%s (old %s) DEVNAME=%s PVID=%s%s: update",
+						    idtype_to_str(du_new->idtype),
+						    du_new->idname ?: "none",
+						    du_old->idname ?: "none",
+						    du_new->devname ?: "none",
+						    du_new->pvid,
+						    part);
+				}
+			next2:
+				dm_list_del(&du_old->list);
+				dm_list_del(&du_new->list);
+				dm_list_add(&done_old, &du_old->list);
+				dm_list_add(&done_new, &du_new->list);
+				goto restart2;
+			}
+		}
+	}
+
+	/*
+	 * Check entries with new IDTYPE (refresh can do this)
+	 * Compare PVIDs.
+	 */
+restart3:
+	dm_list_iterate_items(du_old, &use_old) {
+		dm_list_iterate_items(du_new, &use_new) {
+
+			if (!du_old->pvid || !du_new->pvid)
+				continue;
+
+			if (du_old->part != du_new->part)
+				continue;
+
+			if (!memcmp(du_old->pvid, du_new->pvid, strlen(du_old->pvid))) {
+				part = _part_str(du_old);
+
+				/*
+				 * Old and new entries match based on PVID.
+				 * IDTYPE, IDNAME, DEVNAME might not match.
+				 */
+
+				if (!du_new->dev) {
+					/* could this happen? */
+					log_print_unless_silent("IDTYPE=%s (%s) IDNAME=%s (%s) DEVNAME=%s (%s) PVID=%s%s: device not found",
+						idtype_to_str(du_new->idtype),
+						idtype_to_str(du_old->idtype),
+						du_new->idname ?: "none",
+						du_old->idname ?: "none",
+						du_new->devname ?: "none",
+						du_old->devname ?: "none",
+						du_new->pvid,
+						part);
+					goto next3;
+				}
+
+				idtype_same = (du_old->idtype == du_new->idtype);
+				idname_same = (du_old->idname && du_new->idname && !strcmp(du_old->idname, du_new->idname)) || (!du_old->idname && !du_new->idname);
+				devname_same = (du_old->devname && du_new->devname && !strcmp(du_old->devname, du_new->devname)) || (!du_old->devname && !du_new->devname);
+
+				if (idtype_same && idname_same && devname_same) {
+					/* this case will probably be caught earlier */
+					log_verbose("IDTYPE=%s IDNAME=%s DEVNAME=%s PVID=%s%s: no change",
+						    idtype_to_str(du_new->idtype),
+						    du_new->idname ?: "none",
+						    du_new->devname ?: "none",
+						    du_new->pvid,
+						    part);
+
+				} else if (!idtype_same && !idname_same && !devname_same) {
+					log_print_unless_silent("IDTYPE=%s (old %s) IDNAME=%s (old %s) DEVNAME=%s (old %s) PVID=%s%s: update",
+						idtype_to_str(du_new->idtype),
+						idtype_to_str(du_old->idtype),
+						du_new->idname ?: "none",
+						du_old->idname ?: "none",
+						du_new->devname ?: "none",
+						du_old->devname ?: "none",
+						du_new->pvid,
+						part);
+
+				} else if (!idtype_same && !idname_same && devname_same) {
+					log_print_unless_silent("IDTYPE=%s (old %s) IDNAME=%s (old %s) DEVNAME=%s PVID=%s%s: update",
+						idtype_to_str(du_new->idtype),
+						idtype_to_str(du_old->idtype),
+						du_new->idname ?: "none",
+						du_old->idname ?: "none",
+						du_new->devname ?: "none",
+						du_new->pvid,
+						part);
+
+				} else if (idtype_same && !idname_same && !devname_same) {
+					log_print_unless_silent("IDTYPE=%s IDNAME=%s (old %s) DEVNAME=%s (old %s) PVID=%s%s: update",
+						idtype_to_str(du_new->idtype),
+						du_new->idname ?: "none",
+						du_old->idname ?: "none",
+						du_new->devname ?: "none",
+						du_old->devname ?: "none",
+						du_new->pvid,
+						part);
+
+				} else if (idtype_same && !idname_same && devname_same) {
+					log_print_unless_silent("IDTYPE=%s IDNAME=%s (old %s) DEVNAME=%s PVID=%s%s: update",
+						idtype_to_str(du_new->idtype),
+						du_new->idname ?: "none",
+						du_old->idname ?: "none",
+						du_new->devname ?: "none",
+						du_new->pvid,
+						part);
+
+				} else if (idtype_same && idname_same && !devname_same) {
+					log_print_unless_silent("IDTYPE=%s IDNAME=%s DEVNAME=%s (old %s) PVID=%s%s: update",
+						idtype_to_str(du_new->idtype),
+						du_new->idname ?: "none",
+						du_new->devname ?: "none",
+						du_old->devname ?: "none",
+						du_new->pvid,
+						part);
+				}
+			next3:
+				dm_list_del(&du_old->list);
+				dm_list_del(&du_new->list);
+				dm_list_add(&done_old, &du_old->list);
+				dm_list_add(&done_new, &du_new->list);
+				goto restart3;
+			}
+		}
+	}
+
+	/*
+	 * Handle old and new entries that remain and are identical.
+	 * This covers entries that do not have enough valid fields
+	 * set to definitively identify a PV.
+	 */
+restart4:
+	dm_list_iterate_items(du_old, &use_old) {
+		dm_list_iterate_items(du_new, &use_new) {
+			idtype_same = (du_old->idtype == du_new->idtype);
+			idname_same = (du_old->idname && du_new->idname && !strcmp(du_old->idname, du_new->idname)) || (!du_old->idname && !du_new->idname);
+			devname_same = (du_old->devname && du_new->devname && !strcmp(du_old->devname, du_new->devname)) || (!du_old->devname && !du_new->devname);
+			pvid_same = (du_old->pvid && du_new->pvid && !strcmp(du_old->pvid, du_new->pvid)) || (!du_old->pvid && !du_new->pvid);
+			part_same = (du_old->part == du_new->part);
+
+			if (idtype_same && idname_same && devname_same && pvid_same && part_same) {
+				part = _part_str(du_old);
+
+				log_print_unless_silent("IDTYPE=%s IDNAME=%s DEVNAME=%s PVID=%s%s: indeterminate",
+					idtype_to_str(du_new->idtype),
+					du_new->idname ?: "none",
+					du_new->devname ?: "none",
+					du_new->pvid ?: "none",
+					part);
+
+				dm_list_del(&du_old->list);
+				dm_list_del(&du_new->list);
+				dm_list_add(&done_old, &du_old->list);
+				dm_list_add(&done_new, &du_new->list);
+				goto restart4;
+			}
+		}
+	}
+
+	/*
+	 * Entries remaining on old/new lists can't be directly
+	 * correlated by loops above.
+	 * Just print remaining old entries as being removed and
+	 * remaing new entries as being added.
+	 * If we find specific cases that reach here, we may
+	 * want to add loops above to detect and print them
+	 * more specifically.
+	 */
+
+	dm_list_iterate_items(du_old, &use_old) {
+		part = _part_str(du_old);
+
+		log_print_unless_silent("IDTYPE=%s IDNAME=%s DEVNAME=%s PVID=%s%s: old entry",
+			idtype_to_str(du_old->idtype),
+			du_old->idname ?: "none",
+			du_old->devname ?: "none",
+			du_old->pvid ?: "none",
+			part);
+	}
+
+	dm_list_iterate_items(du_new, &use_new) {
+		part = _part_str(du_new);
+
+		log_print_unless_silent("IDTYPE=%s IDNAME=%s DEVNAME=%s PVID=%s%s: new entry",
+			idtype_to_str(du_new->idtype),
+			du_new->idname ?: "none",
+			du_new->devname ?: "none",
+			du_new->pvid ?: "none",
+			part);
+	}
+
+	/* Restore cmd->use_devices list */
+
+	dm_list_splice(&cmd->use_devices, &use_new);
+	dm_list_splice(&cmd->use_devices, &done_new);
+}
+
 int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 {
 	struct dm_list search_pvids;
@@ -186,9 +578,7 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 
 	if (arg_is_set(cmd, check_ARG) || arg_is_set(cmd, update_ARG)) {
 		int update_set = arg_is_set(cmd, update_ARG);
-		int search_count = 0;
 		int update_needed = 0;
-		int serial_update_needed = 0;
 
 		unlink_searched_devnames(cmd);
 
@@ -226,13 +616,9 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 
 		/*
 		 * Check that the pvid read from the lvm label matches the pvid
-		 * for this devices file entry.  Also print a warning if a dev
-		 * from use_devices does not pass the filters that have been
-		 * run just above.
+		 * for this devices file entry.
 		 */
-		device_ids_validate(cmd, NULL, 1, 0);
-		if (cmd->device_ids_invalid)
-			update_needed = 1;
+		device_ids_validate(cmd, NULL, 0, 1, &update_needed);
 
 		/*
 		 * Remove multipath components.
@@ -253,11 +639,17 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 			if (!dev_is_mpath_component(cmd, dev, &mpath_devno))
 				continue;
 
+			log_print_unless_silent("IDTYPE=%s IDNAME=%s DEVNAME=%s PVID=%s%s: remove multipath component",
+					idtype_to_str(du->idtype),
+					du->idname ?: "none",
+					du->devname ?: "none",
+					du->pvid ?: "none",
+					_part_str(du));
+
 			update_needed = 1;
-			if (update_set) {
-				log_print("Removing multipath component %s.", dev_name(du->dev));
+
+			if (update_set)
 				dm_list_del(&du->list);
-			}
 
 			if (!(mpath_dev = dev_cache_get_by_devt(cmd, mpath_devno)))
 				continue;
@@ -269,23 +661,27 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 					if (!device_id_add(cmd, mpath_dev, dev->pvid, NULL, NULL, 0))
 						stack;
 				} else {
-					log_print("Missing multipath device %s for multipath component %s.",
-						  dev_name(mpath_dev), dev_name(du->dev));
+					log_print_unless_silent("Missing multipath device %s for multipath component %s.",
+						dev_name(mpath_dev), dev_name(du->dev));
 				}
 			}
 		}
 
-		if (!dm_list_empty(&cmd->device_ids_check_serial))
-			device_ids_check_serial(cmd, &scan_devs, &serial_update_needed, 1);
+		if (!dm_list_empty(&cmd->device_ids_check_serial)) {
+			device_ids_check_serial(cmd, &scan_devs, 1, &update_needed);
+			/* device_ids_check_serial has done label_read_pvid on the scan_devs. */
+		}
 
 		/*
-		 * Find and fix any devname entries that have moved to a
-		 * renamed device.
+		 * Find devname entries that have moved to a renamed device.
+		 * If --refresh is set, then also look for missing PVIDs on
+		 * devices with new device ids of any type, e.g. a PVID that's
+		 * moved to a new WWID.
 		 */
-		device_ids_refresh(cmd, &found_devs, &search_count, 1);
+		cmd->search_for_devnames = "all";
+		device_ids_search(cmd, &found_devs, arg_is_set(cmd, refresh_ARG), 1, &update_needed);
 
-		if (search_count && !strcmp(cmd->search_for_devnames, "none"))
-			log_print("Not searching for missing devnames, search_for_devnames=\"none\".");
+		_print_check(cmd);
 
 		dm_list_iterate_items(du, &cmd->use_devices) {
 			if (du->dev)
@@ -295,17 +691,21 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 		if (arg_is_set(cmd, delnotfound_ARG)) {
 			dm_list_iterate_items_safe(du, du2, &cmd->use_devices) {
 				if (!du->dev) {
-					log_print("Deleting IDTYPE=%s IDNAME=%s PVID=%s",
-						  idtype_to_str(du->idtype), du->idname ?: ".", du->pvid ?: ".");
+					log_print_unless_silent("IDTYPE=%s IDNAME=%s DEVNAME=%s PVID=%s%s: delete",
+						idtype_to_str(du->idtype),
+						du->idname ?: "none",
+						du->devname ?: "none",
+						du->pvid ?: "none",
+						_part_str(du));
 					dm_list_del(&du->list);
 					free_du(du);
-					update_needed++;
+					update_needed = 1;
 				}
 			}
 		}
 
 		if (arg_is_set(cmd, update_ARG)) {
-			if (update_needed || serial_update_needed || !dm_list_empty(&found_devs)) {
+			if (update_needed || !dm_list_empty(&found_devs)) {
 				if (!device_ids_write(cmd))
 					goto_bad;
 				log_print("Updated devices file to version %s", devices_file_version());
@@ -318,7 +718,7 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 			 * needs updates, i.e. running --update would make
 			 * changes.
 			 */
-			if (update_needed || serial_update_needed) {
+			if (update_needed) {
 				log_error("Updates needed for devices file.");
 				goto bad;
 			}
@@ -559,18 +959,13 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 	/* If no options, print use_devices list */
 
 	dm_list_iterate_items(du, &cmd->use_devices) {
-		char part_buf[64] = { 0 };
-
-		if (du->part)
-			snprintf(part_buf, 63, " PART=%d", du->part);
-
 		log_print("Device %s IDTYPE=%s IDNAME=%s DEVNAME=%s PVID=%s%s",
 			  du->dev ? dev_name(du->dev) : "none",
 			  du->idtype ? idtype_to_str(du->idtype) : "none",
 			  du->idname ? du->idname : "none",
 			  du->devname ? du->devname : "none",
 			  du->pvid ? (char *)du->pvid : "none",
-			  part_buf);
+			  _part_str(du));
 	}
 
 out:
