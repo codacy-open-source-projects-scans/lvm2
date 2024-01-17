@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2005-2016 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2005-2023 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -3018,36 +3018,6 @@ static struct logical_volume *_lvconvert_insert_thin_layer(struct logical_volume
 	return pool_lv;
 }
 
-static int _lvconvert_attach_metadata_to_pool(struct lv_segment *pool_seg,
-					      struct logical_volume *metadata_lv)
-{
-	struct cmd_context *cmd = metadata_lv->vg->cmd;
-	char name[NAME_LEN];                   /* generated sub lv name */
-
-	if (!deactivate_lv(cmd, metadata_lv)) {
-		log_error("Aborting. Failed to deactivate metadata lv. "
-			  "Manual intervention required.");
-		return 0;
-	}
-
-	if ((dm_snprintf(name, sizeof(name), "%s%s", pool_seg->lv->name,
-			 seg_is_thin_pool(pool_seg) ? "_tmeta" : "_cmeta") < 0)) {
-		log_error("Failed to create internal lv names, %s name is too long.",
-			  pool_seg->lv->name);
-		return 0;
-	}
-
-	/* Rename LVs to the pool _[ct]meta LV naming scheme. */
-	if ((strcmp(metadata_lv->name, name) != 0) &&
-	    !lv_rename_update(cmd, metadata_lv, name, 0))
-		return_0;
-
-	if (!attach_pool_metadata_lv(pool_seg, metadata_lv))
-		return_0;
-
-	return 1;
-}
-
 /*
  * Create a new pool LV, using the lv arg as the data sub LV.
  * The metadata sub LV is either a new LV created here, or an
@@ -3092,6 +3062,15 @@ static int _lvconvert_to_pool(struct cmd_context *cmd,
 	thin_discards_t discards;
 	thin_zero_t zero_new_blocks;
 	int error_when_full;
+	int data_vdo;
+	uint64_t vdo_pool_header_size;
+	struct vdo_convert_params vcp = {
+		.activate = CHANGE_AN,
+		.do_zero = 1,
+		.do_wipe_signatures = 1,
+		.force = arg_count(cmd, force_ARG),
+		.yes = arg_count(cmd, yes_ARG),
+	};
 	int is_active;
 	int ret = 1;
 
@@ -3215,7 +3194,7 @@ static int _lvconvert_to_pool(struct cmd_context *cmd,
 	}
 
 	if (!get_pool_params(cmd, pool_segtype,
-			     &meta_size, &pool_metadata_spare,
+			     &data_vdo, &meta_size, &pool_metadata_spare,
 			     &chunk_size, &discards, &zero_new_blocks))
 		goto_bad;
 
@@ -3388,6 +3367,20 @@ static int _lvconvert_to_pool(struct cmd_context *cmd,
 			goto bad;
 		}
 
+		if (data_vdo) {
+			if (!fill_vdo_target_params(cmd, &vcp.vdo_params, &vdo_pool_header_size, vg->profile))
+				goto_bad;
+
+			if (!get_vdo_settings(cmd, &vcp.vdo_params, NULL))
+				goto_bad;
+
+			if (data_vdo && lv_is_vdo(lv))
+				log_print_unless_silent("Volume %s is already VDO volume, skipping VDO conversion.",
+							display_lvname(lv));
+			else if (!convert_vdo_lv(lv, &vcp))
+				goto_bad;
+		}
+
 		pool_lv = lv;
 	}
 
@@ -3423,23 +3416,20 @@ static int _lvconvert_to_pool(struct cmd_context *cmd,
 		if (!cache_set_params(seg, chunk_size, cache_metadata_format, cache_mode, policy_name, policy_settings))
 			goto_bad;
 	} else {
-		seg->transaction_id = 0;
-		seg->crop_metadata = crop_metadata;
-		seg->chunk_size = chunk_size;
-		seg->discards = discards;
-		seg->zero_new_blocks = zero_new_blocks;
-		if (crop_metadata == THIN_CROP_METADATA_NO)
-			pool_lv->status |= LV_CROP_METADATA;
-		if (!recalculate_pool_chunk_size_with_dev_hints(pool_lv, data_lv, chunk_calc))
-			goto_bad;
-
 		/* Error when full */
 		if (arg_is_set(cmd, errorwhenfull_ARG))
-			error_when_full = arg_uint_value(cmd, errorwhenfull_ARG, 0);
+			error_when_full = arg_int_value(cmd, errorwhenfull_ARG, 0);
 		else
 			error_when_full = find_config_tree_bool(cmd, activation_error_when_full_CFG, vg->profile);
-		if (error_when_full)
-			pool_lv->status |= LV_ERROR_WHEN_FULL;
+
+		if (!thin_pool_set_params(seg,
+					  error_when_full,
+					  crop_metadata,
+					  chunk_calc,
+					  chunk_size,
+					  discards,
+					  zero_new_blocks))
+			goto_bad;
 
 		if (to_thin) {
 			if (!thin_pool_prepare_metadata(metadata_lv, seg->chunk_size,
@@ -3451,7 +3441,7 @@ static int _lvconvert_to_pool(struct cmd_context *cmd,
 		}
 	}
 
-	if (!_lvconvert_attach_metadata_to_pool(seg, metadata_lv))
+	if (!add_metadata_to_pool(seg, metadata_lv))
 		goto_bad;
 
 	/*
@@ -4879,6 +4869,7 @@ static int _lvconvert_to_pool_or_swap_metadata_single(struct cmd_context *cmd,
 	case striped_LVT:
 	case error_LVT:
 	case zero_LVT:
+	case vdo_LVT:
 		break;
 	default:
 bad:
@@ -5485,96 +5476,55 @@ static int _lvconvert_to_vdopool_single(struct cmd_context *cmd,
 					struct logical_volume *lv,
 					struct processing_handle *handle)
 {
-	const char *vg_name = NULL;
-	unsigned int vdo_pool_zero;
-	uint64_t vdo_pool_header_size;
 	struct volume_group *vg = lv->vg;
 	struct logical_volume *vdo_lv;
-	struct dm_vdo_target_params vdo_params; /* vdo */
-	struct lvcreate_params lvc = {
+	const char *vg_name = NULL;
+	uint64_t vdo_pool_header_size;
+	struct vdo_convert_params vcp = {
 		.activate = CHANGE_AEY,
-		.alloc = ALLOC_INHERIT,
-		.major = -1,
-		.minor = -1,
-		.suppress_zero_warn = 1, /* Suppress warning for this VDO */
-		.permission = LVM_READ | LVM_WRITE,
-		.pool_name = lv->name,
-		.pvh = &vg->pvs,
-		.read_ahead = arg_uint_value(cmd, readahead_ARG, DM_READ_AHEAD_AUTO),
-		.stripes = 1,
 		.lv_name = arg_str_value(cmd, name_ARG, NULL),
+		.virtual_extents = extents_from_size(cmd,
+						     arg_uint64_value(cmd, virtualsize_ARG, UINT64_C(0)),
+						     vg->extent_size),
+		.do_zero = arg_int_value(cmd, zero_ARG, 1),
+		.do_wipe_signatures = 1,
+		.yes = arg_count(cmd, yes_ARG),
+		.force = arg_count(cmd, force_ARG)
 	};
 
-	if (lvc.lv_name &&
-	    !validate_restricted_lvname_param(cmd, &vg_name, &lvc.lv_name))
+	if (vcp.lv_name) {
+		if (!validate_restricted_lvname_param(cmd, &vg_name, &vcp.lv_name))
+			goto_out;
+	} else
+		vcp.lv_name = "lvol%d";
+
+	if (!fill_vdo_target_params(cmd, &vcp.vdo_params, &vdo_pool_header_size, vg->profile))
 		goto_out;
 
-	lvc.virtual_extents = extents_from_size(cmd,
-						arg_uint64_value(cmd, virtualsize_ARG, UINT64_C(0)),
-						vg->extent_size);
-
-	if (!(lvc.segtype = get_segtype_from_string(cmd, SEG_TYPE_NAME_VDO)))
-		goto_out;
-
-	if (activation() && lvc.segtype->ops->target_present) {
-		if (!lvc.segtype->ops->target_present(cmd, NULL, &lvc.target_attr)) {
-			log_error("%s: Required device-mapper target(s) not detected in your kernel.",
-				  lvc.segtype->name);
-			goto out;
-		}
-	}
-
-	if (!fill_vdo_target_params(cmd, &vdo_params, &vdo_pool_header_size, vg->profile))
-		goto_out;
-
-	if (!get_vdo_settings(cmd, &vdo_params, NULL))
+	if (!get_vdo_settings(cmd, &vcp.vdo_params, NULL))
 		goto_out;
 
 	/* If LV is inactive here, ensure it's not active elsewhere. */
 	if (!lockd_lv(cmd, lv, "ex", 0))
 		goto_out;
 
-	if (!activate_lv(cmd, lv)) {
-		log_error("Cannot activate %s.", display_lvname(lv));
-		goto out;
-	}
-
-	vdo_pool_zero = arg_int_value(cmd, zero_ARG, 1);
-
 	log_warn("WARNING: Converting logical volume %s to VDO pool volume %s formatting.",
-		 display_lvname(lv), vdo_pool_zero ? "with" : "WITHOUT");
+		 display_lvname(lv), vcp.do_zero ? "with" : "WITHOUT");
 
-	if (vdo_pool_zero)
+	if (vcp.do_zero)
 		log_warn("THIS WILL DESTROY CONTENT OF LOGICAL VOLUME (filesystem etc.)");
 	else
 		log_warn("WARNING: Using invalid VDO pool data MAY DESTROY YOUR DATA!");
 
-	if (!arg_count(cmd, yes_ARG) &&
+	if (!vcp.yes &&
 	    yes_no_prompt("Do you really want to convert %s? [y/n]: ",
 			  display_lvname(lv)) == 'n') {
 		log_error("Conversion aborted.");
 		goto out;
 	}
 
-	if (vdo_pool_zero) {
-		if (test_mode()) {
-			log_verbose("Test mode: Skipping activation, zeroing and signature wiping.");
-		} else if (!wipe_lv(lv, (struct wipe_params) { .do_zero = 1, .do_wipe_signatures = 1,
-			     .yes = arg_count(cmd, yes_ARG),
-			     .force = arg_count(cmd, force_ARG)})) {
-			log_error("Aborting. Failed to wipe VDO data store.");
-			goto out;
-		}
-	}
-
-	if (!convert_vdo_pool_lv(lv, &vdo_params, &lvc.virtual_extents,
-				 vdo_pool_zero, vdo_pool_header_size))
+	if (!(vdo_lv = convert_vdo_lv(lv, &vcp)))
 		goto_out;
-
-	dm_list_init(&lvc.tags);
-
-	if (!(vdo_lv = lv_create_single(vg, &lvc)))
-		goto_out; /* FIXME: hmmm what to do now */
 
 	log_print_unless_silent("Converted %s to VDO pool volume and created virtual %s VDO volume.",
 				display_lvname(lv), display_lvname(vdo_lv));

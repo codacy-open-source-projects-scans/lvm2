@@ -909,6 +909,13 @@ int update_thin_pool_params(struct cmd_context *cmd,
 			    thin_crop_metadata_t *crop_metadata,
 			    int *chunk_size_calc_method, uint32_t *chunk_size,
 			    thin_discards_t *discards, thin_zero_t *zero_new_blocks);
+int thin_pool_set_params(struct lv_segment *seg,
+			 int error_when_full,
+			 thin_crop_metadata_t crop_metadata,
+			 int thin_chunk_size_calc_policy,
+			 uint32_t chunk_size,
+			 thin_discards_t discards,
+			 thin_zero_t zero_new_blocks);
 
 struct lv_status_thin_pool {
 	struct dm_pool *mem;
@@ -930,6 +937,8 @@ struct logical_volume *alloc_pool_metadata(struct logical_volume *pool_lv,
 					   uint32_t stripes, uint32_t stripe_size,
 					   uint32_t extents, alloc_policy_t alloc,
 					   struct dm_list *pvh);
+int add_metadata_to_pool(struct lv_segment *pool_seg,
+			 struct logical_volume *metadata_lv);
 int handle_pool_metadata_spare(struct volume_group *vg, uint32_t extents,
 			       struct dm_list *pvh, int poolmetadataspare);
 int vg_set_pool_metadata_spare(struct logical_volume *lv);
@@ -966,6 +975,17 @@ static inline int is_change_activating(activation_change_t change)
 {
         return ((change != CHANGE_AN) && (change != CHANGE_ALN));
 }
+
+struct vdo_convert_params {
+	struct dm_vdo_target_params vdo_params; /* VDO parameters for vdoformat */
+	const char *lv_name;
+	uint32_t virtual_extents;
+	activation_change_t activate;
+	int do_zero;
+	int do_wipe_signatures; /* Used for wiping VDO backend volume */
+	force_t force;
+	int yes;
+};
 
 /* FIXME: refactor and reduce the size of this struct! */
 struct lvcreate_params {
@@ -1031,6 +1051,7 @@ struct lvcreate_params {
 	uint64_t pool_metadata_size; /* pools */
 	uint32_t pool_data_extents; /* pools */
 	uint64_t pool_data_size; /* pools */
+	int pool_data_vdo; /* pools */
 	uint32_t virtual_extents; /* snapshots, thins */
 	struct dm_list *pvh; /* all */
 
@@ -1040,7 +1061,7 @@ struct lvcreate_params {
 	uint32_t read_ahead; /* all */
 	int approx_alloc;     /* all */
 	alloc_policy_t alloc; /* all */
-	struct dm_vdo_target_params vdo_params; /* vdo */
+	struct vdo_convert_params vcp;
 	uint64_t vdo_pool_header_size; /* VDO */
 
 	int raidintegrity;
@@ -1376,11 +1397,13 @@ uint32_t get_vdo_pool_max_extents(const struct dm_vdo_target_params *vtp,
 int parse_vdo_pool_status(struct dm_pool *mem, const struct logical_volume *vdo_pool_lv,
 			  const char *params, const struct dm_info *dminfo,
 			  struct lv_status_vdo *status);
-struct logical_volume *convert_vdo_pool_lv(struct logical_volume *data_lv,
-					   const struct dm_vdo_target_params *vtp,
-					   uint32_t *virtual_extents,
-					   int format,
-					   uint64_t vdo_pool_header_size);
+int convert_vdo_pool_lv(struct logical_volume *data_lv,
+			const struct dm_vdo_target_params *vtp,
+			uint32_t *virtual_extents,
+			int format,
+			uint64_t vdo_pool_header_size);
+struct logical_volume *convert_vdo_lv(struct logical_volume *lv,
+				      const struct vdo_convert_params *vcp);
 int set_vdo_write_policy(enum dm_vdo_write_policy *vwp, const char *policy);
 int fill_vdo_target_params(struct cmd_context *cmd,
 			   struct dm_vdo_target_params *vtp,

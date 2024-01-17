@@ -572,6 +572,9 @@ int create_pool(struct logical_volume *pool_lv,
 	if (!lv_add_segment(ah, 0, stripes, pool_lv, striped, stripe_size, 0, 0))
 		goto_bad;
 
+	if (pool_lv->vg->cmd->lvcreate_vcp && !convert_vdo_lv(pool_lv, pool_lv->vg->cmd->lvcreate_vcp))
+		goto_bad;
+
 	if (!(data_lv = insert_layer_for_lv(pool_lv->vg->cmd, pool_lv,
 					    pool_lv->status,
 					    (segtype_is_cache_pool(segtype)) ?
@@ -640,6 +643,36 @@ struct logical_volume *alloc_pool_metadata(struct logical_volume *pool_lv,
 		return_0;
 
 	return metadata_lv;
+}
+
+int add_metadata_to_pool(struct lv_segment *pool_seg,
+			 struct logical_volume *metadata_lv)
+{
+	struct cmd_context *cmd = metadata_lv->vg->cmd;
+	char name[NAME_LEN];                   /* generated sub lv name */
+
+	if (!deactivate_lv(cmd, metadata_lv)) {
+		log_error("Aborting. Failed to deactivate metadata lv. "
+			  "Manual intervention required.");
+		return 0;
+	}
+
+	if ((dm_snprintf(name, sizeof(name), "%s%s", pool_seg->lv->name,
+			 seg_is_thin_pool(pool_seg) ? "_tmeta" : "_cmeta") < 0)) {
+		log_error("Failed to create internal lv names, %s name is too long.",
+			  pool_seg->lv->name);
+		return 0;
+	}
+
+	/* Rename LVs to the pool _[ct]meta LV naming scheme. */
+	if ((strcmp(metadata_lv->name, name) != 0) &&
+	    !lv_rename_update(cmd, metadata_lv, name, 0))
+		return_0;
+
+	if (!attach_pool_metadata_lv(pool_seg, metadata_lv))
+		return_0;
+
+	return 1;
 }
 
 static struct logical_volume *_alloc_pool_metadata_spare(struct volume_group *vg,
