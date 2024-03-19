@@ -1867,8 +1867,10 @@ int monitor_dev_for_events(struct cmd_context *cmd, const struct logical_volume 
 	 * each of its respective snapshots.  The origin itself may
 	 * also need to be monitored if it is a mirror, for example,
 	 * so fall through to process it afterwards.
+	 * Before monitoring snapshots verify origin is active as with
+	 * external origin only read-only -real device can be active.
 	 */
-	if (!laopts->origin_only && lv_is_origin(lv))
+	if (!laopts->origin_only && lv_is_origin(lv) && lv_info(lv->vg->cmd, lv, 0, NULL, 0, 0))
 		dm_list_iterate_safe(snh, snht, &lv->snapshot_segs)
 			if (!monitor_dev_for_events(cmd, dm_list_struct_base(snh,
 				struct lv_segment, origin_list)->cow, NULL, monitor)) {
@@ -2037,7 +2039,7 @@ int monitor_dev_for_events(struct cmd_context *cmd, const struct logical_volume 
 }
 
 struct detached_lv_data {
-	const struct logical_volume *lv_pre;
+	const struct volume_group *vg_pre;
 	struct lv_activate_opts *laopts;
 	int *flush_required;
 };
@@ -2047,37 +2049,14 @@ static int _preload_detached_lv(struct logical_volume *lv, void *data)
 	struct detached_lv_data *detached = data;
 	struct logical_volume *lv_pre;
 
-	/* Check and preload removed raid image leg or metadata */
-	if (lv_is_raid_image(lv)) {
-		if ((lv_pre = find_lv_in_vg_by_lvid(detached->lv_pre->vg, &lv->lvid)) &&
-		    !lv_is_raid_image(lv_pre) && lv_is_active(lv) &&
-		    !_lv_preload(lv_pre, detached->laopts, detached->flush_required))
-			return_0;
-	} else if (lv_is_raid_metadata(lv)) {
-		if ((lv_pre = find_lv_in_vg_by_lvid(detached->lv_pre->vg, &lv->lvid)) &&
-		    !lv_is_raid_metadata(lv_pre) && lv_is_active(lv) &&
-		    !_lv_preload(lv_pre, detached->laopts, detached->flush_required))
-			return_0;
-	} else if (lv_is_mirror_image(lv)) {
-		if ((lv_pre = find_lv_in_vg_by_lvid(detached->lv_pre->vg, &lv->lvid)) &&
-		    !lv_is_mirror_image(lv_pre) && lv_is_active(lv) &&
-		    !_lv_preload(lv_pre, detached->laopts, detached->flush_required))
-			return_0;
-	}
-
-	if (!lv_is_visible(lv) && (lv_pre = find_lv(detached->lv_pre->vg, lv->name)) &&
+	/* Check if the LV was 'hidden' (non-toplevel) in committed metadata
+	 * and becomes 'visible' (toplevel) in precommitted metadata */
+	if (!lv_is_visible(lv) &&
+	    (lv_pre = find_lv_in_vg_by_lvid(detached->vg_pre, &lv->lvid)) &&
 	    lv_is_visible(lv_pre)) {
+		log_debug_activation("Preloading detached hidden volume %s as visible volume %s.",
+				     display_lvname(lv), display_lvname(lv_pre));
 		if (!_lv_preload(lv_pre, detached->laopts, detached->flush_required))
-			return_0;
-	}
-
-	/* FIXME: condition here should be far more limiting to really
-	 *        detect detached LVs */
-	if ((lv_pre = find_lv(detached->lv_pre->vg, lv->name))) {
-		if (lv_is_visible(lv_pre) && lv_is_active(lv) &&
-		    !lv_is_pool(lv) &&
-		    (!lv_is_cow(lv) || !lv_is_cow(lv_pre)) &&
-		    !_lv_preload(lv_pre, detached->laopts, detached->flush_required))
 			return_0;
 	}
 
@@ -2126,9 +2105,13 @@ static int _lv_suspend(struct cmd_context *cmd, const char *lvid_s,
 
 	/* Ignore origin_only unless LV is origin in both old and new metadata */
 	/* or LV is thin or thin pool volume */
-	if (!lv_is_thin_volume(lv) && !lv_is_thin_pool(lv) &&
-	    !(lv_is_origin(lv) && lv_is_origin(lv_pre)))
+	if (laopts->origin_only &&
+	    !lv_is_thin_volume(lv) && !lv_is_thin_pool(lv) &&
+	    !(lv_is_origin(lv) && lv_is_origin(lv_pre))) {
+		log_debug_activation("Not using origin only for suspend of %s.",
+				     display_lvname(lv));
 		laopts->origin_only = 0;
+	}
 
 	/*
 	 * Preload devices for the LV.
@@ -2171,7 +2154,7 @@ static int _lv_suspend(struct cmd_context *cmd, const char *lvid_s,
 		/*
 		 * Search for existing LVs that have become detached and preload them.
 		 */
-		detached.lv_pre = lv_pre;
+		detached.vg_pre = lv_pre->vg;
 		detached.laopts = laopts;
 		detached.flush_required = &flush_required;
 
@@ -2214,15 +2197,22 @@ static int _lv_suspend(struct cmd_context *cmd, const char *lvid_s,
 		/* FIXME Consider aborting here */
 		stack;
 
-	if (!laopts->origin_only &&
-	    (lv_is_origin(lv_pre) || lv_is_cow(lv_pre)))
-		lockfs = 1;
-
-	/* Converting non-thin LV to thin external origin ? */
-	if (!lv_is_thin_volume(lv) && lv_is_thin_volume(lv_pre))
-		lockfs = 1; /* Sync before conversion */
-
+	/* Require fs synchronization when taking a thin snapshot */
 	if (laopts->origin_only && lv_is_thin_volume(lv) && lv_is_thin_volume(lv_pre))
+		lockfs = 1;
+	/* Require fs synchronization when taking a thick snapshot */
+	else if (!laopts->origin_only &&
+		 (lv_is_origin(lv_pre) || lv_is_cow(lv_pre)))
+		lockfs = 1;
+	/* Require fs synchronization when converting a non-thin LV to a thin LV or
+	 * a non/thin LV with/out external origin to a thin LV with external origin LV. */
+	else if (!laopts->origin_only &&
+		 lv_is_thin_volume(lv_pre) &&		/* new LV is a Thin */
+		 (!lv_is_thin_volume(lv) ||		/* and either the existing LV is NOT a Thin */
+		  (first_seg(lv_pre)->external_lv &&	/* or the existing LV IS Thin and the new LV is Thin with the external origin */
+		   (!first_seg(lv)->external_lv ||	/* and check if existing Thin is either without the external origin */
+		    memcmp(&first_seg(lv_pre)->external_lv->lvid.id[1], /* or it uses a different external origin */
+			   &first_seg(lv)->external_lv->lvid.id[1], ID_LEN) != 0))))
 		lockfs = 1;
 
 	if (!lv_is_locked(lv) && lv_is_locked(lv_pre) &&

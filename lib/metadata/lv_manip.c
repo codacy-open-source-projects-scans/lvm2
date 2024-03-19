@@ -7932,9 +7932,18 @@ int lv_remove_with_dependencies(struct cmd_context *cmd, struct logical_volume *
 		return 1;
 	}
 
-	if (lv_is_external_origin(lv) &&
-	    !_lv_remove_segs_using_this_lv(cmd, lv, force, level, "external origin"))
-		return_0;
+	if (lv_is_external_origin(lv)) {
+		if (!_lv_remove_check_in_use(lv, force))
+			return_0;
+
+		if (!deactivate_lv(cmd, lv))
+			goto no_remove;
+
+		log_verbose("Removing external origin logical volume %s.", display_lvname(lv));
+
+		if (!_lv_remove_segs_using_this_lv(cmd, lv, force, level, "external origin"))
+			return_0;
+	}
 
 	if (lv_is_used_thin_pool(lv) &&
 	    !_lv_remove_segs_using_this_lv(cmd, lv, force, level, "pool"))
@@ -9344,24 +9353,10 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 				return NULL;
 			}
 
-			lp->virtual_extents = origin_lv->le_count;
+			if (!validate_thin_external_origin(origin_lv, pool_lv))
+				return_NULL;
 
-			/*
-			 * Check if using 'external origin' or the 'normal' snapshot
-			 * within the same thin pool
-			 */
-			if (first_seg(origin_lv)->pool_lv != pool_lv) {
-				if (!thin_pool_supports_external_origin(first_seg(pool_lv), origin_lv))
-					return_NULL;
-				if (origin_lv->status & LVM_WRITE) {
-					log_error("Cannot use writable LV as the external origin.");
-					return NULL; /* FIXME conversion for inactive */
-				}
-				if (lv_is_active(origin_lv) && !lv_is_external_origin(origin_lv)) {
-					log_error("Cannot use active LV for the external origin.");
-					return NULL; /* We can't be sure device is read-only */
-				}
-			}
+			lp->virtual_extents = origin_lv->le_count;
 		}
 	} else if (lp->snapshot) {
 		if (!lp->virtual_extents) {
@@ -9601,8 +9596,11 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 		/* Cache pool cannot be actived and zeroed */
 		log_very_verbose("Cache pool is prepared.");
 	} else if (lv_is_thin_volume(lv)) {
-		/* For snapshot, suspend active thin origin first */
-		if (origin_lv && lv_is_thin_volume(origin_lv) && lv_is_active(origin_lv)) {
+		/* Optimize the case when taking a snapshot within same pool and thin origin
+		 * is an active LV, so we can pass thin message with suspend/resume of this LV. */
+		if (origin_lv && lv_is_thin_volume(origin_lv) &&
+		    (first_seg(origin_lv)->pool_lv == pool_lv) &&
+		    lv_is_active(origin_lv)) {
 			if (!(ret = suspend_lv_origin(cmd, origin_lv))) {
 				log_error("Failed to suspend thin snapshot origin %s.",
 					  display_lvname(origin_lv));
