@@ -2046,9 +2046,12 @@ static int _lvconvert_snapshot(struct cmd_context *cmd,
 			       const char *origin_name)
 {
 	struct logical_volume *org;
-	const char *snap_name = display_lvname(lv);
+	const char *snap_name;
 	uint32_t chunk_size;
 	int zero;
+
+	if (!(snap_name = dm_pool_strdup(lv->vg->vgmem, (display_lvname(lv) ? : ""))))
+		return_0;
 
 	if (strcmp(lv->name, origin_name) == 0) {
 		log_error("Unable to use %s as both snapshot and origin.", snap_name);
@@ -2148,7 +2151,11 @@ static int _lvconvert_merge_old_snapshot(struct cmd_context *cmd,
 	if (!snap_seg)
 		return_0;
 
-	origin = origin_from_cow(lv);
+	if (!(origin = origin_from_cow(lv))) {
+		log_error(INTERNAL_ERROR "Cannot get origin from %s COW.",
+			  display_lvname(lv));
+		return 0;
+	}
 
 	/* Check if merge is possible */
 	if (lv_is_merging_origin(origin)) {

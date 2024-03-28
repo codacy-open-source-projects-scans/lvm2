@@ -870,7 +870,6 @@ static int _insert_dir(const char *dir)
 	if (len && path[len - 1] != '/')
 		path[len++] = '/';
 
-	setlocale(LC_COLLATE, "C"); /* Avoid sorting by locales */
 	dirent_count = scandir(dir, &dirent, NULL, alphasort);
 	if (dirent_count > 0) {
 		for (n = 0; n < dirent_count; n++) {
@@ -890,7 +889,6 @@ static int _insert_dir(const char *dir)
 			free(dirent[n]);
 		free(dirent);
 	}
-	setlocale(LC_COLLATE, "");
 
 	return r;
 }
@@ -1198,7 +1196,9 @@ void dev_cache_scan(struct cmd_context *cmd)
 
 	_cache.has_scanned = 1;
 
+	setlocale(LC_COLLATE, "C"); /* Avoid sorting by locales */
 	_insert_dirs(&_cache.dirs);
+	setlocale(LC_COLLATE, "");
 
 	if (cmd->check_devs_used)
 		(void) dev_cache_index_devs();
@@ -1846,7 +1846,9 @@ static void devices_file_rename_unused(struct cmd_context *cmd)
 	t = time(NULL);
 	if (!(tm = localtime(&t)))
 		return;
-	strftime(datetime_str, sizeof(datetime_str), "%Y%m%d.%H%M%S", tm);
+
+	if (!strftime(datetime_str, sizeof(datetime_str), "%Y%m%d.%H%M%S", tm))
+		return;
 
 	if (dm_snprintf(path2, sizeof(path2), "%s/devices/%s-unused.%s", cmd->system_dir, filename, datetime_str) < 0)
 		return;

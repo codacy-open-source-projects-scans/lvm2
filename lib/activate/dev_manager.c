@@ -991,31 +991,43 @@ out:
 	return r;
 }
 
+static struct dm_tree_node *_cached_dm_tree_node(struct dm_pool *mem,
+						       struct dm_tree *dtree,
+						       const struct logical_volume *lv,
+						       const char *layer)
+{
+	struct dm_tree_node *dnode;
+	char *dlid;
+
+	if (!(dlid = build_dm_uuid(mem, lv, layer)))
+		return_NULL;
+
+	dnode = dm_tree_find_node_by_uuid(dtree, dlid);
+
+	dm_pool_free(mem, dlid);
+
+	return dnode;
+}
+
 static const struct dm_info *_cached_dm_info(struct dm_pool *mem,
 					     struct dm_tree *dtree,
 					     const struct logical_volume *lv,
 					     const char *layer)
 {
-	char *dlid;
 	const struct dm_tree_node *dnode;
 	const struct dm_info *dinfo = NULL;
 
-	if (!(dlid = build_dm_uuid(mem, lv, layer)))
-		return_NULL;
-
-	if (!(dnode = dm_tree_find_node_by_uuid(dtree, dlid)))
-		goto out;
+	if (!(dnode = _cached_dm_tree_node(mem, dtree, lv, layer)))
+		return NULL;
 
 	if (!(dinfo = dm_tree_node_get_info(dnode))) {
 		log_warn("WARNING: Cannot get info from tree node for %s.",
 			 display_lvname(lv));
-		goto out;
+		return NULL;
 	}
 
 	if (!dinfo->exists)
 		dinfo = NULL;
-out:
-	dm_pool_free(mem, dlid);
 
 	return dinfo;
 }
@@ -2436,8 +2448,8 @@ static int _add_dev_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 	}
 
 	if (info.exists && dm->track_pending_delete) {
-		log_debug_activation("Tracking pending delete for %s (%s).",
-				     display_lvname(lv), dlid);
+		log_debug_activation("Tracking pending delete for %s%s%s (%s).",
+				     display_lvname(lv), layer ? "-" : "", layer ? : "", dlid);
 		if (!str_list_add(dm->cmd->pending_delete_mem, &dm->cmd->pending_delete, dlid))
 			return_0;
 	}
@@ -2674,13 +2686,14 @@ static int _add_cvol_subdev_to_dtree(struct dev_manager *dm, struct dm_tree *dtr
 	struct lv_segment *lvseg = first_seg(lv);
 	struct dm_info info;
 	char *name ,*dlid;
-	union lvid lvid = { { { "" } } };
-
-	memcpy(&lvid.id[0], &lv->vg->id, sizeof(struct id));
-	/* When ID is provided in form of metadata_id or data_id, otherwise use CVOL ID */
-	memcpy(&lvid.id[1],
-	       (meta_or_data && lvseg->metadata_id) ? lvseg->metadata_id :
-	       (lvseg->data_id) ? lvseg->data_id : &pool_lv->lvid.id[1], sizeof(struct id));
+	union lvid lvid = {
+		{
+			lv->vg->id,
+			/* When ID is provided in form of metadata_id or data_id, otherwise use CVOL ID */
+			(meta_or_data && lvseg->metadata_id) ? *lvseg->metadata_id :
+			(lvseg->data_id) ? *lvseg->data_id : pool_lv->lvid.id[1]
+		}
+	};
 
 	if (!(dlid = dm_build_dm_uuid(mem, UUID_PREFIX, (const char *)&lvid.s, layer)))
 		return_0;
@@ -2689,7 +2702,7 @@ static int _add_cvol_subdev_to_dtree(struct dev_manager *dm, struct dm_tree *dtr
 	if (!(name = dm_build_dm_name(dm->mem, lv->vg->name, pool_lv->name, layer)))
 		return_0;
 
-	if (!_info(dm->cmd, name, dlid, 1, 0, 0, &info, NULL, NULL))
+	if (!_info(dm->cmd, name, dlid, 0, 0, 0, &info, NULL, NULL))
 		return_0;
 
 	if (info.exists) {
@@ -2699,8 +2712,8 @@ static int _add_cvol_subdev_to_dtree(struct dev_manager *dm, struct dm_tree *dtr
 			return 0;
 		}
 		if (dm->track_pending_delete) {
-			log_debug_activation("Tracking pending delete for %s %s (%s).",
-					     layer, display_lvname(lv), dlid);
+			log_debug_activation("Tracking pending delete for %s-%s (%s).",
+					     display_lvname(pool_lv), layer, dlid);
 			if (!str_list_add(mem, &dm->cmd->pending_delete, dlid))
 				return_0;
 		}
@@ -2725,7 +2738,6 @@ static int _add_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 	struct dm_list *snh;
 	struct lv_segment *seg;
 	struct dm_tree_node *node;
-	const char *uuid;
 	const struct logical_volume *plv;
 
 	if (lv_is_pvmove(lv) && (dm->track_pvmove_deps == 2))
@@ -2741,13 +2753,6 @@ static int _add_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 			return 1;
 		}
 		/* Unused cache pool is activated as metadata */
-	}
-
-	if (lv_is_cache(lv) && (plv = (first_seg(lv)->pool_lv)) && lv_is_cache_vol(plv)) {
-		if (!_add_cvol_subdev_to_dtree(dm, dtree, lv, 0) ||
-		    !_add_cvol_subdev_to_dtree(dm, dtree, lv, 1) ||
-		    !_add_dev_to_dtree(dm, dtree, plv, lv_layer(plv)))
-			return_0;
 	}
 
 	if (!origin_only && !_add_dev_to_dtree(dm, dtree, lv, NULL))
@@ -2795,9 +2800,7 @@ static int _add_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 		 * and base this according to info.exists ?
 		 */
 		if (!dm->activation) {
-			if (!(uuid = build_dm_uuid(dm->mem, lv, lv_layer(lv))))
-				return_0;
-			if ((node = dm_tree_find_node_by_uuid(dtree, uuid))) {
+			if ((node = _cached_dm_tree_node(dm->mem, dtree, lv, lv_layer(lv)))) {
 				if (origin_only) {
 					struct lv_activate_opts laopts = {
 						.origin_only = 1,
@@ -2841,14 +2844,20 @@ static int _add_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 		if (!origin_only && !dm->activation && !dm->track_pending_delete) {
 			/* Setup callback for non-activation partial tree */
 			/* Activation gets own callback when needed */
-			/* TODO: extend _cached_dm_info() to return dnode */
-			if (!(uuid = build_dm_uuid(dm->mem, lv, lv_layer(lv))))
-				return_0;
-			if ((node = dm_tree_find_node_by_uuid(dtree, uuid)) &&
+			if ((node = _cached_dm_tree_node(dm->mem, dtree, lv, lv_layer(lv))) &&
 			    !_pool_register_callback(dm, node, lv))
 				return_0;
 		}
 	}
+
+	if (lv_is_cache_vol(lv))
+		/* Cachevol with cache LV spans some extra layers -cdata, -cmeta */
+		dm_list_iterate_items(sl, &lv->segs_using_this_lv)
+			if (lv_is_cache(sl->seg->lv) &&
+			    (!_add_cvol_subdev_to_dtree(dm, dtree, sl->seg->lv, 0) ||
+			     !_add_cvol_subdev_to_dtree(dm, dtree, sl->seg->lv, 1) ||
+			     !_add_dev_to_dtree(dm, dtree, lv, lv_layer(lv))))
+				return_0;
 
 	/* Add any snapshots of this LV */
 	if (!origin_only && lv_is_origin(lv))
@@ -2877,7 +2886,8 @@ static int _add_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 			if (lv_is_pending_delete(sl->seg->lv)) {
 				/* LV is referenced by 'cache pending delete LV */
 				dm->track_pending_delete = 1;
-				if (!_add_lv_to_dtree(dm, dtree, sl->seg->lv, origin_only))
+				if (!_cached_dm_tree_node(dm->mem, dtree, sl->seg->lv, lv_layer(sl->seg->lv)) &&
+				    !_add_lv_to_dtree(dm, dtree, sl->seg->lv, 0))
 					return_0;
 				dm->track_pending_delete = 0;
 			}
@@ -2985,7 +2995,7 @@ static char *_add_error_or_zero_device(struct dev_manager *dm, struct dm_tree *d
 				      seg->lv->name, errid)))
 		return_NULL;
 
-	if (!_info(dm->cmd, name, dlid, 1, 0, 0, &info, NULL, NULL))
+	if (!_info(dm->cmd, name, dlid, 0, 0, 0, &info, NULL, NULL))
 		return_NULL;
 
 	if (!info.exists) {
@@ -3284,14 +3294,10 @@ static int _add_new_external_lv_to_dtree(struct dev_manager *dm,
 					 struct lv_activate_opts *laopts)
 {
 	struct seg_list *sl;
-	char *dlid;
 	struct dm_tree_node *dnode;
 
-	if (!(dlid = build_dm_uuid(dm->mem, external_lv, lv_layer(external_lv))))
-		return_0;
-
 	/* We've already processed this node if it already has a context ptr */
-	if ((dnode = dm_tree_find_node_by_uuid(dtree, dlid)) &&
+	if ((dnode = _cached_dm_tree_node(dm->mem, dtree, external_lv, lv_layer(external_lv))) &&
 	    dm_tree_node_get_context(dnode)) {
 		/* Skip repeated invocation of external lv processing */
 		log_debug_activation("Skipping users for already added external origin LV %s.",
@@ -3323,6 +3329,66 @@ static int _add_new_external_lv_to_dtree(struct dev_manager *dm,
 
 	log_debug_activation("Finished adding external origin LV %s and all active users.",
 			     display_lvname(external_lv));
+
+	return 1;
+}
+
+static int _add_new_cvol_subdev_to_dtree(struct dev_manager *dm,
+					 struct dm_tree *dtree,
+					 const struct logical_volume *lv,
+					 struct lv_activate_opts *laopts,
+					 struct lv_layer *lvlayer,
+					 int meta_or_data)
+{
+	const char *layer = meta_or_data ? "cmeta" : "cdata";
+	const struct lv_segment *lvseg = first_seg(lv);
+	uint64_t size = meta_or_data ? lvseg->metadata_len : lvseg->data_len;
+	const struct logical_volume *pool_lv = lvseg->pool_lv;
+	struct dm_tree_node *dnode;
+	char *dlid, *dlid_pool, *name;
+	union lvid lvid = {
+		{
+			lv->vg->id,
+			/* When ID is provided in form of metadata_id or data_id, otherwise use CVOL ID */
+			(meta_or_data && lvseg->metadata_id) ? *lvseg->metadata_id :
+			(lvseg->data_id) ? *lvseg->data_id : pool_lv->lvid.id[1]
+		}
+	};
+
+	if (!(dlid = dm_build_dm_uuid(dm->mem, UUID_PREFIX, (const char *)&lvid.s, layer)))
+		return_0;
+
+	if (!(name = dm_build_dm_name(dm->mem, lv->vg->name, pool_lv->name, layer)))
+		return_0;
+
+	if (!(dnode = dm_tree_add_new_dev_with_udev_flags(dtree, name, dlid, -1, -1,
+							  read_only_lv(lv, laopts, layer),
+							  ((lv->vg->status & PRECOMMITTED) | laopts->revert) ? 1 : 0,
+							  lvlayer,
+							  _get_udev_flags(dm, lv, layer, laopts->noscan,
+									  laopts->temporary, 0))))
+		return_0;
+
+	if (dm->track_pending_delete) {
+		log_debug_activation("Using error for pending delete of %s-%s.",
+				     display_lvname(lv), layer);
+		if (!dm_tree_node_add_error_target(dnode, size))
+			return_0;
+	} else {
+		/* add load_segment to meta dnode: linear, size of meta area */
+		if (!add_linear_area_to_dtree(dnode, size, lv->vg->extent_size,
+					      lv->vg->cmd->use_linear_target,
+					      lv->vg->name, lv->name))
+			return_0;
+
+		if (!(dlid_pool = build_dm_uuid(dm->mem, pool_lv, NULL)))
+			return_0;
+
+		/* add seg_area to prev load_seg: offset 0 maps to cachevol lv offset 0 */
+		if (!dm_tree_node_add_target_area(dnode, NULL, dlid_pool,
+						  meta_or_data ? 0 : lvseg->metadata_len))
+			return_0;
+	}
 
 	return 1;
 }
@@ -3462,114 +3528,6 @@ static int _add_new_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 		return 1;
 	}
 
-	if (lv_is_cache(lv) && lv_is_cache_vol(first_seg(lv)->pool_lv)) {
-		struct logical_volume *pool_lv = first_seg(lv)->pool_lv;
-		struct lv_segment *lvseg = first_seg(lv);
-		struct volume_group *vg = lv->vg;
-		struct dm_tree_node *dnode_meta;
-		struct dm_tree_node *dnode_data;
-		union lvid lvid_meta;
-		union lvid lvid_data;
-		char *name_meta;
-		char *name_data;
-		char *dlid_meta;
-		char *dlid_data;
-		char *dlid_pool;
-		uint64_t meta_size = first_seg(lv)->metadata_len;
-		uint64_t data_size = first_seg(lv)->data_len;
-		uint16_t udev_flags = _get_udev_flags(dm, lv, layer,
-					     laopts->noscan, laopts->temporary,
-					     0);
-
-		if (lv_is_pending_delete(lvseg->lv))
-			dm->track_pending_delete = 1;
-
-		log_debug("Add cachevol %s to dtree before cache %s.", pool_lv->name, lv->name);
-
-		if (!_add_new_lv_to_dtree(dm, dtree, pool_lv, laopts, lv_layer(pool_lv))) {
-			log_error("Failed to add cachevol to dtree before cache.");
-			return 0;
-		}
-
-		memset(&lvid_meta, 0, sizeof(lvid_meta));
-		memset(&lvid_data, 0, sizeof(lvid_meta));
-		memcpy(&lvid_meta.id[0], &vg->id, sizeof(struct id));
-		memcpy(&lvid_meta.id[1], lvseg->metadata_id ? : &pool_lv->lvid.id[1], sizeof(struct id));
-		memcpy(&lvid_data.id[0], &vg->id, sizeof(struct id));
-		memcpy(&lvid_data.id[1], lvseg->data_id ? : &pool_lv->lvid.id[1], sizeof(struct id));
-
-		if (!(dlid_meta = dm_build_dm_uuid(dm->mem, UUID_PREFIX, (const char *)&lvid_meta.s, "cmeta")))
-			return_0;
-		if (!(dlid_data = dm_build_dm_uuid(dm->mem, UUID_PREFIX, (const char *)&lvid_data.s, "cdata")))
-			return_0;
-
-		if (!(name_meta = dm_build_dm_name(dm->mem, vg->name, pool_lv->name, "cmeta")))
-			return_0;
-		if (!(name_data = dm_build_dm_name(dm->mem, vg->name, pool_lv->name, "cdata")))
-			return_0;
-
-		if (!(dlid_pool = build_dm_uuid(dm->mem, pool_lv, NULL)))
-			return_0;
-
-		/* add meta dnode */
-		if (!(dnode_meta = dm_tree_add_new_dev_with_udev_flags(dtree,
-								  name_meta,
-								  dlid_meta,
-								  -1, -1,
-								  read_only_lv(lv, laopts, layer),
-								  ((lv->vg->status & PRECOMMITTED) | laopts->revert) ? 1 : 0,
-								  lvlayer,
-								  udev_flags)))
-			return_0;
-
-		if (dm->track_pending_delete) {
-			log_debug_activation("Using error for pending meta delete %s.", display_lvname(lv));
-			if (!dm_tree_node_add_error_target(dnode_meta, meta_size))
-				return_0;
-		} else {
-			/* add load_segment to meta dnode: linear, size of meta area */
-			if (!add_linear_area_to_dtree(dnode_meta,
-						      meta_size,
-						      lv->vg->extent_size,
-						      lv->vg->cmd->use_linear_target,
-						      lv->vg->name, lv->name))
-				return_0;
-
-			/* add seg_area to prev load_seg: offset 0 maps to cachepool lv offset 0 */
-			if (!dm_tree_node_add_target_area(dnode_meta, NULL, dlid_pool, 0))
-				return_0;
-		}
-
-		/* add data dnode */
-		if (!(dnode_data = dm_tree_add_new_dev_with_udev_flags(dtree,
-								  name_data,
-								  dlid_data,
-								  -1, -1,
-								  read_only_lv(lv, laopts, layer),
-								  ((lv->vg->status & PRECOMMITTED) | laopts->revert) ? 1 : 0,
-								  lvlayer,
-								  udev_flags)))
-			return_0;
-
-		if (dm->track_pending_delete) {
-			log_debug_activation("Using error for pending data delete %s.", display_lvname(lv));
-			if (!dm_tree_node_add_error_target(dnode_data, data_size))
-				return_0;
-		} else {
-			/* add load_segment to data dnode: linear, size of data area */
-			if (!add_linear_area_to_dtree(dnode_data,
-						      data_size,
-						      lv->vg->extent_size,
-						      lv->vg->cmd->use_linear_target,
-						      lv->vg->name, lv->name))
-				return_0;
-
-			/* add seg_area to prev load_seg: offset 0 maps to cachepool lv after meta */
-			if (!dm_tree_node_add_target_area(dnode_data, NULL, dlid_pool, meta_size))
-				return_0;
-		}
-	}
-
 	/* FIXME Seek a simpler way to lay out the snapshot-merge tree. */
 
 	if (!layer && lv_is_merging_origin(lv)) {
@@ -3671,6 +3629,14 @@ static int _add_new_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 		/* Handle LVs with pending delete */
 		/* Fow now used only by cache segtype, TODO snapshots */
 		dm->track_pending_delete = 1;
+
+	if (lv_is_cache_vol(lv))
+		dm_list_iterate_items(sl, &lv->segs_using_this_lv)
+			if (lv_is_cache(sl->seg->lv) &&
+			    /* Cachevol is used by cache LV segment -> add cvol-cdata/cmeta extra layer */
+			    (!_add_new_cvol_subdev_to_dtree(dm, dtree, sl->seg->lv, laopts, lvlayer, 0) ||
+			     !_add_new_cvol_subdev_to_dtree(dm, dtree, sl->seg->lv, laopts, lvlayer, 1)))
+				return_0;
 
 	/* This is unused cache-pool - make metadata accessible */
 	if (lv_is_cache_pool(lv))

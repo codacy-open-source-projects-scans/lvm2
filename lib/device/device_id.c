@@ -66,9 +66,9 @@ char devices_file_product_uuid_orig[PATH_MAX];
 char *strdup_pvid(char *pvid)
 {
 	char *buf;
-	if (!(buf = zalloc(ID_LEN + 1)))
+	if (!(buf = malloc(ID_LEN + 1)))
 		return NULL;
-	strncpy(buf, pvid, ID_LEN);
+	(void)dm_strncpy(buf, pvid, ID_LEN + 1);
 	return buf;
 }
 
@@ -96,7 +96,9 @@ static void _searched_devnames_create(struct cmd_context *cmd,
 	if (cmd->devicesfile)
 		return;
 
-	unlink(_searched_file_new); /* in case previous file was left */
+	/* in case previous file was left */
+	if (unlink(_searched_file_new) < 0 && errno != ENOENT)
+		log_sys_debug("unlink", _searched_file_new);
 
 	/*
 	 * No file lock is used to coordinate concurrent attempts to create
@@ -109,8 +111,10 @@ static void _searched_devnames_create(struct cmd_context *cmd,
 
 	if ((dir_fd = open(_searched_file_dir, O_RDONLY)) < 0) {
 		log_debug("searched_devnames_create error open dir %d", errno);
-		fclose(fp);
-		unlink(_searched_file_new);
+		if (fclose(fp))
+			log_sys_debug("fclose", _searched_file);
+		if (unlink(_searched_file_new) < 0 && errno != ENOENT)
+			log_sys_debug("unlink", _searched_file_new);
 		return;
 	}
 
@@ -131,25 +135,25 @@ static void _searched_devnames_create(struct cmd_context *cmd,
 	if (fflush_errno || fclose_errno) {
 		log_debug("searched_devnames_create error fflush %d fclose %d",
 			  fflush_errno, fclose_errno);
-		unlink(_searched_file_new);
-		close(dir_fd);
-		return;
+		if (unlink(_searched_file_new) < 0 && errno != ENOENT)
+			log_sys_debug("unlink", _searched_file_new);
+                goto out;
 	}
 
 	if (rename(_searched_file_new, _searched_file) < 0) {
 		log_debug("searched_devnames_create error rename %d", errno);
-		unlink(_searched_file_new);
-		close(dir_fd);
-		return;
+		if (unlink(_searched_file_new) < 0 && errno != ENOENT)
+			log_sys_debug("unlink", _searched_file_new);
+                goto out;
 	}
 
+	log_debug("searched_devnames created pvids %d %u devs %d %u",
+		  search_pvids_count, search_pvids_hash, search_devs_count, search_devs_hash);
+out:
 	if (fsync(dir_fd) < 0)
 		stack;
 	if (close(dir_fd) < 0)
 		stack;
-
-	log_debug("searched_devnames created pvids %d %u devs %d %u",
-		  search_pvids_count, search_pvids_hash, search_devs_count, search_devs_hash);
 }
 
 void unlink_searched_devnames(struct cmd_context *cmd)
@@ -157,9 +161,10 @@ void unlink_searched_devnames(struct cmd_context *cmd)
 	if (cmd->devicesfile)
 		return;
 
-	if (unlink(_searched_file))
-		log_debug("unlink %s errno %d", _searched_file, errno);
-	else
+	if (unlink(_searched_file) < 0) {
+		if (errno != ENOENT)
+			log_sys_debug("unlink", _searched_file);
+	} else
 		log_debug("unlink %s", _searched_file);
 }
 
@@ -217,6 +222,12 @@ static int _searched_devnames_exists(struct cmd_context *cmd,
 	if (pvids_ok && devs_ok)
 		ret = 1;
 out:
+	if (fflush(fp) < 0)
+		log_sys_debug("fflush", _searched_file);
+
+	if (fsync(fileno(fp)) < 0)
+		log_sys_debug("fsync", _searched_file);
+
 	if (fclose(fp))
 		log_sys_debug("fclose", _searched_file);
 
@@ -224,8 +235,10 @@ out:
 		  ret ? "match" : "differ",
 		  pvids_count_file, pvids_hash_file, devs_count_file, devs_hash_file,
 		  search_pvids_count, search_pvids_hash, search_devs_count, search_devs_hash);
-	if (!ret)
-		unlink(_searched_file);
+
+	if (!ret && unlink(_searched_file) < 0 && errno != ENOENT)
+		log_sys_debug("unlink", _searched_file);
+
 	return ret;
 }
 
@@ -727,7 +740,7 @@ static int _dev_read_sys_serial(struct cmd_context *cmd, struct device *dev,
 		int ret;
 
 		/* /dev/vda to vda */
-		base = basename(devname);
+		base = dm_basename(devname);
 
 		/* vda1 to vda */
 		for (i = 0; i < strlen(base); i++) {
@@ -1235,7 +1248,7 @@ int device_ids_read(struct cmd_context *cmd)
 
 			/* Save original for lvmdevices output. */
 			if (!strcmp(cmd->name, "lvmdevices"))
-				strncpy(devices_file_hostname_orig, check_id, PATH_MAX-1);
+				(void)dm_strncpy(devices_file_hostname_orig, check_id, PATH_MAX);
 
 			if (!cmd->device_ids_check_hostname)
 				continue;
@@ -1255,7 +1268,7 @@ int device_ids_read(struct cmd_context *cmd)
 
 			/* Save original for lvmdevices output. */
 			if (!strcmp(cmd->name, "lvmdevices"))
-				strncpy(devices_file_product_uuid_orig, check_id, PATH_MAX-1);
+				(void)dm_strncpy(devices_file_product_uuid_orig, check_id, PATH_MAX);
 
 			if (!cmd->device_ids_check_product_uuid)
 				continue;
@@ -1377,9 +1390,9 @@ static int _filter_backup_files(const struct dirent *de)
 static void devices_file_backup(struct cmd_context *cmd, char *fc, char *fb, time_t *tp, uint32_t df_counter)
 {
 	struct dirent *de;
-	struct dirent **namelist;
+	struct dirent **namelist = NULL;
 	DIR *dir;
-	FILE *fp;
+	FILE *fp = NULL;
 	struct tm *tm;
 	char dirpath[PATH_MAX];
 	char path[PATH_MAX];
@@ -1387,10 +1400,10 @@ static void devices_file_backup(struct cmd_context *cmd, char *fc, char *fb, tim
 	char de_date_str[16];
 	char de_time_str[16];
 	char de_count_str[16];
-	char low_name[BACKUP_NAME_SIZE];
-	uint32_t low_date, low_time, low_count;
+	char low_name[BACKUP_NAME_SIZE] = { 0 }; /* oldest backup file name */
+	uint32_t low_date = 0, low_time = 0, low_count = 0;
 	uint32_t de_date, de_time, de_count;
-	unsigned int backup_limit, backup_count, remove_count;
+	unsigned int backup_limit = 0, backup_count = 0, remove_count;
 	int sort_count;
 	int dir_fd;
 	int i;
@@ -1400,12 +1413,18 @@ static void devices_file_backup(struct cmd_context *cmd, char *fc, char *fb, tim
 		return;
 	if (!(backup_limit = (unsigned int)find_config_tree_int(cmd, devices_devicesfile_backup_limit_CFG, NULL)))
 		return;
-	if (dm_snprintf(dirpath, sizeof(dirpath), "%s/devices/backup/", cmd->system_dir) < 0)
+	if (dm_snprintf(dirpath, sizeof(dirpath), "%s/devices/backup/", cmd->system_dir) < 0) {
+		stack;
 		return;
-	if (!dm_create_dir(dirpath))
+	}
+	if (!dm_create_dir(dirpath)) {
+		stack;
 		return;
-	if ((dir = opendir(dirpath)) < 0)
+	}
+	if (!(dir = opendir(dirpath))) {
+		log_sys_debug("opendir", dirpath);
 		return;
+	}
 
 	tm = localtime(tp);
 	strftime(datetime_str, sizeof(datetime_str), "%Y%m%d.%H%M%S", tm);
@@ -1413,44 +1432,34 @@ static void devices_file_backup(struct cmd_context *cmd, char *fc, char *fb, tim
 	/* system.devices-YYYYMMDD.HHMMSS.000N (fixed length 35) */
 	if (dm_snprintf(path, sizeof(path), "%s/devices/backup/system.devices-%s.%04u",
 			cmd->system_dir, datetime_str, df_counter) < 0)
-		return;
+		goto_out;
 
 	if (!(fp = fopen(path, "w+"))) {
-		log_error("Failed to create backup file %s", path);
-		return;
+		log_warn("WARNING: Failed to create backup file %s", path);
+		goto out;
 	}
 	if (fputs(fc, fp) < 0) {
-		log_error("Failed to write backup file %s", path);
-		fclose(fp);
+		log_warn("WARNING: Failed to write backup file %s", path);
 		goto out;
 	}
 	if (fputs(fb, fp) < 0) {
-		log_error("Failed to write backup file %s", path);
-		fclose(fp);
+		log_warn("WARNING: Failed to write backup file %s", path);
 		goto out;
 	}
 	if (fflush(fp) < 0) {
-		log_error("Failed to write backup file %s", path);
-		fclose(fp);
+		log_warn("WARNING: Failed to write backup file %s", path);
 		goto out;
 	}
 	if (fsync(fileno(fp)) < 0) {
-		log_error("Failed to sync backup file %s", path);
-		fclose(fp);
+		log_warn("WARNING: Failed to sync backup file %s", path);
 		goto out;
 	}
 	if (fclose(fp))
 		stack;
-
+	fp = NULL;
 	log_debug("Wrote backup %s", path);
 
 	/* Possibly remove old backup files per configurable limit on backup files. */
-
-	backup_count = 0;
-	low_date = 0;
-	low_time = 0;
-	low_count = 0;
-	memset(low_name, 0, sizeof(low_name)); /* oldest backup file name */
 
 	while ((de = readdir(dir))) {
 		if (de->d_name[0] == '.')
@@ -1482,7 +1491,7 @@ static void devices_file_backup(struct cmd_context *cmd, char *fc, char *fb, tim
 		    (de_date < low_date) ||
 		    (de_date == low_date && de_time < low_time) ||
 		    (de_date == low_date && de_time == low_time && de_count < low_count)) {
-			strncpy(low_name, de->d_name, sizeof(low_name));
+			(void)dm_strncpy(low_name, de->d_name, sizeof(low_name));
 			low_date = de_date;
 			low_time = de_time;
 			low_count = de_count;
@@ -1495,12 +1504,16 @@ static void devices_file_backup(struct cmd_context *cmd, char *fc, char *fb, tim
 
 	remove_count = backup_count - backup_limit;
 
-	dir_fd = dirfd(dir);
+	if ((dir_fd = dirfd(dir)) < 0) {
+		log_sys_debug("dirfd", dirpath);
+		goto out;
+	}
 
 	/* The common case removes the oldest file and can avoid sorting. */
 	if (remove_count == 1 && low_name[0]) {
 		log_debug("Remove backup %s", low_name);
-		unlinkat(dir_fd, low_name, 0);
+		if (unlinkat(dir_fd, low_name, 0) < 0 && errno != ENOENT)
+			log_sys_debug("unlinkat", low_name);
 		goto out;
 	}
 
@@ -1509,24 +1522,29 @@ static void devices_file_backup(struct cmd_context *cmd, char *fc, char *fb, tim
 	sort_count = scandir(dirpath, &namelist, _filter_backup_files, alphasort);
 	setlocale(LC_COLLATE, "");
 	if (sort_count < 0) {
-		log_error("Failed to sort backup devices files.");
+		log_warn("WARNING: Failed to sort backup devices files.");
 		goto out;
 	}
 
 	log_debug("Limit backup %u found %u sorted %d removing %u.",
 		  backup_limit, backup_count, sort_count, remove_count);
 
-	for (i = 0; i < sort_count; i++) {
+	for (i = 0; namelist && i < sort_count; i++) {
 		if (remove_count) {
 			log_debug("Remove backup %s", namelist[i]->d_name);
-			unlinkat(dir_fd, namelist[i]->d_name, 0);
+			if (unlinkat(dir_fd, namelist[i]->d_name, 0) < 0 && errno != ENOENT)
+				log_sys_debug("unlinkat", namelist[i]->d_name);
 			remove_count--;
 		}
 		free(namelist[i]);
 	}
 	free(namelist);
 out:
-	closedir(dir);
+	if (fp && fclose(fp))
+		stack;
+
+	if (closedir(dir))
+		log_sys_debug("closedir", dirpath);
 }
 
 int device_ids_write(struct cmd_context *cmd)
@@ -1545,7 +1563,7 @@ int device_ids_write(struct cmd_context *cmd)
 	uint32_t df_major = 0, df_minor = 0, df_counter = 0;
 	uint32_t hash = 0;
 	int names_len = 0;
-	int len, num, pos;
+	int len, pos, num = 0;
 	int fb_size, fb_bytes, fc_bytes;
 	int file_exists;
 	int ret = 0;
@@ -1620,15 +1638,19 @@ int device_ids_write(struct cmd_context *cmd)
 	if (dm_snprintf(tmppath, sizeof(tmppath), "%s_new", cmd->devices_file_path) < 0)
 		goto_out;
 
-	(void) unlink(tmppath); /* in case a previous file was left */
+	/* in case a previous file was left */
+	if (unlink(tmppath) < 0 && errno != ENOENT)
+		log_sys_debug("unlink", tmppath);
 
 	if (!(fp = fopen(tmppath, "w+"))) {
 		log_warn("Cannot open to write %s.", tmppath);
 		goto out;
 	}
 
-	if ((dir_fd = open(dirpath, O_RDONLY)) < 0)
-		goto_out;
+	if ((dir_fd = open(dirpath, O_RDONLY)) < 0) {
+		log_sys_debug("open", dirpath);
+		goto out;
+	}
 
 	/*
 	 * Estimate the size of the new system.devices:
@@ -1705,17 +1727,14 @@ int device_ids_write(struct cmd_context *cmd)
 
 	t = time(NULL);
 
-	num = snprintf(fc, sizeof(fc),
-			"# LVM uses devices listed in this file.\n" \
-			"# Created by LVM command %s pid %d at %s" \
-			"# HASH=%u\n",
-			cmd->name, getpid(), ctime(&t), hash);
-
-	if (num >= sizeof(fc)) {
+	if ((fc_bytes = snprintf(fc, sizeof(fc),
+			    "# LVM uses devices listed in this file.\n" \
+			    "# Created by LVM command %s pid %d at %s" \
+			    "# HASH=%u\n",
+			    cmd->name, getpid(), ctime(&t), hash)) < 0) {
 		log_error("Failed to write buffer for devices file content.");
 		goto out;
 	}
-	fc_bytes = num;
 	fc[fc_bytes] = '\0';
 
 	if (fputs(fc, fp) < 0) {
@@ -1756,10 +1775,12 @@ int device_ids_write(struct cmd_context *cmd)
 out:
 	if (fb)
 		free(fb);
-	if (fp)
-		fclose(fp);
-	if (dir_fd > 0)
-		close(dir_fd);
+	if (fp && fclose(fp))
+		log_sys_debug("fclose", tmppath);
+
+	if ((dir_fd != -1) && close(dir_fd))
+		log_sys_debug("close", dirpath);
+
 	return ret;
 }
 
