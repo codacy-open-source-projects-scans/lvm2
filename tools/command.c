@@ -64,6 +64,9 @@ static int dm_strncpy(char *dest, const char *src, size_t n)
 
 	return 0;
 }
+static inline int _dm_strncpy(char *dest, const char *src, size_t n) {
+	return dm_strncpy(dest, src, n);
+}
 
 static char *dm_pool_strdup(void *p, const char *str)
 {
@@ -347,7 +350,7 @@ static int _val_str_to_num(char *str)
 
 	/* compare the name before any suffix like _new or _<lvtype> */
 
-	if (!dm_strncpy(name, str, sizeof(name)))
+	if (!_dm_strncpy(name, str, sizeof(name)))
 		return 0; /* Buffer is too short */
 
 	if ((new = strchr(name, '_')))
@@ -374,7 +377,7 @@ static int _opt_str_to_num(struct command *cmd, const char *str)
 	int i;
 	int first = 0, last = ARG_COUNT - 1, middle;
 
-	if (!dm_strncpy(long_name, str, sizeof(long_name)))
+	if (!_dm_strncpy(long_name, str, sizeof(long_name)))
 		goto err;
 
 	if ((p = strstr(long_name, "_long")))
@@ -507,7 +510,7 @@ static uint64_t _lv_to_bits(struct command *cmd, char *name)
 	int argc;
 	int i;
 
-	(void) dm_strncpy(buf, name, LVTYPE_LEN);
+	dm_strncpy(buf, name, sizeof(buf));
 
 	_split_line(buf, &argc, argv, '_');
 
@@ -853,7 +856,7 @@ static char *_get_oo_line(const char *str)
 	char str2[OO_NAME_LEN];
 	int i;
 
-	(void) dm_strncpy(str2, str, sizeof(str2));
+	dm_strncpy(str2, str, sizeof(str2));
 	if ((end = strchr(str2, ':')))
 		*end = '\0';
 	if ((end = strchr(str2, ',')))
@@ -941,12 +944,28 @@ static void _add_opt_arg(struct command *cmd, char *str,
 	}
 
 skip:
-	if (required > 0)
+	if (required > 0) {
+		if (cmd->ro_count >= CMD_RO_ARGS) {
+			log_error("Too many args, increase CMD_RO_ARGS.");
+			cmd->cmd_flags |= CMD_FLAG_PARSE_ERROR;
+			return;
+		}
 		cmd->required_opt_args[cmd->ro_count++].opt = opt;
-	else if (!required)
+	} else if (!required) {
+		if (cmd->oo_count >= CMD_OO_ARGS) {
+			log_error("Too many args, increase CMD_OO_ARGS.");
+			cmd->cmd_flags |= CMD_FLAG_PARSE_ERROR;
+			return;
+		}
 		cmd->optional_opt_args[cmd->oo_count++].opt = opt;
-	else if (required < 0)
+	} else if (required < 0) {
+		if (cmd->io_count >= CMD_IO_ARGS) {
+			log_error("Too many args, increase CMD_IO_ARGS.");
+			cmd->cmd_flags |= CMD_FLAG_PARSE_ERROR;
+			return;
+		}
 		cmd->ignore_opt_args[cmd->io_count++].opt = opt;
+	}
 
 	*takes_arg = opt_names[opt].val_enum ? 1 : 0;
 }
@@ -1155,7 +1174,7 @@ static void _include_required_opt_args(struct cmd_context *cmdtool, struct comma
 static void _add_required_line(struct cmd_context *cmdtool, struct command *cmd, int argc, char *argv[])
 {
 	int i;
-	int takes_arg;
+	int takes_arg = 0;
 	int prev_was_opt = 0, prev_was_pos = 0;
 	int orig_ro_count = 0;
 

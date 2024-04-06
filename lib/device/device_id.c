@@ -66,9 +66,9 @@ char devices_file_product_uuid_orig[PATH_MAX];
 char *strdup_pvid(char *pvid)
 {
 	char *buf;
-	if (!(buf = malloc(ID_LEN + 1)))
-		return NULL;
-	(void)dm_strncpy(buf, pvid, ID_LEN + 1);
+	if (!(buf = zalloc(ID_LEN + 1)))
+		return_NULL;
+	dm_strncpy(buf, pvid, ID_LEN + 1);
 	return buf;
 }
 
@@ -366,7 +366,7 @@ static void _reduce_repeating_underscores(char *buf, size_t bufsize)
 
 	memset(buf, 0, bufsize);
 
-	for (i = 0; i < strlen(tmpbuf); i++) {
+	for (i = 0; tmpbuf[i]; ++i) {
 		if (tmpbuf[i] == '_')
 			us++;
 		else
@@ -620,17 +620,14 @@ void free_wwids(struct dm_list *ids)
 struct dev_wwid *dev_add_wwid(char *id, int id_type, struct dm_list *ids)
 {
 	struct dev_wwid *dw;
-	int len;
 
 	if (!id_type)
 		id_type = _wwid_type_num(id);
 
-	if (!(dw = zalloc(sizeof(struct dev_wwid))))
-		return NULL;
-	len = strlen(id);
-	if (len >= DEV_WWID_SIZE)
-		len = DEV_WWID_SIZE - 1;
-	memcpy(dw->id, id, len);
+	if (!(dw = zalloc(sizeof(*dw))))
+		return_NULL;
+	/* Copy id string with upto DEV_WWID_SIZE characters */
+	dm_strncpy(dw->id, id, sizeof(dw->id));
 	dw->type = id_type;
 	dm_list_add(ids, &dw->list);
 	return dw;
@@ -743,7 +740,7 @@ static int _dev_read_sys_serial(struct cmd_context *cmd, struct device *dev,
 		base = dm_basename(devname);
 
 		/* vda1 to vda */
-		for (i = 0; i < strlen(base); i++) {
+		for (i = 0; base[i]; ++i) {
 			if (isdigit(base[i]))
 				break;
 			vdx[j] = base[i];
@@ -839,7 +836,7 @@ const char *device_id_system_read(struct cmd_context *cmd, struct device *dev, u
 	    (idtype != DEV_ID_TYPE_WWID_NAA) &&
 	    (idtype != DEV_ID_TYPE_WWID_EUI) &&
 	    (idtype != DEV_ID_TYPE_WWID_T10)) {
-		for (i = 0; i < strlen(sysbuf); i++) {
+		for (i = 0; sysbuf[i]; ++i) {
 			if ((sysbuf[i] == '"') ||
 			    isblank(sysbuf[i]) ||
 			    isspace(sysbuf[i]) ||
@@ -1248,7 +1245,7 @@ int device_ids_read(struct cmd_context *cmd)
 
 			/* Save original for lvmdevices output. */
 			if (!strcmp(cmd->name, "lvmdevices"))
-				(void)dm_strncpy(devices_file_hostname_orig, check_id, PATH_MAX);
+				dm_strncpy(devices_file_hostname_orig, check_id, sizeof(devices_file_hostname_orig));
 
 			if (!cmd->device_ids_check_hostname)
 				continue;
@@ -1268,7 +1265,7 @@ int device_ids_read(struct cmd_context *cmd)
 
 			/* Save original for lvmdevices output. */
 			if (!strcmp(cmd->name, "lvmdevices"))
-				(void)dm_strncpy(devices_file_product_uuid_orig, check_id, PATH_MAX);
+				dm_strncpy(devices_file_product_uuid_orig, check_id, sizeof(devices_file_product_uuid_orig));
 
 			if (!cmd->device_ids_check_product_uuid)
 				continue;
@@ -1491,7 +1488,7 @@ static void devices_file_backup(struct cmd_context *cmd, char *fc, char *fb, tim
 		    (de_date < low_date) ||
 		    (de_date == low_date && de_time < low_time) ||
 		    (de_date == low_date && de_time == low_time && de_count < low_count)) {
-			(void)dm_strncpy(low_name, de->d_name, sizeof(low_name));
+			dm_strncpy(low_name, de->d_name, sizeof(low_name));
 			low_date = de_date;
 			low_time = de_time;
 			low_count = de_count;
@@ -1749,8 +1746,10 @@ int device_ids_write(struct cmd_context *cmd)
 		goto_out;
 	if (fsync(fileno(fp)) < 0)
 		goto_out;
-	if (fclose(fp) < 0)
+	if (fclose(fp) < 0) {
+		fp = NULL;
 		goto_out;
+	}
 
 	fp = NULL;
 

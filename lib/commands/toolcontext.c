@@ -252,7 +252,7 @@ static void _get_sysfs_dir(struct cmd_context *cmd, char *buf, size_t buf_size)
 		return;
 	}
 
-	(void) dm_strncpy(buf, sys_mnt, buf_size);
+	dm_strncpy(buf, sys_mnt, buf_size);
 }
 
 static uint32_t _parse_debug_fields(struct cmd_context *cmd, int cfg, const char *cfgname)
@@ -1230,7 +1230,7 @@ static struct dev_filter *_init_filter_chain(struct cmd_context *cmd)
 	}
 
 	/* usable device filter. Required. */
-	if (!(filters[nr_filt] = usable_filter_create(cmd, cmd->dev_types, FILTER_MODE_NO_LVMETAD))) {
+	if (!(filters[nr_filt] = usable_filter_create(cmd, cmd->dev_types))) {
 		log_error("Failed to create usabled device filter");
 		goto bad;
 	}

@@ -191,21 +191,6 @@ static void _destroy_device_list(struct dm_list *head)
 	dm_list_init(head);
 }
 
-bool lvmcache_has_bad_metadata(struct device *dev)
-{
-	struct lvmcache_info *info;
-
-	if (!(info = lvmcache_info_from_pvid(dev->pvid, dev, 0))) {
-		/* shouldn't happen */
-		log_error("No lvmcache info for checking bad metadata on %s", dev_name(dev));
-		return false;
-	}
-
-	if (info->mda1_bad || info->mda2_bad)
-		return true;
-	return false;
-}
-
 void lvmcache_save_bad_mda(struct lvmcache_info *info, struct metadata_area *mda)
 {
 	if (mda->mda_num == 1)
@@ -1701,6 +1686,8 @@ int lvmcache_label_scan(struct cmd_context *cmd)
 			log_debug_cache("Adding chosen duplicate %s", dev_name(devl->dev));
 			label_scan_dev(cmd, devl->dev);
 		}
+
+		_destroy_device_list(&add_cache_devs);
 
 		dm_list_splice(&_unused_duplicates, &del_cache_devs);
 

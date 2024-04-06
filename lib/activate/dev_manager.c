@@ -168,6 +168,65 @@ out:
 	return NULL;
 }
 
+/* Read info from DM VDO 'stats' message */
+static int _vdo_pool_message_stats(struct dm_pool *mem,
+				   const struct logical_volume *lv,
+				   struct lv_status_vdo *status)
+{
+	const char *response;
+	const char *dlid;
+	struct dm_task *dmt = NULL;
+	int r = 0;
+	unsigned i;
+	const char *p;
+	struct vdo_msg_elem {
+		const char *name;
+		uint64_t *val;
+	} const vme[] = { /* list of properties lvm2 wants to parse */
+		{ "dataBlocksUsed", &status->data_blocks_used },
+		{ "logicalBlocksUsed", &status->logical_blocks_used }
+	};
+
+	for (i = 0; i < DM_ARRAY_SIZE(vme); ++i)
+		*vme[i].val = ULLONG_MAX;
+
+	if (!(dlid = build_dm_uuid(mem, lv, lv_layer(lv))))
+		return_0;
+
+	if (!(dmt = _setup_task_run(DM_DEVICE_TARGET_MSG, NULL, NULL, dlid, 0, 0, 0, 0, 0, 0)))
+		return_0;
+
+	if (!dm_task_set_message(dmt, "stats"))
+		goto_out;
+
+	if (!dm_task_run(dmt))
+		goto_out;
+
+	log_debug_activation("Checking VDO pool stats message for LV %s.",
+			     display_lvname(lv));
+
+	if ((response = dm_task_get_message_response(dmt))) {
+		for (i = 0; i < DM_ARRAY_SIZE(vme); ++i) {
+			errno = 0;
+			if (!(p = strstr(response,  vme[i].name)) ||
+			    !(p = strchr(p, ':')) ||
+			    ((*vme[i].val = strtoul(p + 1, NULL, 10)) == ULLONG_MAX) || errno) {
+				log_debug("Cannot parse %s in VDO DM stats message.", vme[i].name);
+				*vme[i].val = ULLONG_MAX;
+				goto out;
+			}
+			if (*vme[i].val != ULLONG_MAX)
+				log_debug("VDO property %s = " FMTu64, vme[i].name, *vme[i].val);
+		}
+	}
+
+	r = 1;
+out:
+	dm_task_destroy(dmt);
+
+	return r;
+}
+
 static int _get_segment_status_from_target_params(const char *target_name,
 						  const char *params,
 						  const struct dm_info *dminfo,
@@ -230,6 +289,8 @@ static int _get_segment_status_from_target_params(const char *target_name,
 			return_0;
 		seg_status->type = SEG_STATUS_SNAPSHOT;
 	} else if (segtype_is_vdo_pool(segtype)) {
+		if (!_vdo_pool_message_stats(seg_status->mem, seg->lv, &seg_status->vdo_pool))
+			stack;
 		if (!parse_vdo_pool_status(seg_status->mem, seg->lv, params, dminfo, &seg_status->vdo_pool))
 			return_0;
 		seg_status->type = SEG_STATUS_VDO_POOL;
@@ -641,7 +702,7 @@ static int _is_usable_uuid(const struct device *dev, const char *name, const cha
 
 			/* Recognize some older reserved LVs just from the LV name (snapshot, pvmove...) */
 			vgname = vg_name;
-			if (!dm_strncpy(vg_name, name, sizeof(vg_name)) ||
+			if (!_dm_strncpy(vg_name, name, sizeof(vg_name)) ||
 			    !dm_split_lvm_name(NULL, NULL, &vgname, &lvname, &layer))
 				return_0;
 
@@ -871,7 +932,7 @@ static int _info(struct cmd_context *cmd,
 			if (strcmp(suffix_position + 1, suffix))
 				continue;
 
-			(void) dm_strncpy(old_style_dlid, dlid, sizeof(old_style_dlid));
+			dm_strncpy(old_style_dlid, dlid, sizeof(old_style_dlid));
 			if (!_info_run(old_style_dlid, dminfo, read_ahead, seg_status,
 				       name_check, with_open_count, with_read_ahead,
 				       0, 0))
@@ -1916,60 +1977,6 @@ out:
 	return r;
 }
 
-/* Read info from DM VDO 'stats' message */
-static int _dev_manager_vdo_pool_message_stats(struct dev_manager *dm,
-					       const struct logical_volume *lv,
-					       struct lv_status_vdo *status)
-{
-	const char *response;
-	const char *dlid;
-	struct dm_task *dmt = NULL;
-	int r = 0;
-	unsigned i;
-	const char *p;
-	struct vdo_msg_elem {
-		const char *name;
-		uint64_t *val;
-	} const vme[] = {
-		{ "dataBlocksUsed", &status->data_blocks_used },
-		{ "logicalBlocksUsed", &status->logical_blocks_used }
-	};
-
-	if (!(dlid = build_dm_uuid(dm->mem, lv, lv_layer(lv))))
-		return_0;
-
-	if (!(dmt = _setup_task_run(DM_DEVICE_TARGET_MSG, NULL, NULL, dlid, 0, 0, 0, 0, 0, 0)))
-		return_0;
-
-	if (!dm_task_set_message(dmt, "stats"))
-		goto_out;
-
-	if (!dm_task_run(dmt))
-		goto_out;
-
-	log_debug_activation("Checking VDO pool stats message for LV %s.",
-			     display_lvname(lv));
-
-	if ((response = dm_task_get_message_response(dmt))) {
-		for (i = 0; i < DM_ARRAY_SIZE(vme); ++i) {
-			errno = 0;
-			if (!(p = strstr(response,  vme[i].name)) ||
-			    !(p = strchr(p, ':')) ||
-			    ((*vme[i].val = strtoul(p + 1, NULL, 10)) == ULLONG_MAX) || errno) {
-				log_debug("Cannot parse %s in VDO DM stats message.", vme[i].name);
-				*vme[i].val = 0;
-				goto out;
-			}
-		}
-	}
-
-	r = 1;
-out:
-	dm_task_destroy(dmt);
-
-	return r;
-}
-
 int dev_manager_vdo_pool_status(struct dev_manager *dm,
 				const struct logical_volume *lv, int flush,
 				struct lv_status_vdo **status, int *exists)
@@ -2010,7 +2017,7 @@ int dev_manager_vdo_pool_status(struct dev_manager *dm,
 		goto out;
 	}
 
-	if (!_dev_manager_vdo_pool_message_stats(dm, lv, *status))
+	if (!_vdo_pool_message_stats(dm->mem, lv, *status))
 		stack;
 
 	if (!parse_vdo_pool_status(dm->mem, lv, params, &info, *status))
@@ -2315,7 +2322,7 @@ static int _check_holder(struct dev_manager *dm, struct dm_tree *dtree,
 		if (!memcmp(uuid, &lv->vg->id, ID_LEN) &&
 		    !dm_tree_find_node_by_uuid(dtree, uuid)) {
 			/* trims any UUID suffix (i.e. -cow) */
-			(void) dm_strncpy((char*)&id, uuid, 2 * sizeof(struct id) + 1);
+			dm_strncpy((char*)&id, uuid, 2 * sizeof(struct id) + 1);
 
 			/* If UUID is not yet in dtree, look for matching LV */
 			if (!(lv_det = find_lv_in_vg_by_lvid(lv->vg, &id))) {
@@ -2676,24 +2683,29 @@ static int _pool_register_callback(struct dev_manager *dm,
 	return 1;
 }
 
+static struct id _get_id_for_meta_or_data(const struct lv_segment *lvseg, int meta_or_data)
+{
+	/* When ID is provided in form of metadata_id or data_id, otherwise use CVOL ID */
+	if (meta_or_data && lvseg->metadata_id)
+		return *lvseg->metadata_id;
+
+	if (!meta_or_data && lvseg->data_id)
+		return *lvseg->data_id;
+
+	return lvseg->pool_lv->lvid.id[1];
+}
+
 /* Add special devices _cmeta & _cdata on top of CacheVol to dm tree */
 static int _add_cvol_subdev_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 				     const struct logical_volume *lv, int meta_or_data)
 {
 	const char *layer = meta_or_data ? "cmeta" : "cdata";
 	struct dm_pool *mem = dm->track_pending_delete ? dm->cmd->pending_delete_mem : dm->mem;
-	const struct logical_volume *pool_lv = first_seg(lv)->pool_lv;
 	struct lv_segment *lvseg = first_seg(lv);
+	const struct logical_volume *pool_lv = lvseg->pool_lv;
 	struct dm_info info;
 	char *name ,*dlid;
-	union lvid lvid = {
-		{
-			lv->vg->id,
-			/* When ID is provided in form of metadata_id or data_id, otherwise use CVOL ID */
-			(meta_or_data && lvseg->metadata_id) ? *lvseg->metadata_id :
-			(lvseg->data_id) ? *lvseg->data_id : pool_lv->lvid.id[1]
-		}
-	};
+	union lvid lvid = { { lv->vg->id, _get_id_for_meta_or_data(lvseg, meta_or_data) } };
 
 	if (!(dlid = dm_build_dm_uuid(mem, UUID_PREFIX, (const char *)&lvid.s, layer)))
 		return_0;
@@ -3346,14 +3358,7 @@ static int _add_new_cvol_subdev_to_dtree(struct dev_manager *dm,
 	const struct logical_volume *pool_lv = lvseg->pool_lv;
 	struct dm_tree_node *dnode;
 	char *dlid, *dlid_pool, *name;
-	union lvid lvid = {
-		{
-			lv->vg->id,
-			/* When ID is provided in form of metadata_id or data_id, otherwise use CVOL ID */
-			(meta_or_data && lvseg->metadata_id) ? *lvseg->metadata_id :
-			(lvseg->data_id) ? *lvseg->data_id : pool_lv->lvid.id[1]
-		}
-	};
+	union lvid lvid = { { lv->vg->id, _get_id_for_meta_or_data(lvseg, meta_or_data) } };
 
 	if (!(dlid = dm_build_dm_uuid(dm->mem, UUID_PREFIX, (const char *)&lvid.s, layer)))
 		return_0;
