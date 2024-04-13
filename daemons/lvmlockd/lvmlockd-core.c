@@ -2918,12 +2918,11 @@ static struct lockspace *find_lockspace_name(char *ls_name)
 
 static int vg_ls_name(const char *vg_name, char *ls_name)
 {
-	if (strlen(vg_name) + 4 > MAX_NAME) {
+	if (snprintf(ls_name, MAX_NAME, "%s%s", LVM_LS_PREFIX, vg_name) >= MAX_NAME) {
 		log_error("vg name too long %s", vg_name);
 		return -1;
 	}
 
-	snprintf(ls_name, MAX_NAME, "%s%s", LVM_LS_PREFIX, vg_name);
 	return 0;
 }
 
@@ -2981,13 +2980,13 @@ static int add_lockspace_thread(const char *ls_name,
 
 	if (vg_uuid)
 		/* coverity[buffer_size_warning] */
-		strncpy(ls->vg_uuid, vg_uuid, 64);
+		memccpy(ls->vg_uuid, vg_uuid, 0, 64);
 
 	if (vg_name)
-		strncpy(ls->vg_name, vg_name, MAX_NAME);
+		dm_strncpy(ls->vg_name, vg_name, sizeof(ls->vg_name));
 
 	if (vg_args)
-		strncpy(ls->vg_args, vg_args, MAX_ARGS);
+		dm_strncpy(ls->vg_args, vg_args, sizeof(ls->vg_args));
 
 	if (act)
 		ls->host_id = act->host_id;
@@ -4906,13 +4905,13 @@ static void client_recv_action(struct client *cl)
 		act->path = strdup(path);
 
 	if (vg_name && strcmp(vg_name, "none"))
-		strncpy(act->vg_name, vg_name, MAX_NAME);
+		dm_strncpy(act->vg_name, vg_name, sizeof(act->vg_name));
 
 	if (vg_uuid && strcmp(vg_uuid, "none"))
-		strncpy(act->vg_uuid, vg_uuid, 64);
+		memccpy(act->vg_uuid, vg_uuid, 0, 64);
 
 	if (vg_sysid && strcmp(vg_sysid, "none"))
-		strncpy(act->vg_sysid, vg_sysid, MAX_NAME);
+		dm_strncpy(act->vg_sysid, vg_sysid, sizeof(act->vg_sysid));
 
 	str = daemon_request_str(req, "lv_name", NULL);
 	if (str && strcmp(str, "none"))
@@ -5627,7 +5626,7 @@ static void adopt_locks(void)
 		act->rt = LD_RT_VG;
 		act->lm_type = ls->lm_type;
 		act->client_id = INTERNAL_CLIENT_ID;
-		strncpy(act->vg_name, ls->vg_name, MAX_NAME);
+		dm_strncpy(act->vg_name, ls->vg_name, sizeof(act->vg_name));
 		memcpy(act->vg_uuid, ls->vg_uuid, 64);
 		memcpy(act->vg_args, ls->vg_args, MAX_ARGS);
 		act->host_id = ls->host_id;

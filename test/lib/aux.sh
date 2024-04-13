@@ -322,12 +322,28 @@ prepare_lvmdbusd() {
 	"$daemon" $lvmdbusdebug > debug.log_LVMDBUSD_out 2>&1 &
 	local pid=$!
 
-	sleep 1
 	echo -n "## checking lvmdbusd IS running..."
+	if which dbus-send &>/dev/null ; then
+	for i in {100..0}; do
+		dbus-send --system --dest=org.freedesktop.DBus --type=method_call --print-reply /org/freedesktop/DBus org.freedesktop.DBus.ListNames > dbus_services
+		grep -q com.redhat.lvmdbus1 dbus_services && break
+		sleep .1
+	done
+	else
+		sleep 2
+	fi
+
+	if [ "$i" -eq 0 ] ; then
+		printf "\nFailed to serve lvm dBus service in 10 seconds.\n"
+		sed -e "s,^,## DBUS_SERVICES: ," dbus_services
+		ps aux
+		return 1
+	fi
+
 	comm=
 	# TODO: Is there a better check than wait 1 second and check pid?
 	if ! comm=$(ps -p $pid -o comm=) >/dev/null || [[ $comm != lvmdbusd ]]; then
-		echo "Failed to start lvmdbusd daemon"
+		printf "\nFailed to start lvmdbusd daemon\n"
 		return 1
 	fi
 	echo "$pid" > LOCAL_LVMDBUSD
@@ -1548,8 +1564,9 @@ global/cache_dump_executable = "$LVM_TEST_CACHE_DUMP_CMD"
 global/cache_repair_executable = "$LVM_TEST_CACHE_REPAIR_CMD"
 global/cache_restore_executable = "$LVM_TEST_CACHE_RESTORE_CMD"
 global/detect_internal_vg_cache_corruption = 1
-global/fallback_to_local_locking = 0
 global/etc = "$LVM_SYSTEM_DIR"
+global/event_activation = 1
+global/fallback_to_local_locking = 0
 global/locking_type=$LVM_TEST_LOCKING
 global/notify_dbus = 0
 global/si_unit_consistency = 1
@@ -1557,8 +1574,8 @@ global/thin_check_executable = "$LVM_TEST_THIN_CHECK_CMD"
 global/thin_dump_executable = "$LVM_TEST_THIN_DUMP_CMD"
 global/thin_repair_executable = "$LVM_TEST_THIN_REPAIR_CMD"
 global/thin_restore_executable = "$LVM_TEST_THIN_RESTORE_CMD"
-global/use_lvmpolld = $LVM_TEST_LVMPOLLD
 global/use_lvmlockd = $LVM_TEST_LVMLOCKD
+global/use_lvmpolld = $LVM_TEST_LVMPOLLD
 log/activation = 1
 log/file = "$TESTDIR/debug.log"
 log/indent = 1

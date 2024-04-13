@@ -24,21 +24,6 @@
 #include "sanlock_admin.h"
 #include "sanlock_resource.h"
 
-/* FIXME: these are copied from sanlock.h only until
-   an updated version of sanlock is available with them. */
-#define SANLK_RES_ALIGN1M       0x00000010
-#define SANLK_RES_ALIGN2M       0x00000020
-#define SANLK_RES_ALIGN4M       0x00000040
-#define SANLK_RES_ALIGN8M       0x00000080
-#define SANLK_RES_SECTOR512     0x00000100
-#define SANLK_RES_SECTOR4K      0x00000200
-#define SANLK_LSF_ALIGN1M       0x00000010
-#define SANLK_LSF_ALIGN2M       0x00000020
-#define SANLK_LSF_ALIGN4M       0x00000040
-#define SANLK_LSF_ALIGN8M       0x00000080
-#define SANLK_LSF_SECTOR512     0x00000100
-#define SANLK_LSF_SECTOR4K      0x00000200
-
 #include <stddef.h>
 #include <poll.h>
 #include <errno.h>
@@ -231,16 +216,11 @@ static uint64_t daemon_test_lv_count;
  * Copy a null-terminated string "str" into a fixed
  * size struct field "buf" which is not null terminated.
  * (ATM SANLK_NAME_LEN is only 48 bytes.
- * Avoid strncpy() for coverity issues.
+ * Use memccpy() instead of strncpy().
  */
 static void strcpy_name_len(char *buf, const char *str, size_t len)
 {
-	size_t l;
-
-	/* copy at most len sized length of str */
-	for (l = 0; l < len; ++l)
-		if (!(buf[l] = str[l]))
-			break;
+	memccpy(buf, str, 0, len);
 }
 
 static int lock_lv_name_from_args(char *vg_args, char *lock_lv_name)
@@ -1339,7 +1319,7 @@ int lm_prepare_lockspace_sanlock(struct lockspace *ls)
 	struct stat st;
 	struct lm_sanlock *lms = NULL;
 	char lock_lv_name[MAX_ARGS+1];
-	char lsname[SANLK_NAME_LEN + 1];
+	char lsname[SANLK_NAME_LEN + 1] = { 0 };
 	char disk_path[SANLK_PATH_LEN];
 	char killpath[SANLK_PATH_LEN];
 	char killargs[SANLK_PATH_LEN];
@@ -1420,8 +1400,7 @@ int lm_prepare_lockspace_sanlock(struct lockspace *ls)
 		goto fail;
 	}
 
-	memset(lsname, 0, sizeof(lsname));
-	strncpy(lsname, ls->name, SANLK_NAME_LEN);
+	dm_strncpy(lsname, ls->name, sizeof(lsname));
 
 	memcpy(lms->ss.name, lsname, SANLK_NAME_LEN);
 	lms->ss.host_id_disk.offset = 0;

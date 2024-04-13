@@ -16,18 +16,27 @@ SKIP_WITH_LVMPOLLD=1
 . lib/inittest
 
 _restart_dmeventd() {
+	local pid=
 	#rm -f debug.log*
 
 	dmeventd -R -fldddd -e "$PWD/test_nologin" > debug.log_DMEVENTD_$RANDOM 2>&1 &
-	echo $! >LOCAL_DMEVENTD
+	local local=$!
+	echo "$local" >LOCAL_DMEVENTD
 
-	for i in $(seq 1 10); do
-		test "$(pgrep -o dmeventd)" = "$(< LOCAL_DMEVENTD)" && break
-		sleep .1
+	for i in {1..50}; do
+		pid=$(pgrep -o dmeventd) || break
+		# Check pid and dmeventd readiness to communicate
+		test "$pid" = "$local" && dmeventd -i && break
+		sleep .2
 	done
-	# wait a bit, so we talk to the new dmeventd later
-	# On some systems init of selinux contex may take a while...
-	sleep 1.5
+
+	if [ "$i" -eq 50 ]; then
+		# Unexpected - we waited over 10 seconds and
+		# dmeventd has not managed to restart
+		cat /run/dmeventd.pid || true
+		pgrep dmeventd || true
+		die "dmeventd restart is too slow"
+	fi
 }
 
 aux prepare_dmeventd
@@ -53,13 +62,24 @@ lvchange --monitor y --verbose $vg/4way 2>&1 | tee lvchange.out
 test -e LOCAL_CLVMD || grep 'already monitored' lvchange.out
 
 # now try what happens if no dmeventd is running
-kill -9 "$(< LOCAL_DMEVENTD)"
+pid=$(< LOCAL_DMEVENTD)
+kill -9 "$pid"
+# TODO/FIXME: it would be surely better, if the wait loop bellow would
+# not be need however ATM the API for communication is not welldetecting
+# this highly unusual race case - and things will simply timeout on
+# reading failure within 4 seconds.
+# Fixing would require to add some handling for losing FIFO connection
+for i in {1..10}; do
+	# wait here for a while until dmeventd dies....
+	# suprisingly it's not instant and we can actually
+	# obtain list of monitored devices...
+	test -z $(ps -p "$pid" -o comm=) && break
+	sleep .1
+done
 rm LOCAL_DMEVENTD debug.log*
 
 _restart_dmeventd
 
-# wait longer as tries 5s to communicate with killed daemon
-sleep 6
 # now dmeventd should not be running
 not pgrep dmeventd
 rm LOCAL_DMEVENTD

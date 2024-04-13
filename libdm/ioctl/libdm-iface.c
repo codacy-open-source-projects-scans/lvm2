@@ -765,6 +765,11 @@ uint32_t dm_task_get_read_ahead(const struct dm_task *dmt, uint32_t *read_ahead)
 
 struct dm_deps *dm_task_get_deps(struct dm_task *dmt)
 {
+	if (!dmt) {
+		log_error(INTERNAL_ERROR "Missing dm_task.");
+		return NULL;
+	}
+
 	return (struct dm_deps *) (((char *) dmt->dmi.v4) +
 				   dmt->dmi.v4->data_start);
 }
@@ -1128,7 +1133,7 @@ static int _lookup_dev_name(uint64_t dev, char *buf, size_t len)
 	do {
 		names = (struct dm_names *)((char *) names + next);
 		if (names->dev == dev) {
-			strncpy(buf, names->name, len);
+			memccpy(buf, names->name, 0, len);
 			r = 1;
 			break;
 		}
@@ -1282,12 +1287,10 @@ static struct dm_ioctl *_flatten(struct dm_task *dmt, unsigned repeat_count)
 	     (dmt->minor < 0) || (dmt->major < 0)))
 		/* When RESUME or RELOAD sets maj:min and dev_name, use just maj:min,
 		 * passed dev_name is useful for better error/debug messages */
-		/* coverity[buffer_size_warning] */
-		strncpy(dmi->name, DEV_NAME(dmt), sizeof(dmi->name));
+		memccpy(dmi->name, DEV_NAME(dmt), 0, sizeof(dmi->name));
 
 	if (DEV_UUID(dmt))
-		/* coverity[buffer_size_warning] */
-		strncpy(dmi->uuid, DEV_UUID(dmt), sizeof(dmi->uuid));
+		memccpy(dmi->uuid, DEV_UUID(dmt), 0, sizeof(dmi->uuid));
 
 	if (dmt->type == DM_DEVICE_SUSPEND)
 		dmi->flags |= DM_SUSPEND_FLAG;
@@ -1557,6 +1560,7 @@ static int _create_and_load_v4(struct dm_task *dmt)
 	dmt->uuid = NULL;
 	dm_free(dmt->mangled_uuid);
 	dmt->mangled_uuid = NULL;
+	/* coverity[double_free] recursive function call */
 	_dm_task_free_targets(dmt);
 
 	if (dm_task_run(dmt))
@@ -1568,6 +1572,7 @@ static int _create_and_load_v4(struct dm_task *dmt)
 	dmt->uuid = NULL;
 	dm_free(dmt->mangled_uuid);
 	dmt->mangled_uuid = NULL;
+	/* coverity[double_free] recursive function call */
 	_dm_task_free_targets(dmt);
 
 	/*
