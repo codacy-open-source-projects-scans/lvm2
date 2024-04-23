@@ -718,6 +718,7 @@ struct KMsg : Source {
         time_t tt;
         size_t len;
 
+        buf[ *sz ] = 0;
         if (sscanf( buf, "%u,%u,%lu,-;%n", &level, &num, &t, &pos ) == 3) {
             memcpy( newbuf, buf, *sz );
             tt = time( 0 );
@@ -735,7 +736,7 @@ struct KMsg : Source {
         char buf[ buffer_size ];
 
         if ( dev_kmsg() ) {
-            while ( (sz = ::read( fd, buf, buffer_size ) ) > 0 ) {
+            while ( (sz = ::read( fd, buf, buffer_size - 129 ) ) > 0 ) {
                 transform( buf, &sz );
                 s->push( std::string( buf, sz ) );
             }
@@ -981,7 +982,7 @@ struct TestCase {
                     sleep( 1 ); /* wait a bit for a reaction */
                 }
                 if ( !p ) {
-                    std::ofstream tr( "/proc/sysrq-trigger" );
+                    std::ofstream tr( DEFAULT_PROC_DIR "/sysrq-trigger" );
                     tr << "t";
                     tr.close();
                     kill( -pid, SIGKILL );
