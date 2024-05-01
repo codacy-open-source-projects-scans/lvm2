@@ -57,7 +57,7 @@ AS_CASE(["$host_os"],
 		FSADM="no"
 		LVMIMPORTVDO="no"
 		BLKDEACTIVATE="no"],
-	[CLDFLAGS="${CLDFLAGS-"$LDFLAGS"}"])
+	[])
 
 ################################################################################
 dnl -- Checks for programs.
@@ -199,7 +199,7 @@ AC_MSG_RESULT([$SHARED_LINK])
 dnl -- Check if compiler/linker supports PIE and RELRO
 AC_TRY_CCFLAG([-pie], [HAVE_PIE], [], [])
 AC_SUBST(HAVE_PIE)
-AC_TRY_LDFLAGS([-Wl,-z,relro,-z,now], [HAVE_FULL_RELRO], [], [])
+AC_TRY_LDFLAGS([-Wl,-z,relro,-z,now,-z,pack-relative-relocs,--as-needed], [HAVE_FULL_RELRO], [], [])
 AC_SUBST(HAVE_FULL_RELRO)
 
 ################################################################################
@@ -836,7 +836,7 @@ AS_IF([test "$GCC" = "yes" && test "$symvers" = "gnu"], [
 		  [Define to use GNU versioning in the shared library.])
 	AS_CASE(["$host_os"],
 		[linux*], [
-			CLDFLAGS="${CLDFLAGS-"$LDFLAGS"} -Wl,--version-script,.export.sym"
+			CLDFLAGS="-Wl,--version-script,.export.sym"
 			LDDEPS="$LDDEPS .export.sym"])
 ])
 

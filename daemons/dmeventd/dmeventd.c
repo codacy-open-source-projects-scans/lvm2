@@ -27,10 +27,8 @@
 
 #include <dlfcn.h>
 #include <pthread.h>
-#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
-#include <sys/time.h>
 #include <sys/resource.h>
 #include <signal.h>
 #include <arpa/inet.h>		/* for htonl, ntohl */
@@ -1945,7 +1943,7 @@ static void _remove_files_on_exit(void)
 
 static void _daemonize(void)
 {
-	int child_status;
+	int child_status, null_fd;
 	pid_t pid;
 	struct timeval tval;
 	sigset_t my_sigset;
@@ -2000,13 +1998,20 @@ static void _daemonize(void)
 
 	daemon_close_stray_fds("dmeventd", 0, -1, &custom_fds);
 
-	/* coverity[leaked_handle] dont't care */
-	if ((open("/dev/null", O_RDONLY) < 0) ||
-	    (open("/dev/null", O_WRONLY) < 0) ||
-	    (open("/dev/null", O_WRONLY) < 0))
+	if ((null_fd = open("/dev/null", O_RDWR)) < 0)
 		exit(EXIT_DESC_OPEN_FAILURE);
 
+	if ((dup2(null_fd, STDIN_FILENO) == -1) ||
+	    (dup2(null_fd, STDOUT_FILENO) == -1) ||
+	    (dup2(null_fd, STDERR_FILENO) == -1))
+		exit(EXIT_DESC_OPEN_FAILURE);
+
+	if ((null_fd > STDERR_FILENO) && close(null_fd))
+		exit(EXIT_DESC_CLOSE_FAILURE);
+
 	setsid();
+
+	/* coverity[leaked_handle] 'null_fd' handle is not leaking */
 }
 
 static int _reinstate_registrations(struct dm_event_fifos *fifos)

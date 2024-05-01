@@ -2869,7 +2869,7 @@ static int _lvconvert_swap_pool_metadata(struct cmd_context *cmd,
 	struct volume_group *vg = lv->vg;
 	struct logical_volume *prev_metadata_lv;
 	struct lv_segment *seg;
-	struct lv_type *lvtype;
+	const struct lv_type *lvtype;
 	char meta_name[NAME_LEN];
 	const char *swap_lock_args = NULL;
 	uint32_t chunk_size;
@@ -4618,7 +4618,7 @@ static int _lvconvert_cachepool_attach_single(struct cmd_context *cmd,
 
 	if (!lv_is_cache_pool(cachepool_lv)) {
 		int lvt_enum = get_lvt_enum(cachepool_lv);
-		struct lv_type *lvtype = get_lv_type(lvt_enum);
+		const struct lv_type *lvtype = get_lv_type(lvt_enum);
 
 		if (lvt_enum != striped_LVT && lvt_enum != linear_LVT && lvt_enum != raid_LVT) {
 			log_error("LV %s with type %s cannot be converted to a cache pool.",
@@ -4724,7 +4724,7 @@ static int _lvconvert_to_thin_with_external_single(struct cmd_context *cmd,
 
 	if (!lv_is_thin_pool(thinpool_lv)) {
 		int lvt_enum = get_lvt_enum(thinpool_lv);
-		struct lv_type *lvtype = get_lv_type(lvt_enum);
+		const struct lv_type *lvtype = get_lv_type(lvt_enum);
 
 		if (lvt_enum != striped_LVT && lvt_enum != linear_LVT && lvt_enum != raid_LVT) {
 			log_error("LV %s with type %s cannot be converted to a thin pool.",
@@ -4873,7 +4873,7 @@ static int _lvconvert_to_pool_or_swap_metadata_single(struct cmd_context *cmd,
 	int to_thinpool = 0;
 	int to_cachepool = 0;
 	int lvt_enum = get_lvt_enum(lv);
-	struct lv_type *lvtype;
+	const struct lv_type *lvtype;
 
 	switch (cmd->command->command_enum) {
 	case lvconvert_to_thinpool_or_swap_metadata_CMD:
@@ -5204,7 +5204,7 @@ static int _lvconvert_raid_types_check(struct cmd_context *cmd, struct logical_v
 			int lv_is_named_arg)
 {
 	int lvt_enum = get_lvt_enum(lv);
-	struct lv_type *lvtype = get_lv_type(lvt_enum);
+	const struct lv_type *lvtype = get_lv_type(lvt_enum);
 
 	if (!lv_is_visible(lv)) {
 		if (!lv_is_cache_pool_metadata(lv) &&
@@ -5449,7 +5449,7 @@ static int _lvconvert_merge_mirror_images_single(struct cmd_context *cmd,
 int lvconvert_merge_mirror_images_cmd(struct cmd_context *cmd, int argc, char **argv)
 {
 	/* arg can be a VG name, which is the standard option usage */
-	cmd->cname->flags &= ~GET_VGNAME_FROM_OPTIONS;
+	cmd->get_vgname_from_options = 0;
 
 	return process_each_lv(cmd, cmd->position_argc, cmd->position_argv, NULL, NULL, READ_FOR_UPDATE,
 			       NULL, &_lvconvert_visible_check, &_lvconvert_merge_mirror_images_single);
@@ -5489,7 +5489,7 @@ int lvconvert_merge_cmd(struct cmd_context *cmd, int argc, char **argv)
 
 	handle->custom_handle = &lr;
 
-	cmd->cname->flags &= ~GET_VGNAME_FROM_OPTIONS;
+	cmd->get_vgname_from_options = 0;
 
 	ret = process_each_lv(cmd, cmd->position_argc, cmd->position_argv, NULL, NULL, READ_FOR_UPDATE,
 			      handle, NULL, &_lvconvert_merge_generic_single);
@@ -6399,7 +6399,7 @@ int lvconvert_to_writecache_cmd(struct cmd_context *cmd, int argc, char **argv)
 
 	handle->custom_handle = &lr;
 
-	cmd->cname->flags &= ~GET_VGNAME_FROM_OPTIONS;
+	cmd->get_vgname_from_options = 0;
 
 	ret = process_each_lv(cmd, cmd->position_argc, cmd->position_argv, NULL, NULL, READ_FOR_UPDATE, handle, NULL,
 			      &lvconvert_writecache_attach_single);
@@ -6422,7 +6422,7 @@ int lvconvert_to_cache_with_cachevol_cmd(struct cmd_context *cmd, int argc, char
 
 	handle->custom_handle = &lr;
 
-	cmd->cname->flags &= ~GET_VGNAME_FROM_OPTIONS;
+	cmd->get_vgname_from_options = 0;
 
 	ret = process_each_lv(cmd, cmd->position_argc, cmd->position_argv, NULL, NULL, READ_FOR_UPDATE, handle, NULL,
 			      &lvconvert_cachevol_attach_single);
@@ -6528,7 +6528,7 @@ int lvconvert_integrity_cmd(struct cmd_context *cmd, int argc, char **argv)
 	/* Want to be able to remove integrity from partial LV */
 	cmd->handles_missing_pvs = 1;
 
-	cmd->cname->flags &= ~GET_VGNAME_FROM_OPTIONS;
+	cmd->get_vgname_from_options = 0;
 
 	ret = process_each_lv(cmd, cmd->position_argc, cmd->position_argv, NULL, NULL, READ_FOR_UPDATE, handle, NULL,
 			      &_lvconvert_integrity_single);

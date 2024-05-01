@@ -232,12 +232,31 @@ WFLAGS += -Wsync-nand
 endif
 endif
 
-ifneq ("@STATIC_LINK@", "yes")
-ifeq ("@HAVE_PIE@", "yes")
 ifeq ("@HAVE_FULL_RELRO@", "yes")
+comma := ,
+ifneq ("@STATIC_LINK@", "yes")
+ifeq (,$(findstring -z$(comma)relro,$(LDFLAGS)))
+  LDFLAGS += -Wl,-z,relro
+endif
+ifeq (,$(findstring -z$(comma)now,$(LDFLAGS)))
+  LDFLAGS += -Wl,-z,now
+endif
+# TODO: think about configure option for this flag
+# for now leave decision on distro maitainer
+#ifeq (,$(findstring -z$(comma)pack-relative-relocs,$(LDFLAGS)))
+#  LDFLAGS += -Wl,-z,pack-relative-relocs
+#endif
+# For systems with old readline library that requires extra libs to link with
+# we stick to default --no-as-needed and we avoid adding --as-needed flag
+ifneq (-l,$(findstring -l,$(filter-out %readline,$(READLINE_LIBS))))
+ifeq (,$(findstring --as-needed,$(LDFLAGS)))
+  LDFLAGS += -Wl,--as-needed
+endif
+endif
+
+ifeq ("@HAVE_PIE@", "yes")
   EXTRA_EXEC_CFLAGS += -fPIE
-  EXTRA_EXEC_LDFLAGS += -Wl,-z,relro,-z,now -pie -fPIE
-  CLDFLAGS += -Wl,-z,relro
+  EXTRA_EXEC_LDFLAGS += -pie -fPIE
 endif
 endif
 endif
@@ -434,7 +453,7 @@ DEFS+=-D_FILE_OFFSET_BITS=64
 
 %.so: %.o
 	$(SHOW) "    [CC] $(<F)"
-	$(Q) $(CC) -c $(CFLAGS) $(CLDFLAGS) $< $(LIBS) -o $@
+	$(Q) $(CC) -c $(CFLAGS) $(LDFLAGS) $(CLDFLAGS) $< $(LIBS) -o $@
 
 ifneq (,$(LIB_SHARED))
 
@@ -443,11 +462,11 @@ $(LIB_SHARED).$(LIB_VERSION): $(OBJECTS) $(LDDEPS)
 	$(SHOW) "    [CC] $@"
 ifeq ("@LIB_SUFFIX@","so")
 	$(Q) $(CC) -shared -Wl,-soname,$(notdir $@) \
-		$(CFLAGS) $(CLDFLAGS) $(OBJECTS) $(LIBS) -o $@
+		$(CFLAGS) $(LDFLAGS) $(CLDFLAGS) $(OBJECTS) $(LIBS) -o $@
 endif
 ifeq ("@LIB_SUFFIX@","dylib")
 	$(Q) $(CC) -dynamiclib -dylib_current_version,$(LIB_VERSION) \
-		$(CFLAGS) $(CLDFLAGS) $(OBJECTS) $(LIBS) -o $@
+		$(CFLAGS) $(LDFLAGS) $(CLDFLAGS) $(OBJECTS) $(LIBS) -o $@
 endif
 
 $(LIB_SHARED): $(LIB_SHARED).$(LIB_VERSION)

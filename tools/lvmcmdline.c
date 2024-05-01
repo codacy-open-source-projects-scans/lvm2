@@ -50,26 +50,6 @@ extern char *optarg;
 
 
 /*
- * Table of valid --option values.
- */
-extern struct val_name val_names[VAL_COUNT + 1];
-
-/*
- * Table of valid --option's
- */
-extern struct opt_name opt_names[ARG_COUNT + 1];
-
-/*
- * Table of LV properties
- */
-extern struct lv_prop lv_props[LVP_COUNT + 1];
-
-/*
- * Table of LV types
- */
-extern struct lv_type lv_types[LVT_COUNT + 1];
-
-/*
  * Table of command names
  */
 extern struct command_name command_names[];
@@ -78,7 +58,7 @@ extern struct command_name command_names[];
  * Table of commands (as defined in command-lines.in)
  */
 struct command commands[COMMAND_COUNT];
-struct command *commands_idx[COMMAND_COUNT];
+static struct command *commands_idx[COMMAND_COUNT];
 
 static struct cmdline_context _cmdline;
 
@@ -1353,7 +1333,7 @@ int lvm_register_commands(struct cmd_context *cmd, const char *run_name)
 {
 	int i;
 	const char *last_name = NULL;
-	struct command_name *cname = NULL;
+	const struct command_name *cname = NULL;
 
 	/* already initialized */
 	if (_cmdline.commands)
@@ -1407,20 +1387,6 @@ int lvm_register_commands(struct cmd_context *cmd, const char *run_name)
 	_cmdline.command_names = command_names;
 
 	return 1;
-}
-
-struct lv_prop *get_lv_prop(int lvp_enum)
-{
-	if (!lvp_enum)
-		return NULL;
-	return &lv_props[lvp_enum];
-}
-
-struct lv_type *get_lv_type(int lvt_enum)
-{
-	if (!lvt_enum)
-		return NULL;
-	return &lv_types[lvt_enum];
 }
 
 struct command *get_command(int cmd_enum)
@@ -1533,7 +1499,7 @@ check_val:
 
 static int _command_required_pos_matches(struct cmd_context *cmd, int ci, int rp, char **argv)
 {
-	const char *name;
+	unsigned i;
 
 	/*
 	 * rp is the index in required_pos_args[] of the required positional arg.
@@ -1564,33 +1530,21 @@ static int _command_required_pos_matches(struct cmd_context *cmd, int ci, int rp
 	 */
 	if (!strcmp(cmd->name, "lvcreate") &&
 	    (rp == 0) &&
-	    val_bit_is_set(commands[ci].required_pos_args[rp].def.val_bits, vg_VAL) &&
-	    (arg_is_set(cmd, name_ARG) ||
-	     arg_is_set(cmd, thinpool_ARG) ||
-	     arg_is_set(cmd, cachepool_ARG) ||
-	     arg_is_set(cmd, vdopool_ARG) ||
-	     getenv("LVM_VG_NAME"))) {
+	    val_bit_is_set(commands[ci].required_pos_args[rp].def.val_bits, vg_VAL)) {
+		const char *names[] = {
+			arg_str_value(cmd, name_ARG, NULL),
+			arg_str_value(cmd, thinpool_ARG, NULL),
+			arg_str_value(cmd, cachepool_ARG, NULL),
+			arg_str_value(cmd, vdopool_ARG, NULL),
+		};
 
 		if (getenv("LVM_VG_NAME"))
 			return 1;
 
-		if ((name = arg_str_value(cmd, name_ARG, NULL))) {
-			if (strstr(name, "/"))
+		for (i = 0; i < DM_ARRAY_SIZE(names); ++i)
+			/* Check whether LV name has VG name separated by '/' */
+			if (names[i] && (strstr(names[i], "/")))
 				return 1;
-		}
-
-		if ((name = arg_str_value(cmd, thinpool_ARG, NULL))) {
-			if (strstr(name, "/"))
-				return 1;
-		}
-
-		if ((name = arg_str_value(cmd, cachepool_ARG, NULL))) {
-			if (strstr(name, "/"))
-				return 1;
-		}
-
-		if ((name = arg_str_value(cmd, vdopool_ARG, NULL)) && strstr(name, "/"))
-			return 1;
 	}
 
 	return 0;
@@ -2057,7 +2011,7 @@ static void _short_usage(const char *name)
 
 static int _usage(const char *name, int longhelp, int skip_notes)
 {
-	struct command_name *cname = find_command_name(name);
+	const struct command_name *cname = find_command_name(name);
 	struct command *cmd = NULL;
 	int show_full = longhelp;
 	int i;
@@ -2159,7 +2113,7 @@ static void _usage_all(void)
 
 static void _add_getopt_arg(int opt_enum, char **optstrp, struct option **longoptsp)
 {
-	struct opt_name *a = _cmdline.opt_names + opt_enum;
+	const struct opt_name *a = _cmdline.opt_names + opt_enum;
 
 	if (a->short_opt) {
 		*(*optstrp)++ = a->short_opt;
@@ -2214,7 +2168,7 @@ static void _add_getopt_arg(int opt_enum, char **optstrp, struct option **longop
 
 static int _find_arg(const char *cmd_name, int goval)
 {
-	struct command_name *cname;
+	const struct command_name *cname;
 	int arg_enum;
 	int i;
 
@@ -2242,7 +2196,7 @@ static int _process_command_line(struct cmd_context *cmd, int *argc, char ***arg
 {
 	char str[((ARG_COUNT + 1) * 2) + 1], *ptr = str;
 	struct option opts[ARG_COUNT + 1], *o = opts;
-	struct opt_name *a;
+	const struct opt_name *a;
 	struct arg_values *av;
 	struct arg_value_group_list *current_group = NULL;
 	int arg_enum; /* e.g. foo_ARG */
@@ -2338,7 +2292,7 @@ static int _process_command_line(struct cmd_context *cmd, int *argc, char ***arg
 
 			av->value = optarg;
 
-			if (!val_names[a->val_enum].fn(cmd, av)) {
+			if (!get_val_name(a->val_enum)->fn(cmd, av)) {
 				log_error("Invalid argument for %s: %s", a->long_opt, optarg);
 				return 0;
 			}
@@ -3161,6 +3115,8 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	if (!(cmd->cname = find_command_name(cmd->name)))
 		return ENO_SUCH_CMD;
 
+	cmd->get_vgname_from_options = (cmd->cname->flags & GET_VGNAME_FROM_OPTIONS) ? 1 : 0;
+
 	if (!_process_command_line(cmd, &argc, &argv)) {
 		log_error("Error during parsing of command line.");
 		return EINVALID_CMD_LINE;
@@ -3516,7 +3472,7 @@ struct cmd_context *init_lvm(unsigned set_connections,
 		return_NULL;
 	}
 
-	_cmdline.opt_names = &opt_names[0];
+	_cmdline.opt_names = get_opt_name(0);
 
 	if (stored_errno()) {
 		destroy_toolcontext(cmd);
