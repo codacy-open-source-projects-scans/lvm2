@@ -402,6 +402,24 @@ int get_sysfs_binary(const char *path, char *buf, size_t buf_size, int *retlen)
 	return 1;
 }
 
+/* coverity[+tainted_string_sanitize_content:arg-0] */
+static int _sanitize_buffer(const char *buf)
+{
+	size_t i;
+
+	if (!strcmp(buf, ".."))
+		return 0;
+
+	for (i = 0; buf[i]; ++i)
+		if ((buf[i] < ' ') ||
+		    (buf[i] == '/') ||
+		    (buf[i] == ':') ||
+		    (buf[i] == '\\'))
+			return 0;
+
+	return 1;
+}
+
 int get_sysfs_value(const char *path, char *buf, size_t buf_size, int error_if_no_value)
 {
 	FILE *fp;
@@ -423,9 +441,10 @@ int get_sysfs_value(const char *path, char *buf, size_t buf_size, int error_if_n
 	if ((len = strlen(buf)) && buf[len - 1] == '\n')
 		buf[--len] = '\0';
 
-	if (!len && error_if_no_value)
-		log_error("_get_sysfs_value: %s: no value", path);
-	else
+	if (!len) {
+		if (error_if_no_value)
+			log_error("_get_sysfs_value: %s: no value", path);
+	} else
 		r = 1;
 out:
 	if (fclose(fp))
@@ -550,8 +569,8 @@ static struct device *_get_device_for_sysfs_dev_name_using_devno(const char *dev
 
 static int _get_vgid_and_lvid_for_dev(struct device *dev)
 {
-	static size_t lvm_prefix_len = sizeof(UUID_PREFIX) - 1;
-	static size_t lvm_uuid_len = sizeof(UUID_PREFIX) - 1 + 2 * ID_LEN;
+	const size_t lvm_prefix_len = sizeof(UUID_PREFIX) - 1;
+	const size_t lvm_uuid_len = sizeof(UUID_PREFIX) - 1 + 2 * ID_LEN;
 	char uuid[DM_UUID_LEN];
 	size_t uuid_len;
 
@@ -963,7 +982,7 @@ static int _dev_cache_iterate_sysfs_for_index(const char *path)
 
 static int dev_cache_index_devs(void)
 {
-	static int sysfs_has_dev_block = -1;
+	static int _sysfs_has_dev_block = -1;
 	char path[PATH_MAX];
 
 	if (dm_snprintf(path, sizeof(path), "%sdev/block", dm_sysfs_dir()) < 0) {
@@ -972,20 +991,20 @@ static int dev_cache_index_devs(void)
 	}
 
 	/* Skip indexing if /sys/dev/block is not available.*/
-	if (sysfs_has_dev_block == -1) {
+	if (_sysfs_has_dev_block == -1) {
 		struct stat info;
 		if (stat(path, &info) == 0)
-			sysfs_has_dev_block = 1;
+			_sysfs_has_dev_block = 1;
 		else {
 			if (errno == ENOENT) {
-				sysfs_has_dev_block = 0;
+				_sysfs_has_dev_block = 0;
 				return 1;
 			}
 
 			log_sys_debug("stat", path);
 			return 0;
 		}
-	} else if (!sysfs_has_dev_block)
+	} else if (!_sysfs_has_dev_block)
 		return 1;
 
 	if (obtain_device_list_from_udev() &&
@@ -2256,16 +2275,15 @@ static char *_get_devname_from_devno(struct cmd_context *cmd, dev_t devno)
 		if (!get_sysfs_value(path, namebuf, sizeof(namebuf), 0))
 			return NULL;
 
-		if (dm_snprintf(devname, sizeof(devname), "/dev/mapper/%s", namebuf) < 0) {
-			devname[0] = '\0';
-			stack;
-		}
+		if (!_sanitize_buffer(namebuf))
+			return NULL;
 
-		if (devname[0]) {
-			log_debug("Found %s for %d:%d from sys dm", devname, major, minor);
-			return _strdup(devname);
-		}
-		return NULL;
+		if (dm_snprintf(devname, sizeof(devname), "%s/%s", dm_dir(), namebuf) < 0)
+			return_NULL;
+
+		log_debug("Found %s for %d:%d from sys dm.", devname, major, minor);
+
+		return _strdup(devname);
 	}
 
 	/*
@@ -2278,7 +2296,8 @@ try_partition:
 		return NULL;
 
 	while (fgets(line, sizeof(line), fp)) {
-		if (sscanf(line, "%u %u %llu %s", &line_major, &line_minor, (unsigned long long *)&line_blocks, namebuf) != 4)
+		if (sscanf(line, "%u %u %llu %" DM_TO_STRING(NAME_LEN) "s",
+			   &line_major, &line_minor, (unsigned long long *)&line_blocks, namebuf) != 4)
 			continue;
 		if (line_major != major)
 			continue;

@@ -348,7 +348,7 @@ struct dm_tree {
 	int retry_remove;		/* 1 retries remove if not successful */
 	uint32_t cookie;
 	char buf[DM_NAME_LEN + 32];	/* print buffer for device_name (major:minor) */
-	const char **optional_uuid_suffixes;	/* uuid suffixes ignored when matching */
+	const char * const *optional_uuid_suffixes;	/* uuid suffixes ignored when matching */
 };
 
 /*
@@ -600,7 +600,7 @@ static struct dm_tree_node *_find_dm_tree_node_by_uuid(struct dm_tree *dtree,
 	const char *suffix, *suffix_position;
 	char uuid_without_suffix[DM_UUID_LEN + 1];
 	unsigned i = 0;
-	const char **suffix_list = dtree->optional_uuid_suffixes;
+	const char * const *suffix_list = dtree->optional_uuid_suffixes;
 
 	if ((node = dm_hash_lookup(dtree->uuids, uuid))) {
 		log_debug_activation("Matched uuid %s %s in deptree.", uuid, _node_name(node));
@@ -3864,7 +3864,7 @@ int dm_tree_node_add_cache_target(struct dm_tree_node *node,
 {
 	struct dm_config_node *cn;
 	struct load_segment *seg;
-	static const uint64_t _modemask =
+	const uint64_t modemask =
 		DM_CACHE_FEATURE_PASSTHROUGH |
 		DM_CACHE_FEATURE_WRITETHROUGH |
 		DM_CACHE_FEATURE_WRITEBACK;
@@ -3876,12 +3876,12 @@ int dm_tree_node_add_cache_target(struct dm_tree_node *node,
 		return 0;
 	}
 
-	switch (feature_flags & _modemask) {
+	switch (feature_flags & modemask) {
 	case DM_CACHE_FEATURE_PASSTHROUGH:
 	case DM_CACHE_FEATURE_WRITEBACK:
 		if (strcmp(policy_name, "cleaner") == 0) {
 			/* Enforce writethrough mode for cleaner policy */
-			feature_flags = ~_modemask;
+			feature_flags = ~modemask;
 			feature_flags |= DM_CACHE_FEATURE_WRITETHROUGH;
 		}
                 /* Fall through */

@@ -833,11 +833,11 @@ static int _stats_parse_histogram_spec(struct dm_stats *dms,
 				       struct dm_stats_region *region,
 				       const char *histogram)
 {
-	static const char _valid_chars[] = "0123456789,";
+	const char valid_chars[] = "0123456789,";
 	uint64_t scale = region->timescale, this_val = 0;
 	struct dm_pool *mem = dms->hist_mem;
 	struct dm_histogram_bin cur;
-	struct dm_histogram hist;
+	struct dm_histogram hist = { 0 };
 	int nr_bins = 1;
 	const char *c, *v, *val_start;
 	char *p, *endptr = NULL;
@@ -857,8 +857,6 @@ static int _stats_parse_histogram_spec(struct dm_stats *dms,
 	if (!dm_pool_begin_object(mem, sizeof(cur)))
 		return_0;
 
-	memset(&hist, 0, sizeof(hist));
-
 	hist.nr_bins = 0; /* fix later */
 	hist.region = region;
 	hist.dms = dms;
@@ -868,7 +866,7 @@ static int _stats_parse_histogram_spec(struct dm_stats *dms,
 
 	c = histogram;
 	do {
-		for (v = _valid_chars; *v; v++)
+		for (v = valid_chars; *v; v++)
 			if (*c == *v)
 				break;
 		if (!*v) {
@@ -1204,7 +1202,7 @@ static int _stats_parse_histogram(struct dm_pool *mem, char *hist_str,
 				  struct dm_histogram **histogram,
 				  struct dm_stats_region *region)
 {
-	static const char _valid_chars[] = "0123456789:";
+	const char valid_chars[] = "0123456789:";
 	struct dm_histogram *bounds = region->bounds;
 	struct dm_histogram hist = {
 		.nr_bins = region->bounds->nr_bins
@@ -1225,7 +1223,7 @@ static int _stats_parse_histogram(struct dm_pool *mem, char *hist_str,
 
 	do {
 		memset(&cur, 0, sizeof(cur));
-		for (v = _valid_chars; *v; v++)
+		for (v = valid_chars; *v; v++)
 			if (*c == *v)
 				break;
 		if (!*v)
@@ -1444,6 +1442,8 @@ static void _stats_walk_next_present(const struct dm_stats *dms,
 	}
 
 	/* advance to next present, non-skipped region or end */
+	/* count can start as UINT64_MAX, probably rework to use post++ */
+	/* coverity[overflow_const]    overflow is expected here */
 	while (++(*cur_r) <= dms->max_region) {
 		cur = &dms->regions[*cur_r];
 		if (!_stats_region_present(cur))
@@ -2003,7 +2003,7 @@ static int _stats_create_region(struct dm_stats *dms, uint64_t *region_id,
 				const char *program_id,	const char *aux_data)
 {
 	char msg[STATS_MSG_BUF_LEN], range[RANGE_LEN], *endptr = NULL;
-	const char *err_fmt = "Could not prepare @stats_create %s.";
+	const char *err = NULL;
 	const char *precise_str = PRECISE_ARG;
 	const char *resp, *opt_args = NULL;
 	char *aux_data_escaped = NULL;
@@ -2019,8 +2019,8 @@ static int _stats_create_region(struct dm_stats *dms, uint64_t *region_id,
 	if (start || len) {
 		if (dm_snprintf(range, sizeof(range), FMTu64 "+" FMTu64,
 				start, len) < 0) {
-			log_error(err_fmt, "range");
-			return 0;
+			err ="range";
+			goto_bad;
 		}
 	}
 
@@ -2046,8 +2046,8 @@ static int _stats_create_region(struct dm_stats *dms, uint64_t *region_id,
 				 precise_str,
 				 (strlen(hist_arg)) ? HISTOGRAM_ARG : "",
 				 hist_arg)) < 0) {
-			log_error(err_fmt, PRECISE_ARG " option.");
-			goto out;
+			err = PRECISE_ARG " option.";
+			goto_bad;
 		}
 	} else
 		opt_args = dm_strdup("");
@@ -2057,8 +2057,8 @@ static int _stats_create_region(struct dm_stats *dms, uint64_t *region_id,
 			(step < 0) ? "/" : "",
 			(uint64_t)llabs(step),
 			opt_args, program_id, aux_data) < 0) {
-		log_error(err_fmt, "message");
-		goto out;
+		err = "message";
+		goto_bad;
 	}
 
 	if (!(dmt = _stats_send_message(dms, msg)))
@@ -2078,7 +2078,9 @@ static int _stats_create_region(struct dm_stats *dms, uint64_t *region_id,
 	}
 
 	r = 1;
-
+	goto out;
+bad:
+	log_error("Could not prepare @stats_create %s.", err);
 out:
 	if (dmt)
 		dm_task_destroy(dmt);
@@ -2266,28 +2268,32 @@ static struct dm_task *_stats_print_region(struct dm_stats *dms,
 				    unsigned num_lines, unsigned clear)
 {
 	/* @stats_print[_clear] <region_id> [<start_line> <num_lines>] */
-	const char *err_fmt = "Could not prepare @stats_print %s.";
 	char msg[STATS_MSG_BUF_LEN], lines[RANGE_LEN];
 	struct dm_task *dmt = NULL;
+	const char *err = NULL;
 
 	if (start_line || num_lines)
 		if (dm_snprintf(lines, sizeof(lines),
 				"%u %u", start_line, num_lines) < 0) {
-			log_error(err_fmt, "row specification");
-			return NULL;
+			err = "row specification";
+			goto_bad;
 		}
 
 	if (dm_snprintf(msg, sizeof(msg), "@stats_print%s " FMTu64 " %s",
 			(clear) ? "_clear" : "",
 			region_id, (start_line || num_lines) ? lines : "") < 0) {
-		log_error(err_fmt, "message");
-		return NULL;
+		err = "message";
+		goto_bad;
 	}
 
 	if (!(dmt = _stats_send_message(dms, msg)))
 		return_NULL;
 
 	return dmt;
+bad:
+	log_error("Could not prepare @stats_print %s.", err);
+
+	return NULL;
 }
 
 char *dm_stats_print_region(struct dm_stats *dms, uint64_t region_id,
@@ -2940,7 +2946,7 @@ static int _service_time(const struct dm_stats *dms, double *svctm,
 typedef int (*_metric_fn_t)(const struct dm_stats *, double *,
 			    uint64_t, uint64_t);
 
-_metric_fn_t _metrics[DM_STATS_NR_METRICS] = {
+const _metric_fn_t _metrics[DM_STATS_NR_METRICS] = {
 	_rd_merges_per_sec,
 	_wr_merges_per_sec,
 	_reads_per_sec,
@@ -3590,7 +3596,7 @@ static struct dm_histogram *_alloc_dm_histogram(int nr_bins)
  */
 struct dm_histogram *dm_histogram_bounds_from_string(const char *bounds_str)
 {
-	static const char _valid_chars[] = "0123456789,muns";
+	const char valid_chars[] = "0123456789,muns";
 	uint64_t this_val = 0, mult = 1;
 	const char *c, *v, *val_start;
 	struct dm_histogram_bin *cur;
@@ -3615,7 +3621,7 @@ struct dm_histogram *dm_histogram_bounds_from_string(const char *bounds_str)
 	cur = dmh->bins;
 
 	do {
-		for (v = _valid_chars; *v; v++)
+		for (v = valid_chars; *v; v++)
 			if (*c == *v)
 				break;
 
@@ -4995,31 +5001,28 @@ uint64_t *dm_stats_update_regions_from_fd(struct dm_stats *dms, int fd,
 #endif /* HAVE_LINUX_FIEMAP */
 
 #ifdef DMFILEMAPD
-static const char *_filemapd_mode_names[] = {
+static const char _filemapd_mode_names[][8] = {
 	"inode",
 	"path",
-	NULL
 };
 
 dm_filemapd_mode_t dm_filemapd_mode_from_string(const char *mode_str)
 {
-	dm_filemapd_mode_t mode = DM_FILEMAPD_FOLLOW_INODE;
-	const char **mode_name;
+	const dm_filemapd_mode_t _mode[] = {
+		DM_FILEMAPD_FOLLOW_INODE,
+		DM_FILEMAPD_FOLLOW_PATH
+	};
+	unsigned i;
 
-	if (mode_str) {
-		for (mode_name = _filemapd_mode_names; *mode_name; mode_name++)
-			if (!strcmp(*mode_name, mode_str))
-				break;
-		if (*mode_name)
-			mode = DM_FILEMAPD_FOLLOW_INODE
-				+ (mode_name - _filemapd_mode_names);
-		else {
-			log_error("Could not parse dmfilemapd mode: %s",
-				  mode_str);
-			return DM_FILEMAPD_FOLLOW_NONE;
-		}
-	}
-	return mode;
+	if (mode_str)
+		for (i = 0; i < DM_ARRAY_SIZE(_filemapd_mode_names); ++i)
+			if (!strcmp(_filemapd_mode_names[i], mode_str))
+				return _mode[i];
+
+	log_error("Could not parse dmfilemapd mode: %s",
+		  (mode_str) ? mode_str : "");
+
+	return DM_FILEMAPD_FOLLOW_NONE;
 }
 
 #define DM_FILEMAPD "dmfilemapd"

@@ -1,5 +1,10 @@
 Version 2.03.24 - 
 ==================
+  Lvconvert supports VDO options for thin-pool with vdo conversion.
+  Improve placement to .data.rel.ro and .rodata sections.
+  Fix support for -y and -W when creating thinpool with vdo.
+  Bettter support for runtime valgrind detection.
+  Allow command interruption when communicating with dmeventd.
   Fix resize of VDO volume used for thin pool data volume.
   Use -Wl,-z,now and -Wl,--as-needed for compilation by default.
   Require 3.7 as minimal version for sanlock.

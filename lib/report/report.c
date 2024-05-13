@@ -252,7 +252,7 @@ static const struct time_prop _time_props[] = {
 #define TIME_REG_PLURAL_S  0x00000001 /* also recognize plural form with "s" suffix */
 
 struct time_reg {
-	const char *name;
+	const char name[16];
 	const struct time_prop *prop;
 	uint32_t reg_flags;
 };
@@ -355,7 +355,6 @@ static const struct time_reg _time_reg[] = {
 	{"Nov",       TIME_PROP(TIME_MONTH_NOVEMBER),       0},
 	{"December",  TIME_PROP(TIME_MONTH_DECEMBER),       0},
 	{"Dec",       TIME_PROP(TIME_MONTH_DECEMBER),       0},
-	{NULL,        TIME_PROP(TIME_NULL),                 0},
 };
 
 struct time_item {
@@ -588,7 +587,7 @@ static int _match_time_str(struct dm_list *ti_list, struct time_item *ti)
 
 	ti->prop = TIME_PROP(TIME_NULL);
 
-	for (i = 0; _time_reg[i].name; i++) {
+	for (i = 0; i < DM_ARRAY_SIZE(_time_reg); ++i) {
 		reg_len = strlen(_time_reg[i].name);
 		if ((ti->len != reg_len) &&
 		    !((_time_reg[i].reg_flags & TIME_REG_PLURAL_S) &&
@@ -851,7 +850,7 @@ static void _adjust_time_for_granularity(struct time_info *info, struct tm *tm, 
 #define SECS_PER_HOUR   3600
 #define SECS_PER_DAY    ((time_t)86400)
 
-static int _days_in_month[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+static const int _days_in_month[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 
 static int _is_leap_year(long year)
 {
@@ -1184,11 +1183,11 @@ static int _lv_time_handler(struct dm_report *rh, struct dm_pool *mem,
 #define DYNAMIC DM_REPORT_FIELD_RESERVED_VALUE_DYNAMIC_VALUE
 
 #define TYPE_RESERVED_VALUE(type, flags, id, desc, value, ...) \
-	static const char *_reserved_ ## id ## _names[] = { __VA_ARGS__, NULL}; \
+	static const char * const _reserved_ ## id ## _names[] = { __VA_ARGS__, NULL}; \
 	static const type _reserved_ ## id = value;
 
 #define FIELD_RESERVED_VALUE(flags, field_id, id, desc, value, ...) \
-	static const char *_reserved_ ## id ## _names[] = { __VA_ARGS__ , NULL}; \
+	static const char * const _reserved_ ## id ## _names[] = { __VA_ARGS__ , NULL}; \
 	static const struct dm_report_field_reserved_value _reserved_ ## id = {field_ ## field_id, value};
 
 #define FIELD_RESERVED_BINARY_VALUE(field_id, id, desc, ...) \
@@ -1225,9 +1224,10 @@ static int _lv_time_handler(struct dm_report *rh, struct dm_pool *mem,
 #define FUZZY DM_REPORT_FIELD_RESERVED_VALUE_FUZZY_NAMES
 #define DYNAMIC DM_REPORT_FIELD_RESERVED_VALUE_DYNAMIC_VALUE
 
-#define TYPE_RESERVED_VALUE(type, flags, id, desc, value, ...) {type | flags, &_reserved_ ## id, _reserved_ ## id ## _names, desc},
+/* Declaration of dm_report_reserved_value should actually be using  const char * const * names */
+#define TYPE_RESERVED_VALUE(type, flags, id, desc, value, ...) {type | flags, &_reserved_ ## id, (const char**) _reserved_ ## id ## _names, desc},
 
-#define FIELD_RESERVED_VALUE(flags, field_id, id, desc, value, ...) {DM_REPORT_FIELD_TYPE_NONE | flags, &_reserved_ ## id, _reserved_ ## id ## _names, desc},
+#define FIELD_RESERVED_VALUE(flags, field_id, id, desc, value, ...) {DM_REPORT_FIELD_TYPE_NONE | flags, &_reserved_ ## id, (const char**)  _reserved_ ## id ## _names, desc},
 
 #define FIELD_RESERVED_BINARY_VALUE(field_id, id, desc, ...) \
 	FIELD_RESERVED_VALUE(NAMED, field_id, id ## _y, desc, &_one64, __VA_ARGS__) \

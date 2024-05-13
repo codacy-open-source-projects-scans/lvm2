@@ -145,7 +145,7 @@ enum {
 	LV_TYPE_INTEGRITYORIGIN
 };
 
-static const char *_lv_type_names[] = {
+static const char _lv_type_names[][24] = {
 	[LV_TYPE_UNKNOWN] =				"unknown",
 	[LV_TYPE_NONE] =				"none",
 	[LV_TYPE_PUBLIC] =				"public",
@@ -6730,7 +6730,7 @@ int lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
 		lp_meta.size = lp->poolmetadata_size;
 		lp_meta.sign = lp->poolmetadata_sign;
 		lp->poolmetadata_size = 0;
-		lp->poolmetadata_sign = 0;
+		lp->poolmetadata_sign = SIGN_NONE;
 
 	} else if (lv_is_thin_pool(lv) && lp->poolmetadata_size) {
 		/* extend both thin pool data and metadata */
@@ -6742,7 +6742,7 @@ int lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
 		lp_meta.size = lp->poolmetadata_size;
 		lp_meta.sign = lp->poolmetadata_sign;
 		lp->poolmetadata_size = 0;
-		lp->poolmetadata_sign = 0;
+		lp->poolmetadata_sign = SIGN_NONE;
 
 	} else if (lv_is_thin_pool_metadata(lv)) {
 		/* extend only thin pool metadata */
@@ -6754,7 +6754,7 @@ int lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
 			lp_meta.size = lp->poolmetadata_size;
 			lp_meta.size = lp->poolmetadata_sign;
 			lp->poolmetadata_size = 0;
-			lp->poolmetadata_sign = 0;
+			lp->poolmetadata_sign = SIGN_NONE;
 		}
 		/* else lp_meta.extents|size from lp->extents|size above */
 
@@ -7167,6 +7167,8 @@ char *generate_lv_name(struct volume_group *vg, const char *format,
 			high = i;
 	}
 
+	/* only internally passed %d are supported */
+	/* coverity[non_const_printf_format_string] */
 	if (dm_snprintf(buffer, len, format, high + 1) < 0)
 		return NULL;
 

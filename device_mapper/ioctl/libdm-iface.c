@@ -87,10 +87,8 @@ static int _version_checked = 0;
 static int _version_ok = 1;
 static unsigned _ioctl_buffer_double_factor = 0;
 
-const int _dm_compat = 0;
-
 /* *INDENT-OFF* */
-static struct cmd_data _cmd_data_v4[] = {
+static const struct cmd_data _cmd_data_v4[] = {
 	{"create",	DM_DEV_CREATE,		{4, 0, 0}},
 	{"reload",	DM_TABLE_LOAD,		{4, 0, 0}},
 	{"remove",	DM_DEV_REMOVE,		{4, 0, 0}},
@@ -247,6 +245,16 @@ static int _control_device_number(uint32_t *major, uint32_t *minor)
 	return 1;
 }
 
+static int _control_unlink(const char *control)
+{
+	if (unlink(control) && (errno != ENOENT)) {
+		log_sys_error("unlink", control);
+		return -1;
+	}
+
+	return 0;
+}
+
 /*
  * Returns 1 if it exists on returning; 0 if it doesn't; -1 if it's wrong.
  */
@@ -262,10 +270,7 @@ static int _control_exists(const char *control, uint32_t major, uint32_t minor)
 
 	if (!S_ISCHR(buf.st_mode)) {
 		log_verbose("%s: Wrong inode type", control);
-		if (!unlink(control))
-			return 0;
-		log_sys_error("unlink", control);
-		return -1;
+		return _control_unlink(control);
 	}
 
 	if (major && buf.st_rdev != MKDEV(major, minor)) {
@@ -273,10 +278,7 @@ static int _control_exists(const char *control, uint32_t major, uint32_t minor)
 			    "(%u, %u)", control,
 			    MAJOR(buf.st_mode), MINOR(buf.st_mode),
 			    major, minor);
-		if (!unlink(control))
-			return 0;
-		log_sys_error("unlink", control);
-		return -1;
+		return _control_unlink(control);
 	}
 
 	return 1;
@@ -593,23 +595,9 @@ int dm_check_version(void)
 
 	_version_checked = 1;
 
-	if (_check_version(dmversion, sizeof(dmversion), _dm_compat))
+	if (_check_version(dmversion, sizeof(dmversion), 0))
 		return 1;
 
-	if (!_dm_compat)
-		goto_bad;
-
-	log_verbose("device-mapper ioctl protocol version %u failed. "
-		    "Trying protocol version 1.", _dm_version);
-	_dm_version = 1;
-	if (_check_version(dmversion, sizeof(dmversion), 0)) {
-		log_verbose("Using device-mapper ioctl protocol version 1");
-		return 1;
-	}
-
-	compat = "(compat)";
-
-      bad:
 	dm_get_library_version(libversion, sizeof(libversion));
 
 	log_error("Incompatible libdevmapper %s%s and kernel driver %s.",

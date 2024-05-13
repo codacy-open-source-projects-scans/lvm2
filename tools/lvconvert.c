@@ -123,6 +123,14 @@ static int _striped_type_requested(const char *type_str)
 	return (!strcmp(type_str, SEG_TYPE_NAME_STRIPED) || _linear_type_requested(type_str));
 }
 
+static int _get_wipe_signatures(struct cmd_context *cmd)
+{
+	/* use option from cmdline and fallback to lvm.conf settings */
+	return arg_is_set(cmd, wipesignatures_ARG) ?
+		arg_int_value(cmd, wipesignatures_ARG, 0) :
+	find_config_tree_bool(cmd, allocation_wipe_signatures_when_zeroing_new_lvs_CFG, NULL);
+}
+
 static int _read_conversion_type(struct cmd_context *cmd,
 				 struct lvconvert_params *lp)
 {
@@ -277,17 +285,17 @@ static int _read_params(struct cmd_context *cmd, struct lvconvert_params *lp)
 }
 
 
-static struct poll_functions _lvconvert_mirror_fns = {
+static const struct poll_functions _lvconvert_mirror_fns = {
 	.poll_progress = poll_mirror_progress,
 	.finish_copy = lvconvert_mirror_finish,
 };
 
-static struct poll_functions _lvconvert_merge_fns = {
+static const struct poll_functions _lvconvert_merge_fns = {
 	.poll_progress = poll_merge_progress,
 	.finish_copy = lvconvert_merge_finish,
 };
 
-static struct poll_functions _lvconvert_thin_merge_fns = {
+static const struct poll_functions _lvconvert_thin_merge_fns = {
 	.poll_progress = poll_thin_merge_progress,
 	.finish_copy = lvconvert_merge_finish,
 };
@@ -3104,7 +3112,7 @@ static int _lvconvert_to_pool(struct cmd_context *cmd,
 	struct vdo_convert_params vcp = {
 		.activate = CHANGE_AN,
 		.do_zero = 1,
-		.do_wipe_signatures = 1,
+		.do_wipe_signatures = _get_wipe_signatures(cmd),
 		.force = arg_count(cmd, force_ARG),
 		.yes = arg_count(cmd, yes_ARG),
 	};
@@ -3405,17 +3413,25 @@ static int _lvconvert_to_pool(struct cmd_context *cmd,
 		}
 
 		if (data_vdo) {
-			if (!fill_vdo_target_params(cmd, &vcp.vdo_params, &vdo_pool_header_size, vg->profile))
-				goto_bad;
+			if (lv_is_vdo(lv)) {
+				if ((seg = first_seg(lv)))
+					seg = first_seg(seg_lv(seg, 0)); // vdopool
+				/* Update existing VDOPOOL parameters if possible, VDOPOOL is offline */
+				if (seg && !get_vdo_settings(cmd, &seg->vdo_params, NULL))
+					goto_bad;
 
-			if (!get_vdo_settings(cmd, &vcp.vdo_params, NULL))
-				goto_bad;
-
-			if (data_vdo && lv_is_vdo(lv))
 				log_print_unless_silent("Volume %s is already VDO volume, skipping VDO conversion.",
 							display_lvname(lv));
-			else if (!convert_vdo_lv(lv, &vcp))
-				goto_bad;
+			} else {
+				if (!fill_vdo_target_params(cmd, &vcp.vdo_params, &vdo_pool_header_size, vg->profile))
+					goto_bad;
+
+				if (!get_vdo_settings(cmd, &vcp.vdo_params, NULL))
+					goto_bad;
+
+				if (!convert_vdo_lv(lv, &vcp))
+					goto_bad;
+			}
 		}
 
 		pool_lv = lv;
@@ -5523,7 +5539,7 @@ static int _lvconvert_to_vdopool_single(struct cmd_context *cmd,
 						     arg_uint64_value(cmd, virtualsize_ARG, UINT64_C(0)),
 						     vg->extent_size),
 		.do_zero = arg_int_value(cmd, zero_ARG, 1),
-		.do_wipe_signatures = 1,
+		.do_wipe_signatures = _get_wipe_signatures(cmd),
 		.yes = arg_count(cmd, yes_ARG),
 		.force = arg_count(cmd, force_ARG)
 	};
@@ -6546,6 +6562,6 @@ int lvconvert_integrity_cmd(struct cmd_context *cmd, int argc, char **argv)
 int lvconvert(struct cmd_context *cmd, int argc, char **argv)
 {
 	log_error(INTERNAL_ERROR "Missing function for command definition %d:%s.",
-		  cmd->command->command_index, cmd->command->command_id);
+		  cmd->command->command_index, command_enum(cmd->command->command_enum));
 	return ECMD_FAILED;
 }

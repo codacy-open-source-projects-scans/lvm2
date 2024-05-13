@@ -253,9 +253,9 @@ typedef enum {
 
 static cmd_name_t _base_command = DMSETUP_CMD;	/* Default command is 'dmsetup' */
 static cmd_type_t _base_command_type = DMSETUP_TYPE;
-static int _switches[NUM_SWITCHES];
+static uint16_t _switches[NUM_SWITCHES];
 static int _int_args[NUM_SWITCHES];
-static char *_string_args[NUM_SWITCHES];
+static const char *_string_args[NUM_SWITCHES];
 static int _num_devices;
 static char *_uuid;
 static char *_table;
@@ -273,7 +273,7 @@ static uint64_t _count = 1; /* count of repeating reports */
 static struct dm_timestamp *_initial_timestamp = NULL;
 static uint64_t _disp_factor = 512; /* display sizes in sectors */
 static char _disp_units = 's';
-const char *_program_id = DM_STATS_PROGRAM_ID; /* program_id used for reports. */
+static const char *_program_id = DM_STATS_PROGRAM_ID; /* program_id used for reports. */
 static uint64_t _statstype = 0; /* stats objects to report */
 static int _concise_output_produced = 0; /* Was any concise output already printed? */
 static int _added_target = 0;		/* Count added target (no target -> no event) */
@@ -281,7 +281,7 @@ struct command;
 static const struct command *_selection_cmd = NULL; /* Command to run against each device select with -S */
 
 /* string names for stats object types */
-const char *_stats_types[] = {
+static const char * const _stats_types[] = {
 	"all",
 	"area",
 	"region",
@@ -316,7 +316,7 @@ static uint64_t _last_interval = 0; /* approx. measured interval in nsecs */
 typedef int (*command_fn) (CMD_ARGS);
 
 struct command {
-	const char *name;
+	const char name[24];
 	const char *help;
 	int min_args;
 	int max_args;
@@ -347,7 +347,7 @@ static int _parse_line(struct dm_task *dmt, char *buffer, const char *file,
 	if (!*ptr || *ptr == '#')
 		return 1;
 
-	if (sscanf(ptr, "%llu %llu %s %n",
+	if (sscanf(ptr, "%llu %llu %" DM_TO_STRING(LINE_SIZE) "s %n",
 		   &start, &size, ttype, &n) < 3) {
 		log_error("Invalid format on line %d of table %s.", line, file);
 		return 0;
@@ -1662,14 +1662,15 @@ static int _udevflags(CMD_ARGS)
 	uint32_t cookie;
 	uint16_t flags;
 	int i;
-	static const char *dm_flag_names[] = {"DISABLE_DM_RULES",
-					      "DISABLE_SUBSYSTEM_RULES",
-					      "DISABLE_DISK_RULES",
-					      "DISABLE_OTHER_RULES",
-					      "LOW_PRIORITY",
-					      "DISABLE_LIBRARY_FALLBACK",
-					      "PRIMARY_SOURCE",
-					       0};
+	static const char _dm_flag_names[][32] = {
+		"DISABLE_DM_RULES",
+		"DISABLE_SUBSYSTEM_RULES",
+		"DISABLE_DISK_RULES",
+		"DISABLE_OTHER_RULES",
+		"LOW_PRIORITY",
+		"DISABLE_LIBRARY_FALLBACK",
+		"PRIMARY_SOURCE",
+	};
 
 	if (!(cookie = _get_cookie_value(argv[0])))
 		return_0;
@@ -1678,8 +1679,8 @@ static int _udevflags(CMD_ARGS)
 
 	for (i = 0; i < DM_UDEV_FLAGS_SHIFT; i++)
 		if (1 << i & flags) {
-			if (i < DM_UDEV_FLAGS_SHIFT / 2 && dm_flag_names[i])
-				printf("DM_UDEV_%s_FLAG='1'\n", dm_flag_names[i]);
+			if (i < DM_UDEV_FLAGS_SHIFT / 2 && i < DM_ARRAY_SIZE(_dm_flag_names))
+				printf("DM_UDEV_%s_FLAG='1'\n", _dm_flag_names[i]);
 			else if (i < DM_UDEV_FLAGS_SHIFT / 2)
 				/*
 				 * This is just a fallback. Each new DM flag
@@ -2820,13 +2821,13 @@ static int _tree_switches[NUM_TREEMODE];
 #define VT_UR	"m"
 #define VT_HD	"w"
 
-static struct {
-	const char *empty_2;	/*    */
-	const char *branch_2;	/* |- */
-	const char *vert_2;	/* |  */
-	const char *last_2;	/* `- */
-	const char *single_3;	/* --- */
-	const char *first_3;	/* -+- */
+static const struct {
+	const char empty_2[16];	/*    */
+	const char branch_2[16];	/* |- */
+	const char vert_2[16];	/* |  */
+	const char last_2[16];	/* `- */
+	const char single_3[16];	/* --- */
+	const char first_3[16];	/* -+- */
 }
 _tsym_ascii = {
 	"  ",
@@ -2941,6 +2942,11 @@ static void _out_prefix(unsigned depth)
 	}
 }
 
+static void _out_string_delim(int attr)
+{
+	_out_string(attr ? ", " : " [");
+}
+
 /*
  * Display tree
  */
@@ -2957,22 +2963,22 @@ static void _display_tree_attributes(struct dm_tree_node *node)
 		return;
 
 	if (_tree_switches[TR_ACTIVE]) {
-		_out_string(attr++ ? ", " : " [");
+		_out_string_delim(attr++);
 		_out_string(info->suspended ? "SUSPENDED" : "ACTIVE");
 	}
 
 	if (_tree_switches[TR_RW]) {
-		_out_string(attr++ ? ", " : " [");
+		_out_string_delim(attr++);
 		_out_string(info->read_only ? "RO" : "RW");
 	}
 
 	if (_tree_switches[TR_OPENCOUNT]) {
-		_out_string(attr++ ? ", " : " [");
+		_out_string_delim(attr++);
 		(void) _out_int((unsigned) info->open_count);
 	}
 
 	if (_tree_switches[TR_UUID]) {
-		_out_string(attr++ ? ", " : " [");
+		_out_string_delim(attr++);
 		_out_string(uuid && *uuid ? uuid : "");
 	}
 
@@ -3913,7 +3919,7 @@ static int _dm_stats_object_type_disp(struct dm_report *rh,
 	const struct dm_stats *dms = (const struct dm_stats *) data;
 	int type = dm_stats_current_object_type(dms);
 
-	return dm_report_field_string(rh, field, (const char * const *) &_stats_types[type]);
+	return dm_report_field_string(rh, field, &_stats_types[type]);
 }
 
 static int _dm_stats_precise_disp(struct dm_report *rh,
@@ -4696,8 +4702,8 @@ FIELD_F(STATS_META, STR, "ObjType", 7, dm_stats_object_type, "obj_type", "Type o
 #undef NUM
 #undef SIZ
 
-static const char *_default_report_options = "name,major,minor,attr,open,segments,events,uuid";
-static const char *_splitname_report_options = "vg_name,lv_name,lv_layer";
+static const char _default_report_options[] = "name,major,minor,attr,open,segments,events,uuid";
+static const char _splitname_report_options[] = "vg_name,lv_name,lv_layer";
 
 /* Stats counters & derived metrics. */
 #define RD_COUNTERS "read_count,reads_merged_count,read_sector_count,read_time,read_ticks"
@@ -4721,22 +4727,23 @@ static const char *_splitname_report_options = "vg_name,lv_name,lv_layer";
 #define STATS_HIST STATS_REGION_INFO ",util,await"
 
 /* Default stats report options. */
-static const char *_stats_default_report_options = STATS_DEV_INFO "," STATS_AREA_INFO "," METRICS;
-static const char *_stats_raw_report_options = STATS_DEV_INFO "," STATS_AREA_INFO "," COUNTERS;
-static const char *_stats_list_options = STATS_REGION_INFO ",program_id";
-static const char *_stats_area_list_options = STATS_AREA_INFO_FULL ",program_id";
-static const char *_stats_hist_list_options = STATS_REGION_INFO ",hist_bins,hist_bounds";
-static const char *_stats_hist_area_list_options = STATS_AREA_INFO_FULL ",hist_bins,hist_bounds";
-static const char *_stats_hist_options = STATS_HIST ",hist_count_bounds";
-static const char *_stats_hist_relative_options = STATS_HIST ",hist_percent_bounds";
+static const char _stats_default_report_options[] = STATS_DEV_INFO "," STATS_AREA_INFO "," METRICS;
+static const char _stats_raw_report_options[] = STATS_DEV_INFO "," STATS_AREA_INFO "," COUNTERS;
+static const char _stats_list_options[] = STATS_REGION_INFO ",program_id";
+static const char _stats_area_list_options[] = STATS_AREA_INFO_FULL ",program_id";
+static const char _stats_hist_list_options[] = STATS_REGION_INFO ",hist_bins,hist_bounds";
+static const char _stats_hist_area_list_options[] = STATS_AREA_INFO_FULL ",hist_bins,hist_bounds";
+static const char _stats_hist_options[] = STATS_HIST ",hist_count_bounds";
+static const char _stats_hist_relative_options[] = STATS_HIST ",hist_percent_bounds";
 
 static int _report_init(const struct command *cmd, const char *subcommand)
 {
-	char *options = (char *) _default_report_options;
-	char *opt_fields = NULL; /* optional fields from command line */
+	const char *options = _default_report_options;
+	const char *opt_fields = NULL; /* optional fields from command line */
 	const char *keys = "";
 	const char *separator = " ";
 	const char *selection = NULL;
+	char *tmpopts = NULL;
 	int aligned = 1, headings = 1, buffered = 1, field_prefixes = 0;
 	int quoted = 1, columns_as_rows = 0;
 	uint32_t flags = 0;
@@ -4752,20 +4759,20 @@ static int _report_init(const struct command *cmd, const char *subcommand)
 		_report_type |= DR_STATS_META;
 		if (!strcmp(subcommand, "list")) {
 			if (!_switches[HISTOGRAM_ARG])
-				options = (char *) ((_switches[VERBOSE_ARG])
+				options = ((_switches[VERBOSE_ARG])
 						    ? _stats_area_list_options
 						    : _stats_list_options);
 			else
-				options = (char *) ((_switches[VERBOSE_ARG])
+				options = ((_switches[VERBOSE_ARG])
 						    ? _stats_hist_area_list_options
 						    : _stats_hist_list_options);
 		} else {
 			if (_switches[HISTOGRAM_ARG])
-				options = (char *) ((_switches[RELATIVE_ARG])
+				options = ((_switches[RELATIVE_ARG])
 						    ? _stats_hist_relative_options
 						    : _stats_hist_options);
 			else
-				options = (char *) ((!_switches[RAW_ARG])
+				options = ((!_switches[RAW_ARG])
 						    ? _stats_default_report_options
 						    : _stats_raw_report_options);
 			_report_type |= DR_STATS;
@@ -4773,7 +4780,7 @@ static int _report_init(const struct command *cmd, const char *subcommand)
 	}
 
 	if (cmd && !strcmp(cmd->name, "list")) {
-		options = (char *) _stats_list_options;
+		options = _stats_list_options;
 		_report_type |= DR_STATS_META;
 	}
 
@@ -4819,7 +4826,6 @@ static int _report_init(const struct command *cmd, const char *subcommand)
 		if (*_string_args[OPTIONS_ARG] != '+')
 			options = _string_args[OPTIONS_ARG];
 		else {
-			char *tmpopts;
 			opt_fields = _string_args[OPTIONS_ARG] + 1;
 			len = strlen(options) + strlen(opt_fields) + 2;
 			if (!(tmpopts = malloc(len))) {
@@ -4897,8 +4903,7 @@ static int _report_init(const struct command *cmd, const char *subcommand)
 		dm_report_set_output_field_name_prefix(_report, "dm_");
 
 out:
-	if (len)
-		free(options);
+	free(tmpopts);
 
 	return r;
 }
@@ -5108,7 +5113,7 @@ out:
 	return 0;
 }
 
-static uint64_t _factor_from_units(char *argptr, char *unit_type)
+static uint64_t _factor_from_units(const char *argptr, char *unit_type)
 {
 	return dm_units_to_factor(argptr, unit_type, 0, NULL);
 }
@@ -5117,7 +5122,7 @@ static uint64_t _factor_from_units(char *argptr, char *unit_type)
  * Parse a start, length, or area size argument in bytes from a string
  * using optional units as supported by _factor_from_units().
  */
-static int _size_from_string(char *argptr, uint64_t *size, const char *name)
+static int _size_from_string(const char *argptr, uint64_t *size, const char *name)
 {
 	uint64_t factor;
 	char *endptr = NULL, unit_type;
@@ -5910,7 +5915,7 @@ out:
 
 static int _stats_group(CMD_ARGS)
 {
-	char *name, *alias = NULL, *regions = NULL;
+	const char *name, *alias = NULL, *regions = NULL;
 	struct dm_stats *dms;
 	uint64_t group_id;
 	int r = 0;
@@ -6221,7 +6226,7 @@ static int _stats_help(CMD_ARGS);
  * the fact that 'create' and 'create --filemap' have largely disjoint
  * sets of options.
  */
-static struct command _stats_subcommands[] = {
+static const struct command _stats_subcommands[] = {
 	{"help", "", 0, 0, 0, 0, _stats_help},
 	{"clear", ALL_REGIONS_OPT ALL_DEVICES_OPT, 0, -1, 1, 0, _stats_clear},
 	{"create", CREATE_OPTS ALL_DEVICES_OPT, 0, -1, 1, 0, _stats_create},
@@ -6234,7 +6239,6 @@ static struct command _stats_subcommands[] = {
 	{"ungroup", UNGROUP_OPTS, 1, -1, 1, 0, _stats_ungroup},
 	{"update_filemap", UPDATE_OPTS, 1, 1, 0, 0, _stats_update_file},
 	{"version", "", 0, -1, 1, 0, _version},
-	{NULL, NULL, 0, 0, 0, 0, NULL}
 };
 
 #undef AREA_OPTS
@@ -6259,7 +6263,7 @@ static struct command _stats_subcommands[] = {
 
 static int _dmsetup_help(CMD_ARGS);
 
-static struct command _dmsetup_commands[] = {
+static const struct command _dmsetup_commands[] = {
 	{"help", "[-c|-C|--columns]", 0, 0, 0, 0, _dmsetup_help},
 	{"create", "<dev_name>\n"
 	  "\t    [-j|--major <major> -m|--minor <minor>]\n"
@@ -6301,7 +6305,6 @@ static struct command _dmsetup_commands[] = {
 	{"version", "", 0, 0, 0, 0, _version},
 	{"setgeometry", "<device> <cyl> <head> <sect> <start>", 5, 5, 0, 0, _setgeometry},
 	{"splitname", "<device> [<subsystem>]", 1, 2, 0, 0, _splitname},
-	{NULL, NULL, 0, 0, 0, 0, NULL}
 };
 
 /*
@@ -6318,19 +6321,19 @@ static void _stats_usage(FILE *out)
 	int i;
 
 	fprintf(out, "Usage:\n\n"
-		"%s\n"
-		"        [-h|--help]\n"
-		"        [-v|--verbose [-v|--verbose ...]]\n"
-		"        [--areas <nr_areas>] [--areasize <size>]\n"
-		"        [--userdata <data>] [--clear]\n"
-		"        [--count <count>] [--interval <seconds>]\n"
-		"        [-o <fields>] [-O|--sort <sort_fields>]\n"
-		"	      [--programid <id>]\n"
-		"        [--start <start>] [--length <length>]\n"
-		"        [--segments] [--units <units>]\n\n",
+		"%s\n\t"
+		"[-h|--help]\n\t"
+		"[-v|--verbose [-v|--verbose ...]]\n\t"
+		"[--areas <nr_areas>] [--areasize <size>]\n\t"
+		"[--userdata <data>] [--clear]\n\t"
+		"[--count <count>] [--interval <seconds>]\n\t"
+		"[-o <fields>] [-O|--sort <sort_fields>]\n\t"
+		"     [--programid <id>]\n\t"
+		"[--start <start>] [--length <length>]\n\t"
+		"[--segments] [--units <units>]\n\n",
 		_base_commands[_base_command].name);
 
-	for (i = 0; _stats_subcommands[i].name; i++)
+	for (i = 0; i < DM_ARRAY_SIZE(_stats_subcommands); i++)
 		fprintf(out, "\t%s %s\n", _stats_subcommands[i].name, _stats_subcommands[i].help);
 
 	fprintf(out, "\n<device> may be device name or (if only one) -u <uuid> or -j <major> -m <minor>\n"
@@ -6342,20 +6345,20 @@ static void _dmsetup_usage(FILE *out)
 	int i;
 
 	fprintf(out, "Usage:\n\n"
-		"%s\n"
-		"        [--version] [-h|--help [-c|-C|--columns]]\n"
-		"        [-v|--verbose [-v|--verbose ...]] [-f|--force]\n"
-		"        [--checks] [--manglename {none|hex|auto}]\n"
-		"        [-r|--readonly] [--noopencount] [--noflush] [--nolockfs] [--inactive]\n"
-		"        [--udevcookie <cookie>] [--noudevrules] [--noudevsync] [--verifyudev]\n"
-		"        [-y|--yes] [--readahead {[+]<sectors>|auto|none}] [--retry]\n"
-		"        [-c|-C|--columns] [-o <fields>] [-O|--sort <sort_fields>]\n"
-		"        [-S|--select <selection>] [--nameprefixes]\n"
-		"        [--noheadings|--headings none|abbrev|full|0|1|2]\n"
-		"        [--separator <separator>]\n\n",
+		"%s\n\t"
+		"[--version] [-h|--help [-c|-C|--columns]]\n\t"
+		"[-v|--verbose [-v|--verbose ...]] [-f|--force]\n\t"
+		"[--checks] [--manglename {none|hex|auto}]\n\t"
+		"[-r|--readonly] [--noopencount] [--noflush] [--nolockfs] [--inactive]\n\t"
+		"[--udevcookie <cookie>] [--noudevrules] [--noudevsync] [--verifyudev]\n\t"
+		"[-y|--yes] [--readahead {[+]<sectors>|auto|none}] [--retry]\n\t"
+		"[-c|-C|--columns] [-o <fields>] [-O|--sort <sort_fields>]\n\t"
+		"[-S|--select <selection>] [--nameprefixes]\n\t"
+		"[--noheadings|--headings none|abbrev|full|0|1|2]\n\t"
+		"[--separator <separator>]\n\n",
 		_base_commands[_base_command].name);
 
-	for (i = 0; _dmsetup_commands[i].name; i++)
+	for (i = 0; i < DM_ARRAY_SIZE(_dmsetup_commands); ++i)
 		fprintf(out, "\t%s %s\n", _dmsetup_commands[i].name, _dmsetup_commands[i].help);
 
 	fprintf(out, "\n<device> may be device name or (if only one) -u <uuid> or "
@@ -6448,12 +6451,12 @@ static int _dmsetup_help(CMD_ARGS)
 }
 
 static const struct command *_find_command(const struct command *commands,
-					   const char *name)
+					   size_t cmd_cnt, const char *name)
 {
 	int i;
 
 	if (name)
-		for (i = 0; commands[i].name; i++)
+		for (i = 0; i < cmd_cnt; i++)
 			if (!strcmp(commands[i].name, name))
 				return commands + i;
 
@@ -6462,12 +6465,16 @@ static const struct command *_find_command(const struct command *commands,
 
 static const struct command *_find_dmsetup_command(const char *name)
 {
-	return _find_command(_dmsetup_commands, name);
+	return _find_command(_dmsetup_commands,
+			     DM_ARRAY_SIZE(_dmsetup_commands),
+			     name);
 }
 
 static const struct command *_find_stats_subcommand(const char *name)
 {
-	return _find_command(_stats_subcommands, name);
+	return _find_command(_stats_subcommands,
+			     DM_ARRAY_SIZE(_stats_subcommands),
+			     name);
 }
 
 static int _stats(CMD_ARGS)
@@ -6701,7 +6708,7 @@ static int _process_losetup_switches(const char *base, int *argcp, char ***argvp
 	off_t offset = 0;
 
 #ifdef HAVE_GETOPTLONG
-	static struct option long_options[] = {
+	static const struct option _long_options[] = {
 		{0, 0, 0, 0}
 	};
 #endif
@@ -6709,7 +6716,7 @@ static int _process_losetup_switches(const char *base, int *argcp, char ***argvp
 	optarg = (char*) "";
 	optind = OPTIND_INIT;
 	while ((c = GETOPTLONG_FN(*argcp, *argvp, "ade:fo:v",
-				  long_options, NULL)) != -1 ) {
+				  _long_options, NULL)) != -1 ) {
 		if (c == ':' || c == '?')
 			return_0;
 		if (c == 'a')
@@ -6855,90 +6862,90 @@ static int _process_switches(int *argcp, char ***argvp, const char *dev_dir)
 	int c, r, i;
 
 #ifdef HAVE_GETOPTLONG
-	static struct option long_options[] = {
-		{"addnodeoncreate", 0, 0, ADD_NODE_ON_CREATE_ARG},
-		{"addnodeonresume", 0, 0, ADD_NODE_ON_RESUME_ARG},
-		{"alias", 1, 0, ALIAS_ARG},
-		{"alldevices", 0, 0, ALL_DEVICES_ARG},
-		{"allprograms", 0, 0, ALL_PROGRAMS_ARG},
-		{"allregions", 0, 0, ALL_REGIONS_ARG},
-		{"area", 0, 0, AREA_ARG},
-		{"areas", 1, 0, AREAS_ARG},
-		{"areasize", 1, 0, AREA_SIZE_ARG},
-		{"bounds", 1, 0, BOUNDS_ARG},
-		{"checks", 0, 0, CHECKS_ARG},
-		{"clear", 0, 0, CLEAR_ARG},
-		{"columns", 0, 0, COLS_ARG},
-		{"concise", 0, 0, CONCISE_ARG},
-		{"count", 1, 0, COUNT_ARG},
-		{"deferred", 0, 0, DEFERRED_ARG},
-		{"exec", 1, 0, EXEC_ARG},
-		{"filemap", 0, 0, FILEMAP_ARG},
-		{"follow", 1, 0, FOLLOW_ARG},
-		{"force", 0, 0, FORCE_ARG},
-		{"foreground", 0, 0, FOREGROUND_ARG},
-		{"gid", 1, 0, GID_ARG},
-		{"group", 0, 0, GROUP_ARG},
-		{"groupid", 1, 0, GROUP_ID_ARG},
-		{"headings", 1, 0, HEADINGS_ARG},
-		{"help", 0, 0, HELP_ARG},
-		{"histogram", 0, 0, HISTOGRAM_ARG},
-		{"inactive", 0, 0, INACTIVE_ARG},
-		{"interval", 1, 0, INTERVAL_ARG},
-		{"length", 1, 0, LENGTH_ARG},
-		{"major", 1, 0, MAJOR_ARG},
-		{"manglename", 1, 0, MANGLENAME_ARG},
-		{"minor", 1, 0, MINOR_ARG},
-		{"mode", 1, 0, MODE_ARG},
-		{"nameprefixes", 0, 0, NAMEPREFIXES_ARG},
-		{"noflush", 0, 0, NOFLUSH_ARG},
-		{"nogroup", 0, 0, NOGROUP_ARG},
-		{"noheadings", 0, 0, NOHEADINGS_ARG},
-		{"nolockfs", 0, 0, NOLOCKFS_ARG},
-		{"nomonitor", 0, 0, NOMONITOR_ARG},
-		{"noopencount", 0, 0, NOOPENCOUNT_ARG},
-		{"nosuffix", 0, 0, NOSUFFIX_ARG},
-		{"notable", 0, 0, NOTABLE_ARG},
-		{"notimesuffix", 0, 0, NOTIMESUFFIX_ARG},
-		{"noudevrules", 0, 0, NOUDEVRULES_ARG},
-		{"noudevsync", 0, 0, NOUDEVSYNC_ARG},
-		{"options", 1, 0, OPTIONS_ARG},
-		{"precise", 0, 0, PRECISE_ARG},
-		{"programid", 1, 0, PROGRAM_ID_ARG},
-		{"raw", 0, 0, RAW_ARG},
-		{"readahead", 1, 0, READAHEAD_ARG},
-		{"readonly", 0, 0, READ_ONLY},
-		{"region", 0, 0, REGION_ARG},
-		{"regionid", 1, 0, REGION_ID_ARG},
-		{"regions", 1, 0, REGIONS_ARG},
-		{"relative", 0, 0, RELATIVE_ARG},
-		{"retry", 0, 0, RETRY_ARG},
-		{"rows", 0, 0, ROWS_ARG},
-		{"segments", 0, 0, SEGMENTS_ARG},
-		{"select", 1, 0, SELECT_ARG},
-		{"separator", 1, 0, SEPARATOR_ARG},
-		{"setuuid", 0, 0, SETUUID_ARG},
-		{"showkeys", 0, 0, SHOWKEYS_ARG},
-		{"sort", 1, 0, SORT_ARG},
-		{"start", 1, 0, START_ARG},
-		{"table", 1, 0, TABLE_ARG},
-		{"target", 1, 0, TARGET_ARG},
-		{"tree", 0, 0, TREE_ARG},
-		{"udevcookie", 1, 0, UDEVCOOKIE_ARG},
-		{"uid", 1, 0, UID_ARG},
-		{"unbuffered", 0, 0, UNBUFFERED_ARG},
-		{"units", 1, 0, UNITS_ARG},
-		{"unquoted", 0, 0, UNQUOTED_ARG},
-		{"userdata", 1, 0, USER_DATA_ARG},
-		{"uuid", 1, 0, UUID_ARG},
-		{"verbose", 1, 0, VERBOSE_ARG},
-		{"verifyudev", 0, 0, VERIFYUDEV_ARG},
-		{"version", 0, 0, VERSION_ARG},
-		{"yes", 0, 0, YES_ARG},
+	static const struct option _long_options[] = {
+		{"addnodeoncreate",	no_argument, 0, ADD_NODE_ON_CREATE_ARG},
+		{"addnodeonresume",	no_argument, 0, ADD_NODE_ON_RESUME_ARG},
+		{"alias",	  required_argument, 0, ALIAS_ARG},
+		{"alldevices",		no_argument, 0, ALL_DEVICES_ARG},
+		{"allprograms",		no_argument, 0, ALL_PROGRAMS_ARG},
+		{"allregions",		no_argument, 0, ALL_REGIONS_ARG},
+		{"area",		no_argument, 0, AREA_ARG},
+		{"areas",	  required_argument, 0, AREAS_ARG},
+		{"areasize",	  required_argument, 0, AREA_SIZE_ARG},
+		{"bounds",	  required_argument, 0, BOUNDS_ARG},
+		{"checks",		no_argument, 0, CHECKS_ARG},
+		{"clear",		no_argument, 0, CLEAR_ARG},
+		{"columns",		no_argument, 0, COLS_ARG},
+		{"concise",		no_argument, 0, CONCISE_ARG},
+		{"count",	  required_argument, 0, COUNT_ARG},
+		{"deferred",		no_argument, 0, DEFERRED_ARG},
+		{"exec",	  required_argument, 0, EXEC_ARG},
+		{"filemap",		no_argument, 0, FILEMAP_ARG},
+		{"follow",	  required_argument, 0, FOLLOW_ARG},
+		{"force",		no_argument, 0, FORCE_ARG},
+		{"foreground",		no_argument, 0, FOREGROUND_ARG},
+		{"gid",		  required_argument, 0, GID_ARG},
+		{"group",		no_argument, 0, GROUP_ARG},
+		{"groupid",	  required_argument, 0, GROUP_ID_ARG},
+		{"headings",	  required_argument, 0, HEADINGS_ARG},
+		{"help",		no_argument, 0, HELP_ARG},
+		{"histogram",		no_argument, 0, HISTOGRAM_ARG},
+		{"inactive",		no_argument, 0, INACTIVE_ARG},
+		{"interval",	  required_argument, 0, INTERVAL_ARG},
+		{"length",	  required_argument, 0, LENGTH_ARG},
+		{"major",	  required_argument, 0, MAJOR_ARG},
+		{"manglename",	  required_argument, 0, MANGLENAME_ARG},
+		{"minor",	  required_argument, 0, MINOR_ARG},
+		{"mode",	  required_argument, 0, MODE_ARG},
+		{"nameprefixes",	no_argument, 0, NAMEPREFIXES_ARG},
+		{"noflush",		no_argument, 0, NOFLUSH_ARG},
+		{"nogroup",		no_argument, 0, NOGROUP_ARG},
+		{"noheadings",		no_argument, 0, NOHEADINGS_ARG},
+		{"nolockfs",		no_argument, 0, NOLOCKFS_ARG},
+		{"nomonitor",		no_argument, 0, NOMONITOR_ARG},
+		{"noopencount",		no_argument, 0, NOOPENCOUNT_ARG},
+		{"nosuffix",		no_argument, 0, NOSUFFIX_ARG},
+		{"notable",		no_argument, 0, NOTABLE_ARG},
+		{"notimesuffix",	no_argument, 0, NOTIMESUFFIX_ARG},
+		{"noudevrules",		no_argument, 0, NOUDEVRULES_ARG},
+		{"noudevsync",		no_argument, 0, NOUDEVSYNC_ARG},
+		{"options",	  required_argument, 0, OPTIONS_ARG},
+		{"precise",		no_argument, 0, PRECISE_ARG},
+		{"programid",	  required_argument, 0, PROGRAM_ID_ARG},
+		{"raw",			no_argument, 0, RAW_ARG},
+		{"readahead",	  required_argument, 0, READAHEAD_ARG},
+		{"readonly",		no_argument, 0, READ_ONLY},
+		{"region",		no_argument, 0, REGION_ARG},
+		{"regionid",	  required_argument, 0, REGION_ID_ARG},
+		{"regions",	  required_argument, 0, REGIONS_ARG},
+		{"relative",		no_argument, 0, RELATIVE_ARG},
+		{"retry",		no_argument, 0, RETRY_ARG},
+		{"rows",		no_argument, 0, ROWS_ARG},
+		{"segments",		no_argument, 0, SEGMENTS_ARG},
+		{"select",	  required_argument, 0, SELECT_ARG},
+		{"separator",	  required_argument, 0, SEPARATOR_ARG},
+		{"setuuid",		no_argument, 0, SETUUID_ARG},
+		{"showkeys",		no_argument, 0, SHOWKEYS_ARG},
+		{"sort",	  required_argument, 0, SORT_ARG},
+		{"start",	  required_argument, 0, START_ARG},
+		{"table",	  required_argument, 0, TABLE_ARG},
+		{"target",	  required_argument, 0, TARGET_ARG},
+		{"tree",		no_argument, 0, TREE_ARG},
+		{"udevcookie",	  required_argument, 0, UDEVCOOKIE_ARG},
+		{"uid",		  required_argument, 0, UID_ARG},
+		{"unbuffered",		no_argument, 0, UNBUFFERED_ARG},
+		{"units",	  required_argument, 0, UNITS_ARG},
+		{"unquoted",		no_argument, 0, UNQUOTED_ARG},
+		{"userdata",	  required_argument, 0, USER_DATA_ARG},
+		{"uuid",	  required_argument, 0, UUID_ARG},
+		{"verbose",	  required_argument, 0, VERBOSE_ARG},
+		{"verifyudev",		no_argument, 0, VERIFYUDEV_ARG},
+		{"version",		no_argument, 0, VERSION_ARG},
+		{"yes",			no_argument, 0, YES_ARG},
 		{0, 0, 0, 0}
 	};
 #else
-	struct option long_options;
+	struct option _long_options;
 #endif
 
 	/*
@@ -7005,204 +7012,71 @@ static int _process_switches(int *argcp, char ***argvp, const char *dev_dir)
 	optarg = (char*) "";
 	optind = OPTIND_INIT;
 	while ((c = GETOPTLONG_FN(*argcp, *argvp, "cCfG:hj:m:M:no:O:rS:u:U:vy",
-					    long_options, NULL)) != -1) {
+				  _long_options, NULL)) != -1) {
 		switch (c) {
-		case ALIAS_ARG:
-			_switches[ALIAS_ARG]++;
-			_string_args[ALIAS_ARG] = optarg;
-			break;
-		case ALL_DEVICES_ARG:
-			_switches[ALL_DEVICES_ARG]++;
-			break;
-		case ALL_PROGRAMS_ARG:
-			_switches[ALL_PROGRAMS_ARG]++;
-			break;
-		case ALL_REGIONS_ARG:
-			_switches[ALL_REGIONS_ARG]++;
-			break;
-		case AREA_ARG:
-			_switches[AREA_ARG]++;
-			break;
-		case AREAS_ARG:
-			_switches[AREAS_ARG]++;
-			_int_args[AREAS_ARG] = atoi(optarg);
-			break;
-		case AREA_SIZE_ARG:
-			_switches[AREA_SIZE_ARG]++;
-			_string_args[AREA_SIZE_ARG] = optarg;
-			break;
-		case USER_DATA_ARG:
-			_switches[USER_DATA_ARG]++;
-			_string_args[USER_DATA_ARG] = optarg;
-			break;
 		case ':':
 		case '?':
 			return_0;
-		case HELP_ARG:
-			_switches[HELP_ARG]++;
-			break;
-		case CONCISE_ARG:
-			_switches[CONCISE_ARG]++;
-			break;
-		case BOUNDS_ARG:
-			_switches[BOUNDS_ARG]++;
-			_string_args[BOUNDS_ARG] = optarg;
-			break;
-		case CLEAR_ARG:
-			_switches[CLEAR_ARG]++;
-			break;
-		case 'C':
-		case COLS_ARG:
+		case 'C': /* 'C' == 'c' COLS_ARG */
 			_switches[COLS_ARG]++;
 			break;
-		case FILEMAP_ARG:
-			_switches[FILEMAP_ARG]++;
-			break;
+		default:
+			if (c >= NUM_SWITCHES) {
+				log_error("Unrecognized options %d.", c);
+				return 0;
+			}
+			/* plain switch */
+			_switches[c]++;
+		}
+
+		switch (c) {
+		case ALIAS_ARG:
+		case AREA_SIZE_ARG:
+		case BOUNDS_ARG:
 		case FOLLOW_ARG:
-			_switches[FOLLOW_ARG]++;
-			_string_args[FOLLOW_ARG] = optarg;
-			break;
-		case FORCE_ARG:
-			_switches[FORCE_ARG]++;
-			break;
-		case FOREGROUND_ARG:
-			_switches[FOREGROUND_ARG]++;
-			break;
-		case READ_ONLY:
-			_switches[READ_ONLY]++;
-			break;
-		case HISTOGRAM_ARG:
-			_switches[HISTOGRAM_ARG]++;
-			break;
 		case LENGTH_ARG:
-			_switches[LENGTH_ARG]++;
-			_string_args[LENGTH_ARG] = optarg;
-			break;
-		case MAJOR_ARG:
-			_switches[MAJOR_ARG]++;
-			_int_args[MAJOR_ARG] = atoi(optarg);
-			break;
-		case REGIONS_ARG:
-			_switches[REGIONS_ARG]++;
-			_string_args[REGIONS_ARG] = optarg;
-			break;
-		case MINOR_ARG:
-			_switches[MINOR_ARG]++;
-			_int_args[MINOR_ARG] = atoi(optarg);
-			break;
-		case NOSUFFIX_ARG:
-			_switches[NOSUFFIX_ARG]++;
-			break;
-		case NOTABLE_ARG:
-			_switches[NOTABLE_ARG]++;
-			break;
-		case NOTIMESUFFIX_ARG:
-			_switches[NOTIMESUFFIX_ARG]++;
-			break;
 		case OPTIONS_ARG:
-			_switches[OPTIONS_ARG]++;
-			_string_args[OPTIONS_ARG] = optarg;
-			break;
 		case PROGRAM_ID_ARG:
-			_switches[PROGRAM_ID_ARG]++;
-			_string_args[PROGRAM_ID_ARG] = optarg;
-			break;
-		case PRECISE_ARG:
-			_switches[PRECISE_ARG]++;
-			break;
-		case RAW_ARG:
-			_switches[RAW_ARG]++;
-			break;
-		case REGION_ARG:
-			_switches[REGION_ARG]++;
-			break;
-		case REGION_ID_ARG:
-			_switches[REGION_ID_ARG]++;
-			_int_args[REGION_ID_ARG] = atoi(optarg);
-			break;
-		case RELATIVE_ARG:
-			_switches[RELATIVE_ARG]++;
-			break;
-		case SEPARATOR_ARG:
-			_switches[SEPARATOR_ARG]++;
-			_string_args[SEPARATOR_ARG] = optarg;
-			break;
-		case UNITS_ARG:
-			_switches[UNITS_ARG]++;
-			_string_args[UNITS_ARG] = optarg;
-			break;
-		case SORT_ARG:
-			_switches[SORT_ARG]++;
-			_string_args[SORT_ARG] = optarg;
-			break;
+		case REGIONS_ARG:
 		case SELECT_ARG:
-			_switches[SELECT_ARG]++;
-			_string_args[SELECT_ARG] = optarg;
-			break;
+		case SEPARATOR_ARG:
+		case SORT_ARG:
 		case START_ARG:
-			_switches[START_ARG]++;
-			_string_args[START_ARG] = optarg;
+		case UNITS_ARG:
+		case USER_DATA_ARG:
+			/* with string arg */
+			_string_args[c] = optarg;
 			break;
-		case VERBOSE_ARG:
-			_switches[VERBOSE_ARG]++;
+		case AREAS_ARG:
+		case GID_ARG:
+		case GROUP_ID_ARG:
+		case MAJOR_ARG:
+		case MINOR_ARG:
+		case REGION_ID_ARG:
+		case UID_ARG:
+			/* with int arg */
+			_int_args[c] = atoi(optarg);
+			break;
+		case EXEC_ARG:
+			_command_to_exec = optarg;
+			break;
+		case TARGET_ARG:
+			_target = optarg;
 			break;
 		case UUID_ARG:
-			_switches[UUID_ARG]++;
 			_uuid = optarg;
 			break;
-		case YES_ARG:
-			_switches[YES_ARG]++;
-			break;
-		case ADD_NODE_ON_RESUME_ARG:
-			_switches[ADD_NODE_ON_RESUME_ARG]++;
-			break;
-		case ADD_NODE_ON_CREATE_ARG:
-			_switches[ADD_NODE_ON_CREATE_ARG]++;
-			break;
-		case CHECKS_ARG:
-			_switches[CHECKS_ARG]++;
+		case UDEVCOOKIE_ARG:
+			_udev_cookie = _get_cookie_value(optarg);
 			break;
 		case COUNT_ARG:
-			_switches[COUNT_ARG]++;
 			_int_args[COUNT_ARG] = atoi(optarg);
 			if (_int_args[COUNT_ARG] < 0) {
 				log_error("Count must be zero or greater.");
 				return 0;
 			}
 			break;
-		case UDEVCOOKIE_ARG:
-			_switches[UDEVCOOKIE_ARG]++;
-			_udev_cookie = _get_cookie_value(optarg);
-			break;
-		case NOMONITOR_ARG:
-			_switches[NOMONITOR_ARG]++;
-			break;
-		case NOUDEVRULES_ARG:
-			_switches[NOUDEVRULES_ARG]++;
-			break;
-		case NOUDEVSYNC_ARG:
-			_switches[NOUDEVSYNC_ARG]++;
-			break;
-		case VERIFYUDEV_ARG:
-			_switches[VERIFYUDEV_ARG]++;
-			break;
-		case GID_ARG:
-			_switches[GID_ARG]++;
-			_int_args[GID_ARG] = atoi(optarg);
-			break;
-		case GROUP_ARG:
-			_switches[GROUP_ARG]++;
-			break;
-		case GROUP_ID_ARG:
-			_switches[GROUP_ID_ARG]++;
-			_int_args[GROUP_ID_ARG] = atoi(optarg);
-			break;
-		case UID_ARG:
-			_switches[UID_ARG]++;
-			_int_args[UID_ARG] = atoi(optarg);
-			break;
 		case MODE_ARG:
-			_switches[MODE_ARG]++;
 			/* FIXME Accept modes as per chmod */
 			errno = 0;
 			_int_args[MODE_ARG] = (int) strtol(optarg, &s, 8);
@@ -7212,15 +7086,7 @@ static int _process_switches(int *argcp, char ***argvp, const char *dev_dir)
 				return 0;
 			}
 			break;
-		case DEFERRED_ARG:
-			_switches[DEFERRED_ARG]++;
-			break;
-		case EXEC_ARG:
-			_switches[EXEC_ARG]++;
-			_command_to_exec = optarg;
-			break;
 		case HEADINGS_ARG:
-			_switches[HEADINGS_ARG]++;
 			if (!strcasecmp(optarg, "none") || !strcmp(optarg, "0"))
 				_int_args[HEADINGS_ARG] = 0;
 			else if (!strcasecmp(optarg, "abbrev") || !strcmp(optarg, "1"))
@@ -7232,18 +7098,7 @@ static int _process_switches(int *argcp, char ***argvp, const char *dev_dir)
 				return 0;
 			}
 			break;
-		case TARGET_ARG:
-			_switches[TARGET_ARG]++;
-			_target = optarg;
-			break;
-		case SEGMENTS_ARG:
-			_switches[SEGMENTS_ARG]++;
-			break;
-		case INACTIVE_ARG:
-			_switches[INACTIVE_ARG]++;
-			break;
 		case INTERVAL_ARG:
-			_switches[INTERVAL_ARG]++;
 			_int_args[INTERVAL_ARG] = atoi(optarg);
 			if (_int_args[INTERVAL_ARG] <= 0) {
 				log_error("Interval must be a positive integer.");
@@ -7251,7 +7106,6 @@ static int _process_switches(int *argcp, char ***argvp, const char *dev_dir)
 			}
 			break;
 		case MANGLENAME_ARG:
-			_switches[MANGLENAME_ARG]++;
 			if (!strcasecmp(optarg, "none"))
 				_int_args[MANGLENAME_ARG] = DM_STRING_MANGLING_NONE;
 			else if (!strcasecmp(optarg, "auto"))
@@ -7264,26 +7118,7 @@ static int _process_switches(int *argcp, char ***argvp, const char *dev_dir)
 			}
 			dm_set_name_mangling_mode((dm_string_mangling_t) _int_args[MANGLENAME_ARG]);
 			break;
-		case NAMEPREFIXES_ARG:
-			_switches[NAMEPREFIXES_ARG]++;
-			break;
-		case NOFLUSH_ARG:
-			_switches[NOFLUSH_ARG]++;
-			break;
-		case NOGROUP_ARG:
-			_switches[NOGROUP_ARG]++;
-			break;
-		case NOHEADINGS_ARG:
-			_switches[NOHEADINGS_ARG]++;
-			break;
-		case NOLOCKFS_ARG:
-			_switches[NOLOCKFS_ARG]++;
-			break;
-		case NOOPENCOUNT_ARG:
-			_switches[NOOPENCOUNT_ARG]++;
-			break;
 		case READAHEAD_ARG:
-			_switches[READAHEAD_ARG]++;
 			if (!strcasecmp(optarg, "auto"))
 				_int_args[READAHEAD_ARG] = DM_READ_AHEAD_AUTO;
 			else if (!strcasecmp(optarg, "none"))
@@ -7302,33 +7137,12 @@ static int _process_switches(int *argcp, char ***argvp, const char *dev_dir)
 				}
 			}
 			break;
-		case RETRY_ARG:
-			_switches[RETRY_ARG]++;
-			break;
-		case ROWS_ARG:
-			_switches[ROWS_ARG]++;
-			break;
-		case SETUUID_ARG:
-			_switches[SETUUID_ARG]++;
-			break;
-		case SHOWKEYS_ARG:
-			_switches[SHOWKEYS_ARG]++;
-			break;
 		case TABLE_ARG:
-			_switches[TABLE_ARG]++;
+			free(_table);
 			if (!(_table = strdup(optarg))) {
 				log_error("Could not allocate memory for table string.");
 				return 0;
 			}
-			break;
-		case TREE_ARG:
-			_switches[TREE_ARG]++;
-			break;
-		case UNQUOTED_ARG:
-			_switches[UNQUOTED_ARG]++;
-			break;
-		case VERSION_ARG:
-			_switches[VERSION_ARG]++;
 			break;
 		}
 	}

@@ -139,6 +139,7 @@ struct cmd_context {
 	 */
 	unsigned is_long_lived:1;		/* optimises persistent_filter handling */
 	unsigned is_interactive:1;
+	unsigned running_on_valgrind:1;
 	unsigned check_pv_dev_sizes:1;
 	unsigned handles_missing_pvs:1;
 	unsigned handles_unknown_segments:1;
@@ -312,7 +313,6 @@ int init_run_by_dmeventd(struct cmd_context *cmd);
  * is only used for reading config settings from lvm.conf,
  * which are at cmd->cft.
  */
-struct cmd_context *create_config_context(void);
 void destroy_config_context(struct cmd_context *cmd);
 
 struct format_type *get_format_by_name(struct cmd_context *cmd, const char *format);

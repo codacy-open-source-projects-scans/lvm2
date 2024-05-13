@@ -47,6 +47,8 @@
 
 #ifdef HAVE_VALGRIND
 #include <valgrind.h>
+#else
+#define RUNNING_ON_VALGRIND 0
 #endif
 
 #ifdef __linux__
@@ -504,10 +506,10 @@ static int _check_config(struct cmd_context *cmd)
 static const char *_set_time_format(struct cmd_context *cmd)
 {
 	/* Compared to strftime, we do not allow "newline" character - the %n in format. */
-	static const char *allowed_format_chars = "aAbBcCdDeFGghHIjklmMpPrRsStTuUVwWxXyYzZ%";
-	static const char *allowed_alternative_format_chars_e = "cCxXyY";
-	static const char *allowed_alternative_format_chars_o = "deHImMSuUVwWy";
-	static const char *chars_to_check;
+	static const char _allowed_format_chars[] = "aAbBcCdDeFGghHIjklmMpPrRsStTuUVwWxXyYzZ%";
+	static const char _allowed_alternative_format_chars_e[] = "cCxXyY";
+	static const char _allowed_alternative_format_chars_o[] = "deHImMSuUVwWy";
+	const char *chars_to_check;
 	const char *tf = find_config_tree_str(cmd, report_time_format_CFG, NULL);
 	const char *p_fmt;
 	size_t i;
@@ -523,12 +525,12 @@ static const char *_set_time_format(struct cmd_context *cmd)
 				c = *++p_fmt;
 				if (c == 'E') {
 					c = *++p_fmt;
-					chars_to_check = allowed_alternative_format_chars_e;
+					chars_to_check = _allowed_alternative_format_chars_e;
 				} else if (c == 'O') {
 					c = *++p_fmt;
-					chars_to_check = allowed_alternative_format_chars_o;
+					chars_to_check = _allowed_alternative_format_chars_o;
 				} else
-					chars_to_check = allowed_format_chars;
+					chars_to_check = _allowed_format_chars;
 
 				for (i = 0; chars_to_check[i]; i++) {
 					if (c == chars_to_check[i])
@@ -1614,62 +1616,6 @@ void destroy_config_context(struct cmd_context *cmd)
 	free(cmd);
 }
 
-/*
- * A "config context" is a very light weight toolcontext that
- * is only used for reading config settings from lvm.conf.
- *
- * FIXME: this needs to go back to parametrized create_toolcontext()
- */
-struct cmd_context *create_config_context(void)
-{
-	struct cmd_context *cmd;
-
-	if (!(cmd = zalloc(sizeof(*cmd))))
-		goto_out;
-
-	strncpy(cmd->system_dir, DEFAULT_SYS_DIR, sizeof(cmd->system_dir) - 1);
-
-	if (!_get_env_vars(cmd))
-		goto_out;
-
-	if (!(cmd->libmem = dm_pool_create("library", 4 * 1024)))
-		goto_out;
-
-	if (!(cmd->mem = dm_pool_create("command", 4 * 1024)))
-		goto out;
-
-	if (!(cmd->pending_delete_mem = dm_pool_create("pending_delete", 1024)))
-		goto_out;
-
-	dm_list_init(&cmd->config_files);
-	dm_list_init(&cmd->tags);
-
-	if (!_init_lvm_conf(cmd))
-		goto_out;
-
-	if (!_init_hostname(cmd))
-		goto_out;
-
-	if (!_init_tags(cmd, cmd->cft))
-		goto_out;
-
-	/* Load lvmlocal.conf */
-	if (*cmd->system_dir && !_load_config_file(cmd, "", 1))
-		goto_out;
-
-	if (!_init_tag_configs(cmd))
-		goto_out;
-
-	if (!(cmd->cft = _merge_config_files(cmd, cmd->cft)))
-		goto_out;
-
-	return cmd;
-out:
-	if (cmd)
-		destroy_config_context(cmd);
-	return NULL;
-}
-
 /* Entry point */
 struct cmd_context *create_toolcontext(unsigned is_clvmd,
 				       const char *system_dir,
@@ -1702,6 +1648,8 @@ struct cmd_context *create_toolcontext(unsigned is_clvmd,
 	cmd->handles_unknown_segments = 0;
 	cmd->hosttags = 0;
 	cmd->check_devs_used = 1;
+	cmd->running_on_valgrind = RUNNING_ON_VALGRIND;
+
 	dm_list_init(&cmd->arg_value_groups);
 	dm_list_init(&cmd->formats);
 	dm_list_init(&cmd->segtypes);
@@ -1714,9 +1662,7 @@ struct cmd_context *create_toolcontext(unsigned is_clvmd,
 
 	/* Set in/out stream buffering before glibc */
 	if (set_buffering
-#ifdef HAVE_VALGRIND
-	    && !RUNNING_ON_VALGRIND /* Skipping within valgrind execution. */
-#endif
+	    && !cmd->running_on_valgrind /* Skipping within valgrind execution. */
 #ifdef SYS_gettid
 	    /* For threaded programs no changes of streams */
             /* On linux gettid() is implemented only via syscall */
@@ -2094,10 +2040,7 @@ void destroy_toolcontext(struct cmd_context *cmd)
 
 	dm_device_list_destroy(&cmd->cache_dm_devs);
 
-#ifdef HAVE_VALGRIND
-	if (!RUNNING_ON_VALGRIND) /* Skipping within valgrind execution. */
-#endif
-	if (cmd->linebuffer) {
+	if (!cmd->running_on_valgrind && cmd->linebuffer) {
 		int flags;
 		/* Reset stream buffering to defaults */
 		if (is_valid_fd(STDIN_FILENO) &&

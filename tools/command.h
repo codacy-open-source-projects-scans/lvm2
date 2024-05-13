@@ -22,12 +22,9 @@ struct logical_volume;
 /* old per-command-name function */
 typedef int (*command_fn) (struct cmd_context *cmd, int argc, char **argv);
 
-/* new per-command-line-id functions */
-typedef int (*command_id_fn) (struct cmd_context *cmd, int argc, char **argv);
-
 struct command_function {
 	int command_enum;
-	command_id_fn fn;
+	command_fn fn; /* new style */
 };
 
 struct command_name {
@@ -35,19 +32,22 @@ struct command_name {
 	const char *desc; /* general command description from commands.h */
 	unsigned int flags;
 	command_fn fn; /* old style */
+	uint16_t lvm_command_enum; /* as declared in commands.h with _COMMAND */
+};
 
+struct command_name_args {
+	uint16_t num_args;
+	uint16_t variants;        /* number of command defs with this command name */
 	/* union of {required,optional}_opt_args for all commands with this name */
-	uint16_t valid_args[ARG_COUNT]; /* used for getopt */
-	int num_args;
+	uint16_t valid_args[ARG_COUNT]; /* used for getopt, store option */
 
 	/* the following are for generating help and man page output */
-	uint8_t common_options[ARG_COUNT]; /* options common to all defs */
-	uint8_t all_options[ARG_COUNT];    /* union of options from all defs */
-	int variants;        /* number of command defs with this command name */
-	int variant_has_ro;  /* do variants use required_opt_args ? */
-	int variant_has_rp;  /* do variants use required_pos_args ? */
-	int variant_has_oo;  /* do variants use optional_opt_args ? */
-	int variant_has_op;  /* do variants use optional_pos_args ? */
+	uint8_t common_options[ARG_COUNT]; /* options common to all defs  0/1 */
+	uint8_t all_options[ARG_COUNT];    /* union of options from all defs 0/1 */
+	uint8_t variant_has_ro;  /* do variants use required_opt_args ? */
+	uint8_t variant_has_rp;  /* do variants use required_pos_args ? */
+	uint8_t variant_has_oo;  /* do variants use optional_opt_args ? */
+	uint8_t variant_has_op;  /* do variants use optional_pos_args ? */
 };
 
 /*
@@ -130,15 +130,17 @@ struct pos_arg {
 
 #define RULE_INVALID 1
 #define RULE_REQUIRE 2
+#define MAX_RULE_OPTS 8
 
 struct cmd_rule {
-	int *opts;			/* if any option in this list is set, the check may apply */
 	uint64_t lvt_bits;		/* if LV has one of these types (lvt_enum_to_bit), the check may apply */
 	uint64_t lvp_bits;		/* if LV has all of these properties (lvp_enum_to_bit), the check may apply */
 
-	int *check_opts;		/* used options must [not] be in this list */
 	uint64_t check_lvt_bits;	/* LV must [not] have one of these type */
 	uint64_t check_lvp_bits;	/* LV must [not] have all of these properties */
+
+	uint16_t opts[MAX_RULE_OPTS];	/* if any option in this list is set, the check may apply */
+	uint16_t check_opts[MAX_RULE_OPTS];/* used options must [not] be in this list */
 
 	uint16_t rule;			/* RULE_INVALID, RULE_REQUIRE: check values must [not] be true */
 	uint16_t opts_count;		/* entries in opts[] */
@@ -153,11 +155,11 @@ struct cmd_rule {
  * optional.
  */
 #define CMD_RO_ARGS 32          /* required opt args */
-#define CMD_OO_ARGS 64          /* optional opt args */
+#define CMD_OO_ARGS 56          /* optional opt args */
 #define CMD_RP_ARGS 8           /* required positional args */
 #define CMD_OP_ARGS 8           /* optional positional args */
 #define CMD_IO_ARGS 8           /* ignore opt args */
-#define CMD_MAX_RULES 16        /* max number of rules per command def */
+#define CMD_MAX_RULES 12        /* max number of rules per command def */
 
 /*
  * one or more from required_opt_args is required,
@@ -180,14 +182,11 @@ struct cmd_rule {
 struct command {
 	const char *name;
 	const char *desc; /* specific command description from command-lines.in */
-	const char *command_id; /* ID string in command-lines.in */
-	int command_enum; /* <command_id>_CMD */
-	int command_index; /* position in commands[] */
+	uint16_t command_enum; /* <command_id>_CMD */
+	uint16_t command_index; /* position in commands[] */
 
-	const struct command_function *functions; /* new style */
-	command_fn fn;                      /* old style */
-
-	unsigned int cmd_flags; /* CMD_FLAG_ */
+	uint16_t lvm_command_enum; /* position in command_names[] */
+	uint16_t cmd_flags; /* CMD_FLAG_ */
 
 	/* definitions of opt/pos args */
 
@@ -227,11 +226,10 @@ struct command {
 /* see global opt_names[] */
 
 struct opt_name {
-	const char *name;       /* "foo_ARG" */
-	uint16_t opt_enum;      /* foo_ARG */
+	const char name[27];    /* "foo_ARG" */
 	const char short_opt;   /* -f */
-	char _padding[5];
-	const char *long_opt;   /* --foo */
+	uint16_t opt_enum;      /* foo_ARG */
+	const char long_opt[28];   /* --foo */
 	uint16_t val_enum;	/* xyz_VAL when --foo takes a val like "--foo xyz" */
 	uint16_t flags;
 	uint16_t prio;
@@ -241,41 +239,38 @@ struct opt_name {
 /* see global val_names[] */
 
 struct val_name {
-	const char *enum_name;  /* "foo_VAL" */
+	const char enum_name[30]; /* "foo_VAL" */
 	uint16_t val_enum;      /* foo_VAL */
 	int (*fn) (struct cmd_context *cmd, struct arg_values *av); /* foo_arg() */
-	const char *name;       /* FooVal */
+	const char name[32];    /* FooVal */
 	const char *usage;
 };
 
 /* see global lv_props[] */
 
 struct lv_prop {
-	const char *enum_name; /* "is_foo_LVP" */
+	const char name[30];   /* "lv_is_foo" */
 	uint16_t lvp_enum;     /* is_foo_LVP */
-	const char *name;      /* "lv_is_foo" */
-	int (*fn) (struct cmd_context *cmd, struct logical_volume *lv); /* lv_is_foo() */
 };
 
 /* see global lv_types[] */
 
 struct lv_type {
-	const char *enum_name; /* "foo_LVT" */
+	const char name[30];   /* "foo" */
 	uint16_t lvt_enum;     /* foo_LVT */
-	const char *name;      /* "foo" */
-	int (*fn) (struct cmd_context *cmd, struct logical_volume *lv); /* lv_is_foo() */
 };
 
 
 int define_commands(struct cmd_context *cmdtool, const char *run_name);
-int command_id_to_enum(const char *str);
+unsigned command_id_to_enum(const char *str);
+const char *command_enum(unsigned command_enum);
 void print_usage(struct command *cmd, int longhelp, int desc_first);
 void print_usage_common_cmd(const struct command_name *cname, struct command *cmd);
 void print_usage_common_lvm(const struct command_name *cname, struct command *cmd);
 void print_usage_notes(const struct command_name *cname);
 void factor_common_options(void);
 int command_has_alternate_extents(const char *name);
-void configure_command_option_values(const char *name);
+int configure_command_option_values(const struct command_name *cname, int arg_enum, int val_enum);
 const struct command_name *find_command_name(const char *name);
 
 #endif

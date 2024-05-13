@@ -46,7 +46,7 @@ static void _sigchld_handler(int sig __attribute__((unused)))
  */
 int become_daemon(struct cmd_context *cmd, int skip_lvm)
 {
-	static const char devnull[] = "/dev/null";
+	static const char _devnull[] = "/dev/null";
 	int null_fd;
 	pid_t pid;
 	struct sigaction act = {
@@ -83,8 +83,8 @@ int become_daemon(struct cmd_context *cmd, int skip_lvm)
 // #define DEBUG_CHILD
 
 #ifndef DEBUG_CHILD
-	if ((null_fd = open(devnull, O_RDWR)) == -1) {
-		log_sys_error("open", devnull);
+	if ((null_fd = open(_devnull, O_RDWR)) == -1) {
+		log_sys_error("open", _devnull);
 		_exit(ECMD_FAILED);
 	}
 
@@ -461,7 +461,7 @@ const char *extract_vgname(struct cmd_context *cmd, const char *lv_name)
 	return vg_name;
 }
 
-const char _pe_size_may_not_be_negative_msg[] = "Physical extent size may not be negative.";
+static const char _pe_size_may_not_be_negative_msg[] = "Physical extent size may not be negative.";
 
 int vgcreate_params_set_defaults(struct cmd_context *cmd,
 				 struct vgcreate_params *vp_def,
@@ -2612,7 +2612,7 @@ static struct lv_segment _historical_lv_segment = {
 	.origin_list = DM_LIST_HEAD_INIT(_historical_lv_segment.origin_list),
 };
 
-int opt_in_list_is_set(struct cmd_context *cmd, int *opts, int count,
+int opt_in_list_is_set(struct cmd_context *cmd, const uint16_t *opts, int count,
 		       int *match_count, int *unmatch_count)
 {
 	int match = 0;
@@ -2634,7 +2634,7 @@ int opt_in_list_is_set(struct cmd_context *cmd, int *opts, int count,
 	return match ? 1 : 0;
 }
       
-void opt_array_to_str(struct cmd_context *cmd, int *opts, int count,
+void opt_array_to_str(struct cmd_context *cmd, const uint16_t *opts, int count,
 		      char *buf, int len)
 {
 	int pos = 0;
@@ -2933,10 +2933,7 @@ static int _lv_types_match(struct cmd_context *cmd, struct logical_volume *lv, u
 		 * in tools.h
 		 */
 
-		if (!type->fn)
-			match = _lv_is_type(cmd, lv, lvt_enum);
-		else
-			match = type->fn(cmd, lv);
+		match = _lv_is_type(cmd, lv, lvt_enum);
 
 		if (match)
 			found_a_match = 1;
@@ -2976,10 +2973,7 @@ static int _lv_props_match(struct cmd_context *cmd, struct logical_volume *lv, u
 		if (!(prop = get_lv_prop(lvp_enum)))
 			continue;
 
-		if (!prop->fn)
-			match = _lv_is_prop(cmd, lv, lvp_enum);
-		else
-			match = prop->fn(cmd, lv);
+		match = _lv_is_prop(cmd, lv, lvp_enum);
 
 		if (!match)
 			found_a_mismatch = 1;
@@ -3006,7 +3000,7 @@ static int _check_lv_types(struct cmd_context *cmd, struct logical_volume *lv, i
 
 	if (!val_bit_is_set(cmd->command->required_pos_args[pos-1].def.val_bits, lv_VAL)) {
 		log_error(INTERNAL_ERROR "Command %d:%s arg position %d does not permit an LV (%llx)",
-			  cmd->command->command_index, cmd->command->command_id,
+			  cmd->command->command_index, command_enum(cmd->command->command_enum),
 			  pos, (unsigned long long)cmd->command->required_pos_args[pos-1].def.val_bits);
 		return 0;
 	}
@@ -3105,7 +3099,7 @@ static int _check_lv_rules(struct cmd_context *cmd, struct logical_volume *lv)
 		 * Check the options, LV types, LV properties.
 		 */
 
-		if (rule->check_opts)
+		if (rule->check_opts_count)
 			opt_in_list_is_set(cmd, rule->check_opts, rule->check_opts_count,
 					   &opts_match_count, &opts_unmatch_count);
 
@@ -3127,7 +3121,7 @@ static int _check_lv_rules(struct cmd_context *cmd, struct logical_volume *lv)
 
 		/* Fail if any invalid options are set. */
 
-		if (rule->check_opts && (rule->rule == RULE_INVALID) && opts_match_count) {
+		if (rule->check_opts_count && (rule->rule == RULE_INVALID) && opts_match_count) {
 			memset(buf, 0, sizeof(buf));
 			opt_array_to_str(cmd, rule->check_opts, rule->check_opts_count, buf, sizeof(buf));
 			log_warn("WARNING: Command on LV %s has invalid use of option %s.",
@@ -3137,7 +3131,7 @@ static int _check_lv_rules(struct cmd_context *cmd, struct logical_volume *lv)
 
 		/* Fail if any required options are not set. */
 
-		if (rule->check_opts && (rule->rule == RULE_REQUIRE) && opts_unmatch_count)  {
+		if (rule->check_opts_count && (rule->rule == RULE_REQUIRE) && opts_unmatch_count)  {
 			memset(buf, 0, sizeof(buf));
 			opt_array_to_str(cmd, rule->check_opts, rule->check_opts_count, buf, sizeof(buf));
 			log_warn("WARNING: Command on LV %s requires option %s.",

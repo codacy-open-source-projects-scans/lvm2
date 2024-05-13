@@ -535,7 +535,8 @@ int unmangle_string(const char *str, const char *str_name, size_t len,
 		}
 
 		if (str[i] == '\\' && str[i+1] == 'x') {
-			if (!sscanf(&str[i+2], "%2x%s", &code, str_rest)) {
+			if (!sscanf(&str[i+2], "%2x%" DM_TO_STRING(DM_NAME_LEN) "s",
+				    &code, str_rest)) {
 				log_debug_activation("Hex encoding mismatch detected in %s \"%s\" "
 						     "while trying to unmangle it.", str_name, str);
 				goto out;
@@ -1058,9 +1059,8 @@ static int _add_dev_node(const char *dev_name, uint32_t major, uint32_t minor,
 		if (info.st_rdev == dev)
 			return 1;
 
-		if (unlink(path) < 0) {
-			log_error("Unable to unlink device node for '%s'",
-				  dev_name);
+		if (unlink(path) && (errno != ENOENT)) {
+			log_sys_error("unlink", path);
 			return 0;
 		}
 	} else if (_warn_if_op_needed(warn_if_udev_failed))
@@ -1104,8 +1104,8 @@ static int _rm_dev_node(const char *dev_name, int warn_if_udev_failed)
 			 "Falling back to direct node removal.", path);
 
 	/* udev may already have deleted the node. Ignore ENOENT. */
-	if (unlink(path) < 0 && errno != ENOENT) {
-		log_error("Unable to unlink device node for '%s'", dev_name);
+	if (unlink(path) && (errno != ENOENT)) {
+		log_sys_error("unlink", path);
 		return 0;
 	}
 
@@ -1449,9 +1449,10 @@ struct node_op_parms {
 
 static void _store_str(char **pos, char **ptr, const char *str)
 {
-	strcpy(*pos, str);
+	size_t len = strlen(str) + 1;
+	memcpy(*pos, str, len);
 	*ptr = *pos;
-	*pos += strlen(*ptr) + 1;
+	*pos += len;
 }
 
 static void _del_node_op(struct node_op_parms *nop)
@@ -1701,15 +1702,17 @@ const char *dm_sysfs_dir(void)
  */
 int dm_set_uuid_prefix(const char *uuid_prefix)
 {
+	size_t len;
+
 	if (!uuid_prefix)
 		return_0;
 
-	if (strlen(uuid_prefix) > DM_MAX_UUID_PREFIX_LEN) {
+	if ((len = strlen(uuid_prefix)) > DM_MAX_UUID_PREFIX_LEN) {
 		log_error("New uuid prefix %s too long.", uuid_prefix);
 		return 0;
 	}
 
-	strcpy(_default_uuid_prefix, uuid_prefix);
+	memcpy(_default_uuid_prefix, uuid_prefix, len + 1);
 
 	return 1;
 }
@@ -1737,6 +1740,9 @@ static void _unmangle_mountinfo_string(const char *src, char *buf)
 	}
 	*buf = '\0';
 }
+
+/* coverity[+tainted_string_sanitize_content:arg-0] */
+static int _sanitize_line(const char *line) { return 1; }
 
 /* Parse one line of mountinfo and unmangled target line */
 static int _mountinfo_parse_line(const char *line, unsigned *maj, unsigned *min, char *buf)
@@ -1808,7 +1814,8 @@ int dm_mountinfo_read(dm_mountinfo_line_callback_fn read_fn, void *cb_data)
 	}
 
 	while (!feof(minfo) && fgets(buffer, sizeof(buffer), minfo))
-		if (!_mountinfo_parse_line(buffer, &maj, &min, target) ||
+		if (!_sanitize_line(buffer) ||
+		    !_mountinfo_parse_line(buffer, &maj, &min, target) ||
 		    !read_fn(buffer, maj, min, target, cb_data)) {
 			stack;
 			r = 0;

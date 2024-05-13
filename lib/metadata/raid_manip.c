@@ -968,10 +968,13 @@ static char *_generate_raid_name(struct logical_volume *lv,
 {
 	char name[NAME_LEN], *lvname;
 	int historical;
+	char count_suffix[16] = { 0 };
 
-	if (dm_snprintf(name, sizeof(name), 
-			(count >= 0) ? "%s_%s_%u" : "%s_%s",
-			lv->name, suffix, count) < 0) {
+	if (count >= 0)
+		snprintf(count_suffix, sizeof(count_suffix), "_%u", (unsigned)count);
+
+	if (dm_snprintf(name, sizeof(name), "%s_%s%s",
+			lv->name, suffix, count_suffix) < 0) {
 		log_error("Failed to new raid name for %s.",
 			  display_lvname(lv));
 		return NULL;
@@ -4409,6 +4412,7 @@ static struct lv_segment *_convert_striped_to_raid0(struct logical_volume *lv,
 	struct lv_segment *seg, *raid0_seg;
 	struct segment_type *segtype;
 	struct dm_list data_lvs;
+	struct lv_list *l;
 
 	dm_list_iterate_items(seg, &lv->segments)
 		area_len += seg->area_len;
@@ -4452,7 +4456,12 @@ static struct lv_segment *_convert_striped_to_raid0(struct logical_volume *lv,
 	 * areas based on the first data LVs properties derived
 	 * from the first new raid0 LVs first segment
 	 */
-	seg = first_seg(dm_list_item(dm_list_first(&data_lvs), struct lv_list)->lv);
+	if (!(l = dm_list_item(dm_list_first(&data_lvs), struct lv_list))) {
+		log_error(INTERNAL_ERROR "Invalid data lvs for raid0 LV %s.",
+			  display_lvname(lv));
+		return NULL;
+	}
+	seg = first_seg(l->lv);
 	if (!(raid0_seg = alloc_lv_segment(segtype, lv,
 					   0 /* le */, lv->le_count /* len */,
 					   0, 0,
@@ -4517,7 +4526,7 @@ struct possible_type {
 	const uint32_t options;
 };
 
-static struct possible_takeover_reshape_type _possible_takeover_reshape_types[] = {
+static const struct possible_takeover_reshape_type _possible_takeover_reshape_types[] = {
 	/* striped -> raid1 */
 	{ .current_types  = SEG_STRIPED_TARGET, /* linear, i.e. seg->area_count = 1 */
 	  .possible_types = SEG_RAID1,
@@ -4629,12 +4638,12 @@ static struct possible_takeover_reshape_type _possible_takeover_reshape_types[] 
 /*
  * Return possible_type struct for current segment type.
  */
-static struct possible_takeover_reshape_type *_get_possible_takeover_reshape_type(const struct lv_segment *seg_from,
-										   const struct segment_type *segtype_to,
-										   struct possible_type *last_pt)
+static const struct possible_takeover_reshape_type *_get_possible_takeover_reshape_type(const struct lv_segment *seg_from,
+											const struct segment_type *segtype_to,
+											const struct possible_type *last_pt)
 {
-	struct possible_takeover_reshape_type *lpt = (struct possible_takeover_reshape_type *) last_pt;
-	struct possible_takeover_reshape_type *pt = lpt ? lpt + 1 : _possible_takeover_reshape_types;
+	const struct possible_takeover_reshape_type *lpt = (const struct possible_takeover_reshape_type *) last_pt;
+	const struct possible_takeover_reshape_type *pt = lpt ? lpt + 1 : _possible_takeover_reshape_types;
 
 	for ( ; pt->current_types; pt++)
 		if ((seg_from->segtype->flags & pt->current_types) &&
@@ -5048,7 +5057,7 @@ static int _rename_area_lvs(struct logical_volume *lv, const char *suffix)
 	/* Create _generate_raid_name() suffixes w/ or w/o passed in @suffix */
 	for (s = 0; s < SLV_COUNT; s++)
 		if (!(sfx[s] = dm_pool_alloc(lv->vg->cmd->mem, sz)) ||
-		    dm_snprintf(sfx[s], sz, suffix ? "%s%s" : "%s", s ? "rmeta" : "rimage", suffix) < 0)
+		    dm_snprintf(sfx[s], sz, "%s%s", (s) ? "rmeta" : "rimage", (suffix) ? : "") < 0)
 			return_0;
 
 	/* Change names (temporarily) to be able to shift numerical name suffixes */
@@ -6066,7 +6075,7 @@ static int _log_prohibited_option(const struct lv_segment *seg_from,
  * Find takeover raid flag for segment type flag of @seg
  */
 /* Segment type flag correspondence for raid5 <-> raid6 conversions */
-static uint64_t _r5_to_r6[][2] = {
+static const uint64_t _r5_to_r6[][2] = {
 	{ SEG_RAID5_LS, SEG_RAID6_LS_6 },
 	{ SEG_RAID5_LA, SEG_RAID6_LA_6 },
 	{ SEG_RAID5_RS, SEG_RAID6_RS_6 },
@@ -6426,22 +6435,13 @@ static int _conversion_options_allowed(const struct lv_segment *seg_from,
 	    !yes &&
 	    strcmp((*segtype_to)->name, SEG_TYPE_NAME_MIRROR) && /* "mirror" is prompted for later */
 	    !_is_same_level(seg_from->segtype, *segtype_to)) { /* Prompt here for takeover */
-		const char *basic_fmt = "Are you sure you want to convert %s LV %s";
-		const char *type_fmt = " to %s type";
-		const char *question_fmt = "? [y/n]: ";
-		char *fmt;
-		size_t sz = strlen(basic_fmt) + ((seg_from->segtype == *segtype_to) ? 0 : strlen(type_fmt)) + strlen(question_fmt) + 1;
+		unsigned diff_seg = (seg_from->segtype != *segtype_to);
 
-		if (!(fmt = dm_pool_alloc(seg_from->lv->vg->cmd->mem, sz)))
-			return_0;
-
-		if (dm_snprintf(fmt, sz, "%s%s%s", basic_fmt, (seg_from->segtype == *segtype_to) ? "" : type_fmt, question_fmt) < 0) {
-			log_error("dm_snprintf failed.");
-			return 0;
-		}
-
-		if (yes_no_prompt(fmt, lvseg_name(seg_from), display_lvname(seg_from->lv),
-				  (*segtype_to)->name) == 'n') {
+		if (yes_no_prompt("Are you sure you want to convert %s LV %s%s%s%s? [y/n]: ",
+				  lvseg_name(seg_from), display_lvname(seg_from->lv),
+				  (diff_seg) ? " to "  : "",
+				  (diff_seg) ? (*segtype_to)->name : "",
+				  (diff_seg) ? " type" : "") == 'n') {
 			log_error("Logical volume %s NOT converted.", display_lvname(seg_from->lv));
 			r = 0;
 		}

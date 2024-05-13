@@ -95,7 +95,7 @@ static int _lvchange_pool_update(struct cmd_context *cmd,
 				 uint32_t *mr)
 {
 	int update = 0;
-	unsigned val;
+	thin_zero_t val;
 	thin_discards_t discards;
 
 	if (arg_is_set(cmd, discards_ARG)) {
@@ -1919,6 +1919,6 @@ int lvchange_persistent_cmd(struct cmd_context *cmd, int argc, char **argv)
 int lvchange(struct cmd_context *cmd, int argc, char **argv)
 {
 	log_error(INTERNAL_ERROR "Missing function for command definition %d:%s.",
-		  cmd->command->command_index, cmd->command->command_id);
+		  cmd->command->command_index, command_enum(cmd->command->command_enum));
 	return ECMD_FAILED;
 }

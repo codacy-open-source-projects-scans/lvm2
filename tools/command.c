@@ -32,9 +32,8 @@
 /* see cmd_names[] below, one for each unique "ID" in command-lines.in */
 
 struct cmd_name {
-	const char *enum_name; /* "foo_CMD" */
-	int cmd_enum;          /* foo_CMD */
-	const char *name;      /* "foo" from string after ID: */
+	const char name[68];   /* "foo" from string after ID: */
+	uint16_t cmd_enum;     /* foo_CMD */
 };
 
 /* create table of value names, e.g. String, and corresponding enum from vals.h */
@@ -47,8 +46,8 @@ static const struct val_name val_names[VAL_COUNT + 1] = {
 
 /* create table of option names, e.g. --foo, and corresponding enum from args.h */
 
-static struct opt_name opt_names[ARG_COUNT + 1] = {
-#define arg(a, b, c, d, e, f, g) { # a, a, b, "", "--" c, d, e, f, g },
+static const struct opt_name opt_names[ARG_COUNT + 1] = {
+#define arg(a, b, c, d, e, f, g) { # a, b, a, "--" c, d, e, f, g },
 #include "args.h"
 #undef arg
 };
@@ -56,7 +55,8 @@ static struct opt_name opt_names[ARG_COUNT + 1] = {
 /* create table of lv property names, e.g. lv_is_foo, and corresponding enum from lv_props.h */
 
 static const struct lv_prop lv_props[LVP_COUNT + 1] = {
-#define lvp(a, b, c) { # a, a, b, c },
+	{ "" },
+#define lvp(a) { "lv_" # a, a ## _LVP },
 #include "lv_props.h"
 #undef lvp
 };
@@ -64,7 +64,8 @@ static const struct lv_prop lv_props[LVP_COUNT + 1] = {
 /* create table of lv type names, e.g. linear and corresponding enum from lv_types.h */
 
 static const struct lv_type lv_types[LVT_COUNT + 1] = {
-#define lvt(a, b, c) { # a, a, b, c },
+	{ "" },
+#define lvt(a) { # a, a ## _LVT },
 #include "lv_types.h"
 #undef lvt
 };
@@ -72,7 +73,7 @@ static const struct lv_type lv_types[LVT_COUNT + 1] = {
 /* create table of command IDs */
 
 static const struct cmd_name cmd_names[CMD_COUNT + 1] = {
-#define cmd(a, b) { # a, a, # b },
+#define cmd(a, b) { # b, a },
 #include "../include/cmds.h"
 #undef cmd
 };
@@ -84,22 +85,21 @@ static const struct cmd_name cmd_names[CMD_COUNT + 1] = {
 
 #ifdef MAN_PAGE_GENERATOR
 
-static struct command_name command_names[] = {
-#define xx(a, b, c...) { # a, b, c },
+static const struct command_name command_names[] = {
+#define xx(a, b, c...) { # a, b, c, NULL, a ## _COMMAND },
 #include "commands.h"
 #undef xx
-	{ .name = NULL }
 };
 static struct command commands[COMMAND_COUNT];
 
 #else /* MAN_PAGE_GENERATOR */
 
-struct command_name command_names[] = {
-#define xx(a, b, c...) { # a, b, c, a},
+const struct command_name command_names[] = {
+#define xx(a, b, c...) { # a, b, c, a, a ## _COMMAND },
 #include "commands.h"
 #undef xx
-	{ .name = NULL }
 };
+
 extern struct command commands[COMMAND_COUNT]; /* defined in lvmcmdline.c */
 
 const struct opt_name *get_opt_name(int opt)
@@ -128,9 +128,11 @@ const struct lv_type *get_lv_type(int lvt_enum)
 
 #endif /* MAN_PAGE_GENERATOR */
 
+struct command_name_args command_names_args[LVM_COMMAND_COUNT] = { 0 };
+
 /* array of pointers into opt_names[] that is sorted alphabetically (by long opt name) */
 
-static struct opt_name *opt_names_alpha[ARG_COUNT + 1];
+static const struct opt_name *opt_names_alpha[ARG_COUNT + 1];
 
 /* lvm_all is for recording options that are common for all lvm commands */
 
@@ -211,12 +213,9 @@ static int _val_str_to_num(char *str)
 	if ((new = strchr(name, '_')))
 		*new = '\0';
 
-	for (i = 0; i < VAL_COUNT; i++) {
-		if (!val_names[i].name)
-			break;
+	for (i = 0; i < VAL_COUNT; ++i)
 		if (!strncmp(name, val_names[i].name, strlen(val_names[i].name)))
 			return val_names[i].val_enum;
-	}
 
 	return 0;
 }
@@ -287,10 +286,10 @@ err:
 
 /* "foo" string to foo_CMD int */
 
-int command_id_to_enum(const char *str)
+unsigned command_id_to_enum(const char *str)
 {
 	int i;
-	int first = 1, last = CMD_COUNT - 1, middle;
+	unsigned first = 1, last = CMD_COUNT - 1, middle;
 
 	while (first <= last) {
 		middle = first + (last - first) / 2;
@@ -304,6 +303,11 @@ int command_id_to_enum(const char *str)
 
 	log_error("Cannot find command %s.", str);
 	return CMD_NONE;
+}
+
+const char *command_enum(unsigned command_enum)
+{
+	return cmd_names[command_enum].name;
 }
 
 /* "lv_is_prop" to is_prop_LVP */
@@ -380,21 +384,23 @@ static uint64_t _lv_to_bits(struct command *cmd, char *name)
 	return lvt_bits;
 }
 
-const struct command_name *find_command_name(const char *name)
+static unsigned _find_lvm_command_enum(const char *name)
 {
-	static int _command_names_count = -1;
 	int first = 0, last, middle;
 	int i;
 
+#ifdef MAN_PAGE_GENERATOR
+	/* Validate cmd_names & command_names arrays are properly sorted */
+	static int _command_names_count = -1;
+
 	if (_command_names_count == -1) {
-		/* Validate cmd_names & command_names arrays are properly sorted */
 		for (i = 1; i < CMD_COUNT - 2; i++)
 			if (strcmp(cmd_names[i].name, cmd_names[i + 1].name) > 0) {
 				log_error("File cmds.h has unsorted name entry %s.",
 					  cmd_names[i].name);
 				return 0;
 			}
-		for (i = 1; command_names[i].name; i++) /* assume > 1 */
+		for (i = 1; i < LVM_COMMAND_COUNT; ++i) /* assume > 1 */
 			if (strcmp(command_names[i - 1].name, command_names[i].name) > 0) {
 				log_error("File commands.h has unsorted name entry %s.",
 					  command_names[i].name);
@@ -402,7 +408,8 @@ const struct command_name *find_command_name(const char *name)
 			}
 		_command_names_count = i - 1;
 	}
-	last = _command_names_count;
+#endif
+	last = LVM_COMMAND_COUNT - 1;
 
 	while (first <= last) {
 		middle = first + (last - first) / 2;
@@ -411,28 +418,17 @@ const struct command_name *find_command_name(const char *name)
 		else if (i > 0)
 			last = middle - 1;
 		else
-			return &command_names[middle];
+			return middle;
 	}
 
-	return NULL;
+	return -1;
 }
 
-static const struct command_name *_find_command_name(const char *name)
+const struct command_name *find_command_name(const char *name)
 {
-	if (!islower(name[0]))
-		return NULL; /* Commands starts with lower-case */
+	int r = _find_lvm_command_enum(name);
 
-	return find_command_name(name);
-}
-
-static const char *_is_command_name(char *str)
-{
-	const struct command_name *c;
-
-	if ((c = _find_command_name(str)))
-		return c->name;
-
-	return NULL;
+	return (r < LVM_COMMAND_COUNT) ? &command_names[r] : NULL;
 }
 
 static int _is_opt_name(char *str)
@@ -656,7 +652,7 @@ static void _add_oo_definition_line(const char *name, const char *line)
 	oo = &_oo_lines[_oo_line_count++];
 
 	if (!(oo->name = strdup(name))) {
-		log_error("Failer to duplicate name %s.", name);
+		log_error("Failed to duplicate name %s.", name);
 		return; /* FIXME: return code */
 	}
 
@@ -669,7 +665,7 @@ static void _add_oo_definition_line(const char *name, const char *line)
 
 	start = strchr(line, ':') + 2;
 	if (!(oo->line = strdup(start))) {
-		log_error("Failer to duplicate line %s.", start);
+		log_error("Filler to duplicate line %s.", start);
 		return;
 	}
 }
@@ -1099,8 +1095,6 @@ static void _add_autotype(struct cmd_context *cmdtool, struct command *cmd,
 		cmd->autotype = dm_pool_strdup(cmdtool->libmem, line_argv[1]);
 }
 
-#define MAX_RULE_OPTS 64
-
 static void _add_rule(struct cmd_context *cmdtool, struct command *cmd,
 		      int line_argc, char *line_argv[])
 {
@@ -1110,7 +1104,7 @@ static void _add_rule(struct cmd_context *cmdtool, struct command *cmd,
 	int check = 0;
 
 	if (cmd->rule_count == CMD_MAX_RULES) {
-		log_error("Parsing command defs: too many rules for cmd.");
+		log_error("Parsing command defs: too many rules for cmd, increate CMD_MAX_RULES.");
 		cmd->cmd_flags |= CMD_FLAG_PARSE_ERROR;
 		return;
 	}
@@ -1136,22 +1130,10 @@ static void _add_rule(struct cmd_context *cmdtool, struct command *cmd,
 		}
 
 		else if (!strncmp(arg, "--", 2)) {
-			if (!rule->opts) {
-				if (!(rule->opts = dm_pool_alloc(cmdtool->libmem, MAX_RULE_OPTS * sizeof(int)))) {
-					log_error("Parsing command defs: no mem.");
-					cmd->cmd_flags |= CMD_FLAG_PARSE_ERROR;
-					return;
-				}
-				memset(rule->opts, 0, MAX_RULE_OPTS * sizeof(int));
-			}
-
-			if (!rule->check_opts) {
-				if (!(rule->check_opts = dm_pool_alloc(cmdtool->libmem, MAX_RULE_OPTS * sizeof(int)))) {
-					log_error("Parsing command defs: no mem.");
-					cmd->cmd_flags |= CMD_FLAG_PARSE_ERROR;
-					return;
-				}
-				memset(rule->check_opts, 0, MAX_RULE_OPTS * sizeof(int));
+			if (rule->opts_count >= MAX_RULE_OPTS || rule->check_opts_count >= MAX_RULE_OPTS) {
+				log_error("Parsing command defs: too many cmd_rule options for cmd, increase MAX_RULE_OPTS.");
+				cmd->cmd_flags |= CMD_FLAG_PARSE_ERROR;
+				return;
 			}
 
 			if (check)
@@ -1200,18 +1182,36 @@ void factor_common_options(void)
 	int cn, opt_enum, ci, oo, ro, found;
 	struct command *cmd;
 
-	for (cn = 0; command_names[cn].name; cn++) {
-		/* already factored */
-		if (command_names[cn].variants)
-			continue;
+	for (cn = 0; cn < LVM_COMMAND_COUNT; ++cn) {
+
+		if (command_names_args[cn].variants)
+			return; /* already factored */
 
 		for (ci = 0; ci < COMMAND_COUNT; ci++) {
 			cmd = &commands[ci];
 
-			if (strcmp(cmd->name, command_names[cn].name))
+			if (cmd->lvm_command_enum != command_names[cn].lvm_command_enum)
 				continue;
 
-			command_names[cn].variants++;
+			command_names_args[cn].variants++;
+
+			if (cmd->ro_count || cmd->any_ro_count)
+				command_names_args[cn].variant_has_ro = 1;
+			if (cmd->rp_count)
+				command_names_args[cn].variant_has_rp = 1;
+			if (cmd->oo_count)
+				command_names_args[cn].variant_has_oo = 1;
+			if (cmd->op_count)
+				command_names_args[cn].variant_has_op = 1;
+
+			for (ro = 0; ro < cmd->ro_count + cmd->any_ro_count; ro++) {
+				command_names_args[cn].all_options[cmd->required_opt_args[ro].opt] = 1;
+
+				if ((cmd->required_opt_args[ro].opt == size_ARG) && !strncmp(cmd->name, "lv", 2))
+					command_names_args[cn].all_options[extents_ARG] = 1;
+			}
+			for (oo = 0; oo < cmd->oo_count; oo++)
+				command_names_args[cn].all_options[cmd->optional_opt_args[oo].opt] = 1;
 		}
 
 		for (opt_enum = 0; opt_enum < ARG_COUNT; opt_enum++) {
@@ -1219,29 +1219,10 @@ void factor_common_options(void)
 			for (ci = 0; ci < COMMAND_COUNT; ci++) {
 				cmd = &commands[ci];
 
-				if (strcmp(cmd->name, command_names[cn].name))
+				if (cmd->lvm_command_enum != command_names[cn].lvm_command_enum)
 					continue;
 
-				if (cmd->ro_count || cmd->any_ro_count)
-					command_names[cn].variant_has_ro = 1;
-				if (cmd->rp_count)
-					command_names[cn].variant_has_rp = 1;
-				if (cmd->oo_count)
-					command_names[cn].variant_has_oo = 1;
-				if (cmd->op_count)
-					command_names[cn].variant_has_op = 1;
-
-				for (ro = 0; ro < cmd->ro_count + cmd->any_ro_count; ro++) {
-					command_names[cn].all_options[cmd->required_opt_args[ro].opt] = 1;
-
-					if ((cmd->required_opt_args[ro].opt == size_ARG) && !strncmp(cmd->name, "lv", 2))
-						command_names[cn].all_options[extents_ARG] = 1;
-				}
-				for (oo = 0; oo < cmd->oo_count; oo++)
-					command_names[cn].all_options[cmd->optional_opt_args[oo].opt] = 1;
-
 				found = 0;
-
 				for (oo = 0; oo < cmd->oo_count; oo++) {
 					if (cmd->optional_opt_args[oo].opt == opt_enum) {
 						found = 1;
@@ -1254,7 +1235,7 @@ void factor_common_options(void)
 			}
 
 			/* all commands starting with this name use this option */
-			command_names[cn].common_options[opt_enum] = 1;
+			command_names_args[cn].common_options[opt_enum] = 1;
  next_opt:
 			;
 		}
@@ -1324,6 +1305,7 @@ int define_commands(struct cmd_context *cmdtool, const char *run_name)
 	int copy_pos = 0;
 	int skip = 0;
 	int i;
+	int lvm_command_enum;
 
 	memset(&commands, 0, sizeof(commands));
 
@@ -1346,27 +1328,21 @@ int define_commands(struct cmd_context *cmdtool, const char *run_name)
 			continue;
 
 		/* New cmd def begins: command_name <required opt/pos args> */
-		if ((name = _is_command_name(line_argv[0]))) {
-			if (cmd_count >= COMMAND_COUNT) {
+		if (islower(line_argv[0][0]) && /* All commands are lower-case only */
+		    ((lvm_command_enum = _find_lvm_command_enum(line_argv[0])) < LVM_COMMAND_COUNT)) {
+			if (cmd_count >= COMMAND_COUNT)
 				return 0;
-			}
 
 			/*
 			 * FIXME: when running one specific command name,
 			 * we can optimize by not parsing command defs
 			 * that don't start with that command name.
 			 */
-
 			cmd = &commands[cmd_count];
 			cmd->command_index = cmd_count;
 			cmd_count++;
-			cmd->name = dm_pool_strdup(cmdtool->libmem, name);
-
-			if (!cmd->name) {
-				/* FIXME */
-				stack;
-				return 0;
-			}
+			cmd->lvm_command_enum = lvm_command_enum;
+			cmd->name = name = command_names[lvm_command_enum].name;
 
 			if (run_name && strcmp(run_name, name)) {
 				skip = 1;
@@ -1431,14 +1407,9 @@ int define_commands(struct cmd_context *cmdtool, const char *run_name)
 		}
 
 		if (cmd && _is_id_line(line_argv[0])) {
-#ifdef MAN_PAGE_GENERATOR
-			free((void*)cmd->command_id);
-#endif
-			cmd->command_id = dm_pool_strdup(cmdtool->libmem, line_argv[1]);
-
-			if (!cmd->command_id) {
-				/* FIXME */
-				stack;
+			cmd->command_enum = command_id_to_enum(line_argv[1]);
+			if (cmd->command_enum == CMD_NONE) {
+				cmd->cmd_flags |= CMD_FLAG_PARSE_ERROR;
 				return 0;
 			}
 			continue;
@@ -1520,6 +1491,7 @@ int define_commands(struct cmd_context *cmdtool, const char *run_name)
 	return 1;
 }
 
+#ifndef MAN_PAGE_GENERATOR
 /*
  * The opt_names[] table describes each option.  It is indexed by the
  * option typedef, e.g. size_ARG.  The size_ARG entry specifies the
@@ -1536,8 +1508,10 @@ int define_commands(struct cmd_context *cmdtool, const char *run_name)
  * (they are created at build time), but different commands accept different
  * types of values for the same option, e.g. one command will accept
  * signed size values (ssizemb_VAL), while another does not accept a signed
- * number, (sizemb_VAL).  This function deals with this problem by tweaking
- * the opt_names[] table at run time according to the specific command being run.
+ * number, (sizemb_VAL).
+ *
+ * To resolve the issue, at run time command 'reconfigures' its opt_names[]
+ * values by querying particular arg_enum for particular command.
  * i.e. it changes size_ARG to accept sizemb_VAL or ssizemb_VAL depending
  * on the command.
  *
@@ -1561,53 +1535,57 @@ int define_commands(struct cmd_context *cmdtool, const char *run_name)
  * so the commands[] entry for the cmd def already references the
  * correct ssizemb_VAL.
  */
-void configure_command_option_values(const char *name)
+int configure_command_option_values(const struct command_name *cname, int arg_enum, int val_enum)
 {
-	if (!strcmp(name, "lvresize")) {
-		/* relative +|- allowed for LV, + allowed for metadata */
-		opt_names[size_ARG].val_enum = ssizemb_VAL;
-		opt_names[extents_ARG].val_enum = sextents_VAL;
-		opt_names[poolmetadatasize_ARG].val_enum = psizemb_VAL;
-		return;
-	}
-
-	if (!strcmp(name, "lvextend")) {
-		/* relative + allowed */
-		opt_names[size_ARG].val_enum = psizemb_VAL;
-		opt_names[extents_ARG].val_enum = pextents_VAL;
-		opt_names[poolmetadatasize_ARG].val_enum = psizemb_VAL;
-		return;
-	}
-
-	if (!strcmp(name, "lvreduce")) {
-		/* relative - allowed */
-		opt_names[size_ARG].val_enum = nsizemb_VAL;
-		opt_names[extents_ARG].val_enum = nextents_VAL;
-		return;
-	}
-
-	if (!strcmp(name, "lvconvert")) {
-		opt_names[mirrors_ARG].val_enum = snumber_VAL;
-		return;
-	}
-
-	if (!strcmp(name, "lvcreate")) {
+	switch (cname->lvm_command_enum) {
+	case lvconvert_COMMAND:
+		switch (arg_enum) {
+		case mirrors_ARG:		return snumber_VAL;
+		}
+		break;
+	case lvcreate_COMMAND:
 		/*
-		 * lvcreate is a bit of a mess because it has previously
-		 * accepted + but used it as an absolute value, so we
-		 * have to recognize it.  (We don't want to show the +
-		 * option in man/help, though, since it's confusing,
+		 * lvcreate is accepts also sizes with + (positive) value,
+		 * so we have to recognize it.  But we don't want to show
+		 * the + option in man/help as it can be seen confusing,
 		 * so there's a special case when printing man/help
 		 * output to show sizemb_VAL/extents_VAL rather than
 		 * psizemb_VAL/pextents_VAL.)
 		 */
-		opt_names[size_ARG].val_enum = psizemb_VAL;
-		opt_names[extents_ARG].val_enum = pextents_VAL;
-		opt_names[poolmetadatasize_ARG].val_enum = psizemb_VAL;
-		opt_names[mirrors_ARG].val_enum = pnumber_VAL;
-		return;
+		switch (arg_enum) {
+		case size_ARG:			return psizemb_VAL;
+		case extents_ARG:		return pextents_VAL;
+		case poolmetadatasize_ARG:	return psizemb_VAL;
+		case mirrors_ARG:		return pnumber_VAL;
+		}
+		break;
+	case lvextend_COMMAND:
+		/* relative + allowed */
+		switch (arg_enum) {
+		case size_ARG:			return psizemb_VAL;
+		case extents_ARG:		return pextents_VAL;
+		case poolmetadatasize_ARG:	return psizemb_VAL;
+		}
+		break;
+	case lvreduce_COMMAND:
+		/* relative - allowed */
+		switch (arg_enum) {
+		case size_ARG:			return nsizemb_VAL;
+		case extents_ARG:		return nextents_VAL;
+		}
+		break;
+	case lvresize_COMMAND:
+		switch (arg_enum) {
+		case size_ARG:			return ssizemb_VAL;
+		case extents_ARG:		return sextents_VAL;
+		case poolmetadatasize_ARG:	return psizemb_VAL;
+		}
+		break;
 	}
+
+	return val_enum;
 }
+#endif
 
 /* type_LVT to "type" */
 
@@ -1647,38 +1625,49 @@ static void _print_usage_description(struct command *cmd)
 	}
 }
 
-static void _update_relative_opt(const char *name, int opt_enum, int *val_enum)
+/* Function remappas existing command definitions val_enums for printing
+ * within man pages or command's help lines */
+static int _update_relative_opt(const char *name, int opt_enum, int val_enum)
 {
 	/* check for relative sign */
-	switch (opt_enum) {
-	case extents_ARG:
-	case mirrors_ARG:
-	case poolmetadatasize_ARG:
-	case size_ARG:
+	if (!strcmp(name, "lvconvert"))
+		switch (opt_enum) {
+		case mirrors_ARG:	return snumber_VAL;
+		}
+	else if (!strcmp(name, "lvcreate"))
 		/*
 		 * Suppress the [+] prefix for lvcreate which we have to
 		 * accept for backwards compat, but don't want to advertise.
+		 * 'command-lines.in' currently uses PNumber in definition
 		 */
-		if (!strcmp(name, "lvcreate")) {
-			switch (*val_enum) {
-			case psizemb_VAL:
-				*val_enum = sizemb_VAL;
-				break;
-			case pextents_VAL:
-				*val_enum = extents_VAL;
-				break;
-			case pnumber_VAL:
-				if (opt_enum == mirrors_ARG)
-					*val_enum = number_VAL;
-				break;
-			}
+		switch (opt_enum) {
+		case mirrors_ARG:	return number_VAL;
 		}
-	}
+	else if (!strcmp(name, "lvextend"))
+		switch (opt_enum) {
+		case extents_ARG:	return pextents_VAL;
+		case poolmetadatasize_ARG:
+		case size_ARG:		return psizemb_VAL;
+		}
+	else if (!strcmp(name, "lvreduce"))
+		switch (opt_enum) {
+		case extents_ARG:	return nextents_VAL;
+		case size_ARG:		return nsizemb_VAL;
+		}
+	else if (!strcmp(name, "lvresize"))
+		switch (opt_enum) {
+		case extents_ARG:	return sextents_VAL;
+		case poolmetadatasize_ARG:
+					return psizemb_VAL;
+		case size_ARG:		return ssizemb_VAL;
+		}
+
+	return val_enum;
 }
 
 static void _print_val_usage(struct command *cmd, int opt_enum, int val_enum)
 {
-	_update_relative_opt(cmd->name, opt_enum, &val_enum);
+	val_enum = _update_relative_opt(cmd->name, opt_enum, val_enum);
 
 	if (!val_names[val_enum].usage)
 		printf("%s", val_names[val_enum].name);
@@ -1730,7 +1719,8 @@ static void _print_usage_def(struct command *cmd, int opt_enum, struct arg_def *
 
 void print_usage(struct command *cmd, int longhelp, int desc_first)
 {
-	const struct command_name *cname = _find_command_name(cmd->name);
+	const struct command_name *cname = &command_names[cmd->lvm_command_enum];
+	const struct command_name_args *cna = &command_names_args[cname->lvm_command_enum];
 	int any_req = (cmd->cmd_flags & CMD_FLAG_ANY_REQUIRED_OPT) ? 1 : 0;
 	int include_extents = 0;
 	int ro, rp, oo, op, opt_enum, first;
@@ -1883,7 +1873,7 @@ void print_usage(struct command *cmd, int longhelp, int desc_first)
 			 * see print_common_options_cmd()
 			 */
 
-			if (cname && (cname->variants > 1) && cname->common_options[opt_enum])
+			if (cna && (cna->variants > 1) && cna->common_options[opt_enum])
 				continue;
 
 			printf("\n\t[");
@@ -1923,7 +1913,7 @@ void print_usage(struct command *cmd, int longhelp, int desc_first)
 			 * see print_common_options_cmd()
 			 */
 
-			if (cname && (cname->variants > 1) && cname->common_options[opt_enum])
+			if (cna && (cna->variants > 1) && cna->common_options[opt_enum])
 				continue;
 
 			printf("\n\t[");
@@ -2007,6 +1997,7 @@ void print_usage_common_lvm(const struct command_name *cname, struct command *cm
 
 void print_usage_common_cmd(const struct command_name *cname, struct command *cmd)
 {
+	const struct command_name_args *cna = &command_names_args[cname->lvm_command_enum];
 	int oo, opt_enum;
 	int found_common_command = 0;
 
@@ -2015,11 +2006,11 @@ void print_usage_common_cmd(const struct command_name *cname, struct command *cm
 	 * are common to all commands with a common name.
 	 */
 
-	if (cname->variants < 2)
+	if (cna->variants < 2)
 		return;
 
 	for (opt_enum = 0; opt_enum < ARG_COUNT; opt_enum++) {
-		if (!cname->common_options[opt_enum])
+		if (!cna->common_options[opt_enum])
 			continue;
 		if (_is_lvm_all_opt(opt_enum))
 			continue;
@@ -2035,7 +2026,7 @@ void print_usage_common_cmd(const struct command_name *cname, struct command *cm
 	/* print options with short opts */
 
 	for (opt_enum = 0; opt_enum < ARG_COUNT; opt_enum++) {
-		if (!cname->common_options[opt_enum])
+		if (!cna->common_options[opt_enum])
 			continue;
 
 		if (_is_lvm_all_opt(opt_enum))
@@ -2063,7 +2054,7 @@ void print_usage_common_cmd(const struct command_name *cname, struct command *cm
 	/* print options without short opts */
 
 	for (opt_enum = 0; opt_enum < ARG_COUNT; opt_enum++) {
-		if (!cname->common_options[opt_enum])
+		if (!cna->common_options[opt_enum])
 			continue;
 
 		if (_is_lvm_all_opt(opt_enum))
@@ -2094,59 +2085,59 @@ void print_usage_common_cmd(const struct command_name *cname, struct command *cm
 void print_usage_notes(const struct command_name *cname)
 {
 	if (cname && command_has_alternate_extents(cname->name))
-		printf("  Special options for command:\n"
-		       "\t[ --extents Number[PERCENT] ]\n"
-		       "\tThe --extents option can be used in place of --size.\n"
-		       "\tThe number allows an optional percent suffix.\n"
-		       "\n");
+		printf("  Special options for command:\n\t"
+		       "[ --extents Number[PERCENT] ]\n\t"
+		       "The --extents option can be used in place of --size.\n\t"
+		       "The number allows an optional percent suffix.\n"
+		       "\n\t");
 
 	if (cname && !strcmp(cname->name, "lvcreate"))
-		printf("\t[ --name String ]\n"
-		       "\tThe --name option is not required but is typically used.\n"
-		       "\tWhen a name is not specified, a new LV name is generated\n"
-		       "\twith the \"lvol\" prefix and a unique numeric suffix.\n"
+		printf("[ --name String ]\n\t"
+		       "The --name option is not required but is typically used.\n\t"
+		       "When a name is not specified, a new LV name is generated\n\t"
+		       "with the \"lvol\" prefix and a unique numeric suffix.\n"
 		       "\n");
 
-	printf("  Common variables for lvm:\n"
-	       "\tVariables in option or position args are capitalized,\n"
-	       "\te.g. PV, VG, LV, Size, Number, String, Tag.\n"
-	       "\n"
+	printf("  Common variables for lvm:\n\t"
+	       "Variables in option or position args are capitalized,\n\t"
+	       "e.g. PV, VG, LV, Size, Number, String, Tag.\n"
+	       "\n\t"
 
-	       "\tPV\n"
-	       "\tPhysical Volume name, a device path under /dev.\n"
-	       "\tFor commands managing physical extents, a PV positional arg\n"
-	       "\tgenerally accepts a suffix indicating a range (or multiple ranges)\n"
-	       "\tof PEs. When the first PE is omitted, it defaults to the start of\n"
-	       "\tthe device, and when the last PE is omitted it defaults to the end.\n"
-	       "\tPV[:PE-PE]... is start and end range (inclusive),\n"
-	       "\tPV[:PE+PE]... is start and length range (counting from 0).\n"
-	       "\n"
+	       "PV\n\t"
+	       "Physical Volume name, a device path under /dev.\n\t"
+	       "For commands managing physical extents, a PV positional arg\n\t"
+	       "generally accepts a suffix indicating a range (or multiple ranges)\n\t"
+	       "of PEs. When the first PE is omitted, it defaults to the start of\n\t"
+	       "the device, and when the last PE is omitted it defaults to the end.\n\t"
+	       "PV[:PE-PE]... is start and end range (inclusive),\n\t"
+	       "PV[:PE+PE]... is start and length range (counting from 0).\n"
+	       "\n\t"
 
-	       "\tLV\n"
-	       "\tLogical Volume name. See lvm(8) for valid names. An LV positional\n"
-	       "\targ generally includes the VG name and LV name, e.g. VG/LV.\n"
-	       "\tLV followed by _<type> indicates that an LV of the given type is\n"
-	       "\trequired. (raid represents raid<N> type).\n"
-	       "\tThe _new suffix indicates that the LV name is new.\n"
-	       "\n"
+	       "LV\n\t"
+	       "Logical Volume name. See lvm(8) for valid names. An LV positional\n\t"
+	       "arg generally includes the VG name and LV name, e.g. VG/LV.\n\t"
+	       "LV followed by _<type> indicates that an LV of the given type is\n\t"
+	       "required. (raid represents raid<N> type).\n\t"
+	       "The _new suffix indicates that the LV name is new.\n"
+	       "\n\t"
 
-	       "\tTag\n"
-	       "\tTag name. See lvm(8) for information about tag names and using\n"
-	       "\ttags in place of a VG, LV or PV.\n"
-	       "\n"
+	       "Tag\n\t"
+	       "Tag name. See lvm(8) for information about tag names and using\n\t"
+	       "tags in place of a VG, LV or PV.\n"
+	       "\n\t"
 
-	       "\tSelect\n"
-	       "\tSelect indicates that a required positional arg can be omitted\n"
-	       "\tif the --select option is used. No arg appears in this position.\n"
-	       "\n"
+	       "Select\n\t"
+	       "Select indicates that a required positional arg can be omitted\n\t"
+	       "if the --select option is used. No arg appears in this position.\n"
+	       "\n\t"
 
-	       "\tSize[UNIT]\n"
-	       "\tSize is an input number that accepts an optional unit.\n"
-	       "\tInput units are always treated as base two values, regardless of\n"
-	       "\tcapitalization, e.g. 'k' and 'K' both refer to 1024.\n"
-	       "\tThe default input unit is specified by letter, followed by |UNIT.\n"
-	       "\tUNIT represents other possible input units: BbBsSkKmMgGtTpPeE.\n"
-	       "\t(This should not be confused with the output control --units, where\n"
-	       "\tcapital letters mean multiple of 1000.)\n"
+	       "Size[UNIT]\n\t"
+	       "Size is an input number that accepts an optional unit.\n\t"
+	       "Input units are always treated as base two values, regardless of\n\t"
+	       "capitalization, e.g. 'k' and 'K' both refer to 1024.\n\t"
+	       "The default input unit is specified by letter, followed by |UNIT.\n\t"
+	       "UNIT represents other possible input units: BbBsSkKmMgGtTpPeE.\n\t"
+	       "(This should not be confused with the output control --units, where\n\t"
+	       "capital letters mean multiple of 1000.)\n"
 	       "\n");
 }

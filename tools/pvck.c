@@ -284,7 +284,7 @@ static int _text_buf_parsable(char *text_buf, uint64_t text_size)
 #define MAX_LINE_CHECK 128
 
 #define MAX_DESC 1024
-char desc_line[MAX_DESC];
+static char _desc_line[MAX_DESC];
 
 static void _copy_line(char *in, char *out, int *len, int linesize)
 {
@@ -603,18 +603,18 @@ static int _dump_all_text(struct cmd_context *cmd, struct settings *set, const c
 		if (arg_is_set(cmd, verbose_ARG)) {
 			char *str1, *str2;
 			if ((str1 = strstr(text_buf, "description = "))) {
-				memset(desc_line, 0, sizeof(desc_line));
-				_copy_line(str1, desc_line, &len, sizeof(desc_line)-1);
-				if ((p = strchr(desc_line, '\n')))
+				memset(_desc_line, 0, sizeof(_desc_line));
+				_copy_line(str1, _desc_line, &len, sizeof(_desc_line)-1);
+				if ((p = strchr(_desc_line, '\n')))
 					*p = '\0';
-				log_print("%s", desc_line);
+				log_print("%s", _desc_line);
 			}
 			if (str1 && (str2 = strstr(str1, "creation_time = "))) {
-				memset(desc_line, 0, sizeof(desc_line));
-				_copy_line(str2, desc_line, &len, sizeof(desc_line)-1);
-				if ((p = strchr(desc_line, '\n')))
+				memset(_desc_line, 0, sizeof(_desc_line));
+				_copy_line(str2, _desc_line, &len, sizeof(_desc_line)-1);
+				if ((p = strchr(_desc_line, '\n')))
 					*p = '\0';
-				log_print("%s\n", desc_line);
+				log_print("%s\n", _desc_line);
 			}
 		}
 
@@ -782,7 +782,6 @@ static int _dump_raw_locn(struct device *dev, struct devicefile *def, int print_
 	uint64_t meta_offset, meta_size;
 	uint32_t meta_checksum;
 	uint32_t meta_flags;
-	int bad = 0;
 	int mn = mda_num; /* 1 or 2 */
 	int ri = rlocn_index; /* 0 or 1 */
 	int wrapped = 0;
@@ -837,8 +836,6 @@ static int _dump_raw_locn(struct device *dev, struct devicefile *def, int print_
 	if (!meta_offset)
 		return 1;
 
-	if (bad)
-		return 0;
 	return 1;
 }
 
@@ -3002,10 +2999,9 @@ out:
 	return 0;
 }
 
-int pvck(struct cmd_context *cmd, int argc, char **argv)
+static int _pvck_mf(struct metadata_file *mf, struct cmd_context *cmd, int argc, char **argv)
 {
-	struct settings set;
-	struct metadata_file mf;
+	struct settings set = { 0 };
 	struct device *dev = NULL;
 	struct devicefile *def = NULL;
 	const char *dump, *repair;
@@ -3014,9 +3010,6 @@ int pvck(struct cmd_context *cmd, int argc, char **argv)
 	int bad = 0;
 	int ret = 0;
 	int i;
-
-	memset(&set, 0, sizeof(set));
-	memset(&mf, 0, sizeof(mf));
 
 	/*
 	 * By default LVM skips the first sector (sector 0), and writes
@@ -3073,10 +3066,10 @@ int pvck(struct cmd_context *cmd, int argc, char **argv)
 		return_ECMD_FAILED;
 
 	if (arg_is_set(cmd, file_ARG) && (arg_is_set(cmd, repairtype_ARG) || arg_is_set(cmd, repair_ARG))) {
-		if (!(mf.filename = arg_str_value(cmd, file_ARG, NULL)))
+		if (!(mf->filename = arg_str_value(cmd, file_ARG, NULL)))
 			return_ECMD_FAILED;
 
-		if (!_read_metadata_file(cmd, &mf))
+		if (!_read_metadata_file(cmd, mf))
 			return_ECMD_FAILED;
 	}
 
@@ -3149,10 +3142,10 @@ int pvck(struct cmd_context *cmd, int argc, char **argv)
 			ret = _repair_label_header(cmd, repair, &set, labelsector, dev);
 
 		else if (!strcmp(repair, "pv_header"))
-			ret = _repair_pv_header(cmd, repair, &set, &mf, labelsector, dev);
+			ret = _repair_pv_header(cmd, repair, &set, mf, labelsector, dev);
 
 		else if (!strcmp(repair, "metadata"))
-			ret = _repair_metadata(cmd, repair, &set, &mf, labelsector, dev);
+			ret = _repair_metadata(cmd, repair, &set, mf, labelsector, dev);
 		else
 			log_error("Unknown repair value.");
 
@@ -3166,10 +3159,10 @@ int pvck(struct cmd_context *cmd, int argc, char **argv)
 
 		/* repair is a combination of repairtype pv_header+metadata */
 
-		if (!_repair_pv_header(cmd, "pv_header", &set, &mf, labelsector, dev))
+		if (!_repair_pv_header(cmd, "pv_header", &set, mf, labelsector, dev))
 			return_ECMD_FAILED;
 
-		if (!_repair_metadata(cmd, "metadata", &set, &mf, labelsector, dev))
+		if (!_repair_metadata(cmd, "metadata", &set, mf, labelsector, dev))
 			return_ECMD_FAILED;
 
 		return ECMD_PROCESSED;
@@ -3201,4 +3194,13 @@ int pvck(struct cmd_context *cmd, int argc, char **argv)
 	if (bad)
 		return_ECMD_FAILED;
 	return ECMD_PROCESSED;
+}
+
+int pvck(struct cmd_context *cmd, int argc, char **argv)
+{
+	struct metadata_file mf = { 0 };
+	int ret = _pvck_mf(&mf, cmd, argc, argv);
+
+	free(mf.text_buf);
+	return ret;
 }

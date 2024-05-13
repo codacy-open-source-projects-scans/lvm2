@@ -168,6 +168,8 @@ lvconvert \(em Change logical volume layout
 .br
  \fB-V\fP|\fB--virtualsize\fP \fISize\fP[m|UNIT]
 .br
+ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP
+.br
  \fB-y\fP|\fB--yes\fP
 .br
  \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP
@@ -480,9 +482,11 @@ Convert LV to a thin LV, using the original LV as an external origin.
 .ad l
 [ \fB-T\fP|\fB--thin\fP ]
 .br
+[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+.br
 [ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
 .br
-[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
 .br
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
@@ -504,7 +508,7 @@ Convert LV to a thin LV, using the original LV as an external origin.
 .RE
 .P
 .RS 4
-LV1 types: linear striped thin cache raid error zero
+LV1 types: linear striped cache raid thin zero error
 .RE
 .P
 \(em
@@ -518,9 +522,11 @@ Convert LV to a thin LV, using LV as thin-pool data volume.
 .ad l
 [ \fB-T\fP|\fB--thin\fP ]
 .br
+[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+.br
 [ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
 .br
-[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
 .br
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
@@ -540,7 +546,7 @@ Convert LV to a thin LV, using LV as thin-pool data volume.
 .RE
 .P
 .RS 4
-LV1 types: linear striped cache vdo raid error zero writecache
+LV1 types: linear striped cache raid vdo writecache zero error
 .RE
 .P
 \(em
@@ -556,9 +562,11 @@ Attach a cache pool to an LV, converts the LV to type cache.
 .br
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
+[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+.br
 [ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
 .br
-[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
 .br
 [    \fB--cachemetadataformat\fP \fBauto\fP|\fB1\fP|\fB2\fP ]
 .br
@@ -584,7 +592,7 @@ Attach a cache pool to an LV, converts the LV to type cache.
 .RE
 .P
 .RS 4
-LV1 types: linear striped thin thinpool vdo vdopool vdopooldata raid error zero
+LV1 types: linear striped raid thin thinpool vdo vdopool vdopooldata zero error
 .RE
 .P
 \(em
@@ -603,7 +611,7 @@ Attach a writecache to an LV, converts the LV to type writecache.
 .RE
 .P
 .RS 4
-LV1 types: linear striped thinpool raid
+LV1 types: linear striped raid thinpool
 .RE
 .P
 \(em
@@ -636,7 +644,7 @@ Attach a cache to an LV, converts the LV to type cache.
 .RE
 .P
 .RS 4
-LV1 types: linear striped thinpool raid
+LV1 types: linear striped raid thinpool
 .RE
 .P
 \(em
@@ -657,7 +665,7 @@ Add a writecache to an LV, using a specified cache device.
 .RE
 .P
 .RS 4
-LV1 types: linear striped thinpool raid
+LV1 types: linear striped raid thinpool
 .RE
 .P
 \(em
@@ -680,7 +688,7 @@ Add a cache to an LV, using a specified cache device.
 .RE
 .P
 .RS 4
-LV1 types: linear striped thinpool raid
+LV1 types: linear striped raid thinpool
 .RE
 .P
 \(em
@@ -694,9 +702,11 @@ Convert LV to type thin-pool.
 .ad l
 [ \fB-I\fP|\fB--stripesize\fP \fISize\fP[k|UNIT] ]
 .br
+[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+.br
 [ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
 .br
-[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
 .br
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
@@ -707,6 +717,12 @@ Convert LV to type thin-pool.
 [    \fB--errorwhenfull\fP \fBy\fP|\fBn\fP ]
 .br
 [    \fB--pooldatavdo\fP \fBy\fP|\fBn\fP ]
+.br
+[    \fB--compression\fP \fBy\fP|\fBn\fP ]
+.br
+[    \fB--deduplication\fP \fBy\fP|\fBn\fP ]
+.br
+[    \fB--vdosettings\fP \fIString\fP ]
 .br
 [    \fB--poolmetadata\fP \fILV\fP ]
 .br
@@ -724,7 +740,7 @@ Convert LV to type thin-pool.
 .RE
 .P
 .RS 4
-LV1 types: linear striped cache vdo raid error zero writecache
+LV1 types: linear striped cache raid vdo writecache zero error
 .RE
 .P
 \(em
@@ -738,9 +754,11 @@ Convert LV to type cache-pool.
 .ad l
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
+[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+.br
 [ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
 .br
-[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
 .br
 [    \fB--cachemetadataformat\fP \fBauto\fP|\fB1\fP|\fB2\fP ]
 .br
@@ -766,7 +784,7 @@ Convert LV to type cache-pool.
 .RE
 .P
 .RS 4
-LV1 types: linear striped raid error zero
+LV1 types: linear striped raid zero error
 .RE
 .P
 \(em
@@ -784,15 +802,17 @@ Convert LV to type vdopool.
 .br
 [ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
 .br
-[ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
 .br
-[    \fB--metadataprofile\fP \fIString\fP ]
+[ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
 [    \fB--compression\fP \fBy\fP|\fBn\fP ]
 .br
 [    \fB--deduplication\fP \fBy\fP|\fBn\fP ]
 .br
 [    \fB--vdosettings\fP \fIString\fP ]
+.br
+[    \fB--metadataprofile\fP \fIString\fP ]
 .br
 [ COMMON_OPTIONS ]
 .ad b
@@ -818,7 +838,7 @@ Detach a cache from an LV.
 .RE
 .P
 .RS 4
-LV1 types: thinpool cache cachepool vdopool writecache
+LV1 types: cache cachepool thinpool vdopool writecache
 .RE
 .P
 \(em
@@ -911,7 +931,7 @@ Repair a cache pool.
 .RE
 .P
 .RS 4
-LV1 types: thinpool cache cachepool mirror raid
+LV1 types: cache cachepool mirror raid thinpool
 .RE
 .P
 \(em
@@ -1645,6 +1665,23 @@ Snapshots are less efficient than thin provisioning when creating
 large sparse LVs (GiB).
 .
 .HP
+\fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP
+.br
+Controls detection and subsequent wiping of signatures on new LVs.
+There is a prompt for each signature detected to confirm its wiping
+(unless --yes is used to override confirmations.)
+When not specified, signatures are wiped whenever zeroing is done
+(see --zero). This behaviour can be configured with
+\fBlvm.conf\fP(5) \fBallocation/wipe_signatures_when_zeroing_new_lvs\fP.
+If blkid wiping is used (\fBlvm.conf\fP(5) \fBallocation/use_blkid_wiping\fP)
+and LVM is compiled with blkid wiping support, then the blkid(8)
+library is used to detect the signatures (use blkid -k to list the
+signatures that are recognized).
+Otherwise, native LVM code is used to detect signatures
+(only MD RAID, swap and LUKS signatures are detected in this case.)
+The LV is not wiped if the read only flag is set.
+.
+.HP
 \fB-y\fP|\fB--yes\fP
 .br
 Do not prompt for confirmation interactively but always assume the
@@ -1768,9 +1805,11 @@ Convert LV to a thin LV, using the original LV as an external origin.
 [ \fB--type thin\fP ] (implied)
 .br
 .br
+[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+.br
 [ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
 .br
-[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
 .br
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
@@ -1792,7 +1831,7 @@ Convert LV to a thin LV, using the original LV as an external origin.
 .RE
 .P
 .RS 4
-LV1 types: linear striped thin cache raid error zero
+LV1 types: linear striped cache raid thin zero error
 .RE
 .P
 \(em
@@ -1807,9 +1846,11 @@ Convert LV to a thin LV, using LV as thin-pool data volume.
 [ \fB--type thin\fP ] (implied)
 .br
 .br
+[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+.br
 [ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
 .br
-[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
 .br
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
@@ -1829,7 +1870,7 @@ Convert LV to a thin LV, using LV as thin-pool data volume.
 .RE
 .P
 .RS 4
-LV1 types: linear striped cache vdo raid error zero writecache
+LV1 types: linear striped cache raid vdo writecache zero error
 .RE
 .P
 \(em
@@ -1846,9 +1887,11 @@ Attach a cache pool to an LV.
 .br
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
+[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+.br
 [ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
 .br
-[ \fB-c\fP|\fB--chunksize\fP \fISize\fP[k|UNIT] ]
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
 .br
 [    \fB--cachemetadataformat\fP \fBauto\fP|\fB1\fP|\fB2\fP ]
 .br
@@ -1874,7 +1917,7 @@ Attach a cache pool to an LV.
 .RE
 .P
 .RS 4
-LV1 types: linear striped thin thinpool vdo vdopool vdopooldata raid error zero
+LV1 types: linear striped raid thin thinpool vdo vdopool vdopooldata zero error
 .RE
 .P
 \(em
@@ -1905,7 +1948,7 @@ Attach a cache to an LV, converts the LV to type cache.
 .RE
 .P
 .RS 4
-LV1 types: linear striped thinpool raid
+LV1 types: linear striped raid thinpool
 .RE
 .P
 \(em
@@ -1922,19 +1965,21 @@ Convert LV to type vdopool.
 .br
 [ \fB-r\fP|\fB--readahead\fP \fBauto\fP|\fBnone\fP|\fINumber\fP ]
 .br
+[ \fB-W\fP|\fB--wipesignatures\fP \fBy\fP|\fBn\fP ]
+.br
 [ \fB-Z\fP|\fB--zero\fP \fBy\fP|\fBn\fP ]
 .br
 [ \fB-n\fP|\fB--name\fP \fILV\fP\fI_new\fP ]
 .br
 [ \fB-V\fP|\fB--virtualsize\fP \fISize\fP[m|UNIT] ]
 .br
-[    \fB--metadataprofile\fP \fIString\fP ]
-.br
 [    \fB--compression\fP \fBy\fP|\fBn\fP ]
 .br
 [    \fB--deduplication\fP \fBy\fP|\fBn\fP ]
 .br
 [    \fB--vdosettings\fP \fIString\fP ]
+.br
+[    \fB--metadataprofile\fP \fIString\fP ]
 .br
 [ COMMON_OPTIONS ]
 .ad b
@@ -1956,7 +2001,7 @@ Detach and delete a cache from an LV.
 .RE
 .P
 .RS 4
-LV1 types: thinpool cache vdopool writecache
+LV1 types: cache thinpool vdopool writecache
 .RE
 .P
 \(em
@@ -1975,7 +2020,7 @@ Swap metadata LV in a thin pool or cache pool (for repair only).
 .RE
 .P
 .RS 4
-LV1 types: thinpool cachepool
+LV1 types: cachepool thinpool
 .RE
 .P
 \(em
@@ -1998,7 +2043,7 @@ Merge COW snapshot LV into its origin (variant, use --mergesnapshot).
 .RE
 .P
 .RS 4
-LV1 types: linear striped snapshot thin raid
+LV1 types: linear striped snapshot raid thin
 .RE
 .P
 \(em

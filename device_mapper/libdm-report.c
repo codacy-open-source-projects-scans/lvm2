@@ -153,7 +153,7 @@ struct op_def {
  * shorter one if one is a prefix of another!
  * (e.g. =~ comes before =)
 */
-static struct op_def _op_cmp[] = {
+static const struct op_def _op_cmp[] = {
 	{ "=~", FLD_CMP_REGEX, "Matching regular expression. [regex]" },
 	{ "!~", FLD_CMP_REGEX|FLD_CMP_NOT, "Not matching regular expression. [regex]" },
 	{ "=", FLD_CMP_EQUAL, "Equal to. [number, size, percent, string, string list, time]" },
@@ -187,7 +187,7 @@ static struct op_def _op_cmp[] = {
 #define SEL_LIST_SUBSET_LS	0x00040000
 #define SEL_LIST_SUBSET_LE	0x00080000
 
-static struct op_def _op_log[] = {
+static const struct op_def _op_log[] = {
 	{ "&&", SEL_AND, "All fields must match" },
 	{ ",", SEL_AND, "All fields must match" },
 	{ "||", SEL_OR, "At least one field must match" },
@@ -2261,7 +2261,7 @@ static const char * _skip_space(const char *s)
 	return s;
 }
 
-static int _tok_op(struct op_def *t, const char *s, const char **end,
+static int _tok_op(const struct op_def *t, const char *s, const char **end,
 		   uint32_t expect)
 {
 	size_t len;
@@ -2502,7 +2502,7 @@ float dm_percent_to_float(dm_percent_t percent)
 
 float dm_percent_to_round_float(dm_percent_t percent, unsigned digits)
 {
-	static const float power10[] = {
+	const float power10[] = {
 		1.f, .1f, .01f, .001f, .0001f, .00001f, .000001f,
 		.0000001f, .00000001f, .000000001f,
 		.0000000001f
@@ -2568,12 +2568,12 @@ static int _check_reserved_values_supported(const struct dm_report_field_type fi
 	const struct dm_report_reserved_value *iter;
 	const struct dm_report_field_reserved_value *field_res;
 	const struct dm_report_field_type *field;
-	static uint32_t supported_reserved_types = DM_REPORT_FIELD_TYPE_NUMBER |
+	const uint32_t supported_reserved_types =  DM_REPORT_FIELD_TYPE_NUMBER |
 						   DM_REPORT_FIELD_TYPE_SIZE |
 						   DM_REPORT_FIELD_TYPE_PERCENT |
 						   DM_REPORT_FIELD_TYPE_STRING |
 						   DM_REPORT_FIELD_TYPE_TIME;
-	static uint32_t supported_reserved_types_with_range = DM_REPORT_FIELD_RESERVED_VALUE_RANGE |
+	const uint32_t supported_reserved_types_with_range =  DM_REPORT_FIELD_RESERVED_VALUE_RANGE |
 							      DM_REPORT_FIELD_TYPE_NUMBER |
 							      DM_REPORT_FIELD_TYPE_SIZE |
 							      DM_REPORT_FIELD_TYPE_PERCENT |
@@ -2589,7 +2589,8 @@ static int _check_reserved_values_supported(const struct dm_report_field_type fi
 		if (iter->type & DM_REPORT_FIELD_TYPE_MASK) {
 			if (!(iter->type & supported_reserved_types) ||
 			    ((iter->type & DM_REPORT_FIELD_RESERVED_VALUE_RANGE) &&
-			     !(iter->type & supported_reserved_types_with_range))) {
+			     !(iter->type & (supported_reserved_types_with_range &
+					     ~DM_REPORT_FIELD_RESERVED_VALUE_RANGE)))) {
 				log_error(INTERNAL_ERROR "_check_reserved_values_supported: "
 					  "global reserved value for type 0x%x not supported",
 					   iter->type);
@@ -2599,8 +2600,9 @@ static int _check_reserved_values_supported(const struct dm_report_field_type fi
 			field_res = (const struct dm_report_field_reserved_value *) iter->value;
 			field = &fields[field_res->field_num];
 			if (!(field->flags & supported_reserved_types) ||
-			    ((iter->type & DM_REPORT_FIELD_RESERVED_VALUE_RANGE) &&
-			     !(iter->type & supported_reserved_types_with_range))) {
+			    ((field->type & DM_REPORT_FIELD_RESERVED_VALUE_RANGE) &&
+			     !(field->type & (supported_reserved_types_with_range &
+					     ~DM_REPORT_FIELD_RESERVED_VALUE_RANGE)))) {
 				log_error(INTERNAL_ERROR "_check_reserved_values_supported: "
 					  "field-specific reserved value of type 0x%x for "
 					  "field %s not supported",
@@ -2840,7 +2842,7 @@ struct time_value {
 	time_t t2;
 };
 
-static const char *_out_of_range_msg = "Field selection value %s out of supported range for field %s.";
+static const char _out_of_range_msg[] = "Field selection value %s out of supported range for field %s.";
 
 /*
  * Standard formatted date and time - ISO8601.
@@ -2865,7 +2867,7 @@ static const char *_out_of_range_msg = "Field selection value %s out of supporte
 #define DELIM_DATE '-'
 #define DELIM_TIME ':'
 
-static int _days_in_month[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+static const int _days_in_month[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 
 static int _is_leap_year(long year)
 {
@@ -2890,7 +2892,6 @@ typedef enum {
 
 static char *_get_date(char *str, struct tm *tm, time_range_t *range)
 {
-	static const char incorrect_date_format_msg[] = "Incorrect date format.";
 	time_range_t tmp_range = RANGE_NONE;
 	long n1, n2 = -1, n3 = -1;
 	char *s = str, *end;
@@ -2936,19 +2937,15 @@ static char *_get_date(char *str, struct tm *tm, time_range_t *range)
 				n3 = n1 % 100;
 				n2 = (n1 / 100) % 100;
 				n1 = n1 / 10000;
-			} else {
-				log_error(incorrect_date_format_msg);
-				return NULL;
-			}
+			} else
+                                goto_bad;
 		} else {
 			if (len == 7) {
 				tmp_range = RANGE_MONTH;
 				/* YYYY-MM */
 				n3 = 1;
-			} else {
-				log_error(incorrect_date_format_msg);
-				return NULL;
-			}
+			} else
+				goto_bad;
 		}
 	}
 
@@ -2971,11 +2968,15 @@ static char *_get_date(char *str, struct tm *tm, time_range_t *range)
 	*range = tmp_range;
 
 	return (char *) _skip_space(end);
+
+bad:
+	log_error("Incorrect date format.");
+
+	return NULL;
 }
 
 static char *_get_time(char *str, struct tm *tm, time_range_t *range)
 {
-	static const char incorrect_time_format_msg[] = "Incorrect time format.";
 	time_range_t tmp_range = RANGE_NONE;
 	long n1, n2 = -1, n3 = -1;
 	char *s = str, *end;
@@ -3023,19 +3024,15 @@ static char *_get_time(char *str, struct tm *tm, time_range_t *range)
 				n3 = n1 % 100;
 				n2 = (n1 / 100) % 100;
 				n1 = n1 / 10000;
-			} else {
-				log_error(incorrect_time_format_msg);
-				return NULL;
-			}
+			} else
+				goto_bad;
 		} else {
 			if (len == 5) {
 				/* HH:MM */
 				tmp_range = RANGE_MINUTE;
 				n3 = 0;
-			} else {
-				log_error(incorrect_time_format_msg);
-				return NULL;
-			}
+			} else
+				goto_bad;
 		}
 	}
 
@@ -3066,6 +3063,11 @@ static char *_get_time(char *str, struct tm *tm, time_range_t *range)
 	*range = tmp_range;
 
 	return (char *) _skip_space(end);
+
+bad:
+	log_error("Incorrect time format.");
+
+	return NULL;
 }
 
 /* The offset is always an absolute offset against GMT! */
@@ -3514,7 +3516,6 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 						       struct reserved_value_wrapper *rvw,
 						       void *custom)
 {
-	static const char *_field_selection_value_alloc_failed_msg = "dm_report: struct field_selection_value allocation failed for selection field %s";
 	const struct dm_report_field_type *fields = implicit ? _implicit_report_fields
 							     : rh->fields;
 	struct field_properties *fp, *found = NULL;
@@ -3562,8 +3563,8 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 	}
 
 	if (!(fs->value = dm_pool_zalloc(rh->selection->mem, sizeof(struct field_selection_value)))) {
-		log_error(_field_selection_value_alloc_failed_msg, field_id);
-		goto error;
+		stack;
+		goto error_field_id;
 	}
 
 	if (((rvw->reserved && (rvw->reserved->type & DM_REPORT_FIELD_RESERVED_VALUE_RANGE)) ||
@@ -3571,8 +3572,8 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 	      custom && ((struct time_value *) custom)->range))
 		 &&
 	    !(fs->value->next = dm_pool_zalloc(rh->selection->mem, sizeof(struct field_selection_value)))) {
-		log_error(_field_selection_value_alloc_failed_msg, field_id);
-		goto error;
+		stack;
+		goto error_field_id;
 	}
 
 	fs->fp = found;
@@ -3721,6 +3722,10 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 	}
 
 	return fs;
+error_field_id:
+	log_error("dm_report: struct field_selection_value allocation failed for selection field %s",
+		  field_id);
+	goto error;
 bad:
 	log_error(INTERNAL_ERROR "Forbiden NULL custom detected.");
 error:
@@ -3749,7 +3754,7 @@ static struct selection_node *_alloc_selection_node(struct dm_pool *mem, uint32_
 static void _display_selection_help(struct dm_report *rh)
 {
 	static const char _grow_object_failed_msg[] = "_display_selection_help: dm_pool_grow_object failed";
-	struct op_def *t;
+	const struct op_def *t;
 	const struct dm_report_reserved_value *rv;
 	size_t len_all, len_final = 0;
 	const char **rvs;
@@ -4102,7 +4107,7 @@ static int _alloc_rh_selection(struct dm_report *rh)
 static int _report_set_selection(struct dm_report *rh, const char *selection, int add_new_fields)
 {
 	struct selection_node *root = NULL;
-	const char *fin, *next;
+	const char *fin = NULL, *next;
 
 	if (rh->selection) {
 		if (rh->selection->selection_root)
@@ -4122,7 +4127,7 @@ static int _report_set_selection(struct dm_report *rh, const char *selection, in
 	if (!(root = _alloc_selection_node(rh->selection->mem, SEL_OR)))
 		return 0;
 
-	if (!_parse_or_ex(rh, selection, &fin, root))
+	if (!_parse_or_ex(rh, selection, &fin, root) || !fin)
 		goto_bad;
 
 	next = _skip_space(fin);

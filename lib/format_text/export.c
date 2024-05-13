@@ -224,14 +224,13 @@ static int _out_with_comment_raw(struct formatter *f,
  */
 static int _sectors_to_units(uint64_t sectors, char *buffer, size_t s)
 {
-	static const char *_units[] = {
+	static const char _units[][16] = {
 		"Kilobytes",
 		"Megabytes",
 		"Gigabytes",
 		"Terabytes",
 		"Petabytes",
 		"Exabytes",
-		NULL
 	};
 
 	int i;
@@ -240,7 +239,7 @@ static int _sectors_to_units(uint64_t sectors, char *buffer, size_t s)
 	/* to convert to K */
 	d /= 2.0;
 
-	for (i = 0; (d > 1024.0) && _units[i]; i++)
+	for (i = 0; (d > 1024.0) && i < DM_ARRAY_SIZE(_units); ++i)
 		d /= 1024.0;
 
 	return dm_snprintf(buffer, s, "# %g %s", d, _units[i]) > 0;
@@ -358,7 +357,7 @@ static int _print_header(struct cmd_context *cmd, struct formatter *f,
 	return 1;
 }
 
-static int _print_flag_config(struct formatter *f, uint64_t status, int type)
+static int _print_flag_config(struct formatter *f, uint64_t status, enum pv_vg_lv_e type)
 {
 	char buffer[4096];
 

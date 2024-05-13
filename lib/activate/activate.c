@@ -1792,7 +1792,7 @@ int monitor_dev_for_events(struct cmd_context *cmd, const struct logical_volume 
 	struct lv_segment *log_seg;
 	int (*monitor_fn) (struct lv_segment *s, int e);
 	uint32_t s;
-	static const struct lv_activate_opts zlaopts = { 0 };
+	const struct lv_activate_opts zlaopts = { 0 };
 	struct lv_activate_opts mirr_laopts = { .origin_only = 1 };
 	struct lvinfo info;
 	const char *dso = NULL;
@@ -1812,6 +1812,9 @@ int monitor_dev_for_events(struct cmd_context *cmd, const struct logical_volume 
 	 */
 	if (monitor && !dmeventd_monitor_mode())
 		return 1;
+
+	if (sigint_caught())
+		return_0;
 
 	/*
 	 * Activation of unused cache-pool activates metadata device as
@@ -1894,6 +1897,12 @@ int monitor_dev_for_events(struct cmd_context *cmd, const struct logical_volume 
 		}
 
 	dm_list_iterate_items(seg, &lv->segments) {
+		if (sigint_caught()) {
+			stack;
+			r = 0;
+			break;
+		}
+
 		/* Recurse for AREA_LV */
 		for (s = 0; s < seg->area_count; s++) {
 			if (seg_type(seg, s) != AREA_LV)
@@ -2025,7 +2034,11 @@ int monitor_dev_for_events(struct cmd_context *cmd, const struct logical_volume 
 				break;
 			log_very_verbose("%s %smonitoring still pending: waiting...",
 					 display_lvname(lv), monitor ? "" : "un");
-			usleep(10000 * i);
+			if (interruptible_usleep(10000 * i)) {
+				stack;
+				r = 0;
+				break;
+			}
 		}
 
 		if (r)
@@ -2445,7 +2458,7 @@ static int _lv_has_open_snapshots(const struct logical_volume *lv)
 int lv_deactivate(struct cmd_context *cmd, const char *lvid_s, const struct logical_volume *lv)
 {
 	struct lvinfo info;
-	static const struct lv_activate_opts laopts = { .skip_in_use = 1 };
+	const struct lv_activate_opts laopts = { .skip_in_use = 1 };
 	struct dm_list *snh;
 	int r = 0;
 	unsigned tmp_state;
