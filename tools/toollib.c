@@ -18,11 +18,13 @@
 #include "lib/label/hints.h"
 #include "lib/device/device_id.h"
 #include "lib/device/online.h"
+#include "libdm/misc/dm-ioctl.h"
 
 #include <sys/stat.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <sys/utsname.h>
+#include <mntent.h>
 
 #define report_log_ret_code(ret_code) report_current_object_cmdlog(REPORT_OBJECT_CMDLOG_NAME, \
 					((ret_code) == ECMD_PROCESSED) ? REPORT_OBJECT_CMDLOG_SUCCESS \
@@ -824,7 +826,7 @@ int lv_change_activate(struct cmd_context *cmd, struct logical_volume *lv,
 	 * autoactivation will happen to a VG on a running system and may be
 	 * mixing with user commands, so the end result is unpredictable.
 	 *
-	 * It's possible that we might want a config setting for usersto  
+	 * It's possible that we might want a config setting for usersto
 	 * disable secondary autoactivations.  Once a system is up, the
 	 * user may want to take charge of activation changes to the VG
 	 * and not have the system autoactivation interfere.
@@ -1404,7 +1406,7 @@ static int _get_one_writecache_setting(struct cmd_context *cmd, struct writecach
 				       char *key, char *val, uint32_t *block_size_sectors)
 {
 	/* special case: block_size is not a setting but is set with the --cachesettings option */
-	if (!strncmp(key, "block_size", strlen("block_size"))) {
+	if (!strncmp(key, "block_size", sizeof("block_size") - 1)) {
 		uint32_t block_size = 0;
 		if (sscanf(val, "%u", &block_size) != 1)
 			goto_bad;
@@ -1417,7 +1419,7 @@ static int _get_one_writecache_setting(struct cmd_context *cmd, struct writecach
 		return 1;
 	}
 
-	if (!strncmp(key, "high_watermark", strlen("high_watermark"))) {
+	if (!strncmp(key, "high_watermark", sizeof("high_watermark") - 1)) {
 		if (sscanf(val, "%llu", (unsigned long long *)&settings->high_watermark) != 1)
 			goto_bad;
 		if (settings->high_watermark > 100)
@@ -1426,7 +1428,7 @@ static int _get_one_writecache_setting(struct cmd_context *cmd, struct writecach
 		return 1;
 	}
 
-	if (!strncmp(key, "low_watermark", strlen("low_watermark"))) {
+	if (!strncmp(key, "low_watermark", sizeof("low_watermark") - 1)) {
 		if (sscanf(val, "%llu", (unsigned long long *)&settings->low_watermark) != 1)
 			goto_bad;
 		if (settings->low_watermark > 100)
@@ -1435,28 +1437,28 @@ static int _get_one_writecache_setting(struct cmd_context *cmd, struct writecach
 		return 1;
 	}
 
-	if (!strncmp(key, "writeback_jobs", strlen("writeback_jobs"))) {
+	if (!strncmp(key, "writeback_jobs", sizeof("writeback_jobs") - 1)) {
 		if (sscanf(val, "%llu", (unsigned long long *)&settings->writeback_jobs) != 1)
 			goto_bad;
 		settings->writeback_jobs_set = 1;
 		return 1;
 	}
 
-	if (!strncmp(key, "autocommit_blocks", strlen("autocommit_blocks"))) {
+	if (!strncmp(key, "autocommit_blocks", sizeof("autocommit_blocks") - 1)) {
 		if (sscanf(val, "%llu", (unsigned long long *)&settings->autocommit_blocks) != 1)
 			goto_bad;
 		settings->autocommit_blocks_set = 1;
 		return 1;
 	}
 
-	if (!strncmp(key, "autocommit_time", strlen("autocommit_time"))) {
+	if (!strncmp(key, "autocommit_time", sizeof("autocommit_time") - 1)) {
 		if (sscanf(val, "%llu", (unsigned long long *)&settings->autocommit_time) != 1)
 			goto_bad;
 		settings->autocommit_time_set = 1;
 		return 1;
 	}
 
-	if (!strncmp(key, "fua", strlen("fua"))) {
+	if (!strncmp(key, "fua", sizeof("fua") - 1)) {
 		if (settings->nofua_set) {
 			log_error("Setting fua and nofua cannot both be set.");
 			return 0;
@@ -1467,7 +1469,7 @@ static int _get_one_writecache_setting(struct cmd_context *cmd, struct writecach
 		return 1;
 	}
 
-	if (!strncmp(key, "nofua", strlen("nofua"))) {
+	if (!strncmp(key, "nofua", sizeof("nofua") - 1)) {
 		if (settings->fua_set) {
 			log_error("Setting fua and nofua cannot both be set.");
 			return 0;
@@ -1478,28 +1480,28 @@ static int _get_one_writecache_setting(struct cmd_context *cmd, struct writecach
 		return 1;
 	}
 
-	if (!strncmp(key, "cleaner", strlen("cleaner"))) {
+	if (!strncmp(key, "cleaner", sizeof("cleaner") - 1)) {
 		if (sscanf(val, "%u", &settings->cleaner) != 1)
 			goto_bad;
 		settings->cleaner_set = 1;
 		return 1;
 	}
 
-	if (!strncmp(key, "max_age", strlen("max_age"))) {
+	if (!strncmp(key, "max_age", sizeof("max_age") - 1)) {
 		if (sscanf(val, "%u", &settings->max_age) != 1)
 			goto_bad;
 		settings->max_age_set = 1;
 		return 1;
 	}
 
-	if (!strncmp(key, "metadata_only", strlen("metadata_only"))) {
+	if (!strncmp(key, "metadata_only", sizeof("metadata_only") - 1)) {
 		if (sscanf(val, "%u", &settings->metadata_only) != 1)
 			goto_bad;
 		settings->metadata_only_set = 1;
 		return 1;
 	}
 
-	if (!strncmp(key, "pause_writeback", strlen("pause_writeback"))) {
+	if (!strncmp(key, "pause_writeback", sizeof("pause_writeback") - 1)) {
 		if (sscanf(val, "%u", &settings->pause_writeback) != 1)
 			goto_bad;
 		settings->pause_writeback_set = 1;
@@ -1742,7 +1744,7 @@ int process_each_label(struct cmd_context *cmd, int argc, char **argv,
 				ret_max = ECMD_FAILED;
 				goto out;
 			}
-			/* 
+			/*
 			 * remove the existing dev for this pvid from lvmcache
 			 * so that the duplicate dev can replace it.
 			 */
@@ -2036,7 +2038,7 @@ struct processing_handle *init_processing_handle(struct cmd_context *cmd, struct
 }
 
 int init_selection_handle(struct cmd_context *cmd, struct processing_handle *handle,
-			  report_type_t initial_report_type)
+			  unsigned initial_report_type)
 {
 	struct selection_handle *sh;
 	const char *selection;
@@ -2402,7 +2404,7 @@ static void _choose_vgs_to_process(struct cmd_context *cmd,
 				break;
 			}
 		}
-		
+
 		/*
 		 * If the name arg was not found in the list of all VGs, then
 		 * it probably doesn't exist, but we want the "VG not found"
@@ -2633,7 +2635,7 @@ int opt_in_list_is_set(struct cmd_context *cmd, const uint16_t *opts, int count,
 
 	return match ? 1 : 0;
 }
-      
+
 void opt_array_to_str(struct cmd_context *cmd, const uint16_t *opts, int count,
 		      char *buf, int len)
 {
@@ -3110,7 +3112,7 @@ static int _check_lv_rules(struct cmd_context *cmd, struct logical_volume *lv)
 		if (rule->check_lvp_bits)
 			_lv_props_match(cmd, lv, rule->check_lvp_bits,
 					&lv_props_match_bits, &lv_props_unmatch_bits);
-		
+
 		/*
 		 * Evaluate if the check results pass based on the rule.
 		 * The options are checked again here because the previous
@@ -3306,7 +3308,7 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 		goto_out;
 	}
 
-	/* Process all LVs in this VG if no restrictions given 
+	/* Process all LVs in this VG if no restrictions given
 	 * or if VG tags match. */
 	if ((!tags_supplied && !lvargs_supplied) ||
 	    (tags_supplied && str_list_match_list(tags_in, &vg->tags, NULL)))
@@ -3346,7 +3348,7 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 		}
 
 		/*
-		 * Only let hidden LVs through if --all was used or the LVs 
+		 * Only let hidden LVs through if --all was used or the LVs
 		 * were specifically named on the command line.
 		 */
 		if (!lvargs_supplied && !lv_is_visible(lvl->lv) && !arg_is_set(cmd, all_ARG) &&
@@ -3460,7 +3462,7 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 			if (lv_is_named_arg) {
 				log_error("Command not permitted on LV %s.", display_lvname(lvl->lv));
 				ret_max = ECMD_FAILED;
-			} 
+			}
 			continue;
 		}
 
@@ -3913,7 +3915,7 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t read_flag
 				dm_list_init(&lvnames);
 				break;
 			}
-			
+
 			if (lvn && !strncmp(vgn, vg_name, strlen(vg_name)) &&
 			    strlen(vg_name) == (size_t) (lvn - vgn)) {
 				if (!str_list_add(cmd->mem, &lvnames,
@@ -4565,7 +4567,7 @@ static int _process_pvs_in_vgs(struct cmd_context *cmd, uint32_t read_flags,
 		 * Don't call "continue" when skip is set, because we need to remove
 		 * error_vg->pvs entries from devices list.
 		 */
-		
+
 		ret = _process_pvs_in_vg(cmd, vg ? vg : error_vg, arg_devices, arg_tags,
 					 process_all_pvs, skip, error_flags,
 					 handle, process_single_pv);
@@ -4782,9 +4784,31 @@ out:
 	return ret_max;
 }
 
-int lvremove_single(struct cmd_context *cmd, struct logical_volume *lv,
-		    struct processing_handle *handle __attribute__((unused)))
+static void _lvremove_save_uuid(struct cmd_context *cmd, struct logical_volume *lv,
+				struct lvremove_params *lp)
 {
+	char dm_uuid[DM_UUID_LEN] = { 0 };
+
+	/*
+	 * Create the dm/uuid string that would be displayed
+	 * in sysfs for this LV.
+	 *
+	 * DM_UUID_LEN is 129
+	 * ID_LEN is 32
+	 */
+	memcpy(dm_uuid, "LVM-", 4);
+	memcpy(dm_uuid+4, &lv->vg->id, ID_LEN);
+	memcpy(dm_uuid+4+ID_LEN, &lv->lvid.id[1], ID_LEN);
+
+	if (!str_list_add(cmd->mem, &lp->removed_uuids, dm_pool_strdup(cmd->mem, dm_uuid)))
+		stack;
+}
+
+int lvremove_single(struct cmd_context *cmd, struct logical_volume *lv,
+		    struct processing_handle *handle)
+{
+	struct lvremove_params *lp = (handle) ? (struct lvremove_params *) handle->custom_handle : NULL;
+
 	/*
 	 * Single force is equivalent to single --yes
 	 * Even multiple --yes are equivalent to single --force
@@ -4795,6 +4819,9 @@ int lvremove_single(struct cmd_context *cmd, struct logical_volume *lv,
 
 	if (!lv_remove_with_dependencies(cmd, lv, force, 0))
 		return_ECMD_FAILED;
+
+	if (cmd->scan_lvs && cmd->enable_devices_file)
+		_lvremove_save_uuid(cmd, lv, lp);
 
 	return ECMD_PROCESSED;
 }
@@ -4999,7 +5026,7 @@ static void _check_pvcreate_prompt(struct cmd_context *cmd,
 			}
 		}
 	}
-	
+
 	if (prompt->type & PROMPT_PVREMOVE_PV_IN_VG) {
 		if (pp->force != DONT_PROMPT_OVERRIDE) {
 			answer_no = 1;
@@ -5651,7 +5678,7 @@ int pvcreate_each_device(struct cmd_context *cmd,
 	}
 
 	/*
-	 * Clear any prompts that have answers without asking the user. 
+	 * Clear any prompts that have answers without asking the user.
 	 */
 	dm_list_iterate_items_safe(prompt, prompt2, &pp->prompts) {
 		_check_pvcreate_prompt(cmd, pp, prompt, 0);
@@ -5675,7 +5702,7 @@ int pvcreate_each_device(struct cmd_context *cmd,
 
 	/*
 	 * If no remaining prompts need a user response, then keep orphans
-	 * locked and go directly to the create steps. 
+	 * locked and go directly to the create steps.
 	 */
 	if (dm_list_empty(&pp->prompts))
 		goto do_command;
@@ -5997,4 +6024,46 @@ do_command:
 	return 1;
 bad:
 	return 0;
+}
+
+int get_rootvg_dev_uuid(struct cmd_context *cmd, char **dm_uuid_out)
+{
+	char dm_uuid[DM_UUID_LEN];
+	struct stat info;
+	FILE *fme = NULL;
+	struct mntent *me;
+	int found = 0;
+
+	if (!(fme = setmntent("/etc/mtab", "r")))
+		return_0;
+
+	while ((me = getmntent(fme))) {
+		if ((me->mnt_dir[0] == '/') && (me->mnt_dir[1] == '\0')) {
+			found = 1;
+			break;
+		}
+	}
+	endmntent(fme);
+
+	if (!found)
+		return_0;
+
+	if (stat(me->mnt_dir, &info) < 0)
+		return_0;
+
+	if (!device_get_uuid(cmd, MAJOR(info.st_dev), MINOR(info.st_dev), dm_uuid, sizeof(dm_uuid)))
+		return_0;
+
+	log_debug("Found root dm_uuid %s", dm_uuid);
+
+	/* UUID_PREFIX = "LVM-" */
+	if (strncmp(dm_uuid, UUID_PREFIX, sizeof(UUID_PREFIX) - 1))
+		return_0;
+
+	if (strlen(dm_uuid) < sizeof(UUID_PREFIX) - 1 + ID_LEN)
+		return_0;
+
+	*dm_uuid_out = dm_pool_strdup(cmd->mem, dm_uuid);
+
+	return 1;
 }

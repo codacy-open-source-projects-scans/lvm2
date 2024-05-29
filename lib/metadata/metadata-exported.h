@@ -433,11 +433,13 @@ struct pv_segment {
  */
 
 struct format_instance {
-	unsigned ref_count;	/* Refs to this fid from VG and PV structs */
 	struct dm_pool *mem;
 
-	uint32_t type;
 	const struct format_type *fmt;
+
+	unsigned ref_count;	/* Refs to this fid from VG and PV structs */
+
+	uint32_t type;
 
 	/*
 	 * Each mda in a vg is on exactly one of the below lists.
@@ -1465,6 +1467,10 @@ struct vgcreate_params {
 	const char *system_id;
 	const char *lock_type;
 	const char *lock_args;
+};
+
+struct lvremove_params {
+	struct dm_list removed_uuids; /* entries are str_list */
 };
 
 int validate_major_minor(const struct cmd_context *cmd,

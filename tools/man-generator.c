@@ -60,6 +60,7 @@ static void *dm_pool_alloc(void *p, size_t size)
 #define ARG_COUNTABLE 0x00000001
 #define ARG_GROUPABLE 0x00000002
 #define ARG_NONINTERACTIVE 0x00000004
+#define ARG_LONG_OPT  0x00000008
 struct arg_values;
 
 /* needed to include vals.h */
@@ -377,7 +378,7 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 
 			opt_enum = cmd->required_opt_args[ro].opt;
 
-			if ((opt_enum == size_ARG) && command_has_alternate_extents(cmd->name))
+			if ((opt_enum == size_ARG) && command_has_alternate_extents(cname))
 				include_extents = 1;
 
 			if (opt_names[opt_enum].short_opt) {
@@ -510,7 +511,7 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 
 			opt_enum = cmd->required_opt_args[ro].opt;
 
-			if ((opt_enum == size_ARG) && command_has_alternate_extents(cmd->name))
+			if ((opt_enum == size_ARG) && command_has_alternate_extents(cname))
 				include_extents = 1;
 
 			if (opt_names[opt_enum].short_opt) {

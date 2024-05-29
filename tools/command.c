@@ -39,7 +39,7 @@ struct cmd_name {
 /* create table of value names, e.g. String, and corresponding enum from vals.h */
 
 static const struct val_name val_names[VAL_COUNT + 1] = {
-#define val(a, b, c, d) { # a, a, b, c, d },
+#define val(a, b, c, d) { b, d, c, sizeof(c) - 1, a },
 #include "vals.h"
 #undef val
 };
@@ -47,7 +47,7 @@ static const struct val_name val_names[VAL_COUNT + 1] = {
 /* create table of option names, e.g. --foo, and corresponding enum from args.h */
 
 static const struct opt_name opt_names[ARG_COUNT + 1] = {
-#define arg(a, b, c, d, e, f, g) { # a, b, a, "--" c, d, e, f, g },
+#define arg(a, b, c, d, e, f, g) { g, "--" c, b, a, d, e, f },
 #include "args.h"
 #undef arg
 };
@@ -214,7 +214,7 @@ static int _val_str_to_num(char *str)
 		*new = '\0';
 
 	for (i = 0; i < VAL_COUNT; ++i)
-		if (!strncmp(name, val_names[i].name, strlen(val_names[i].name)))
+		if (!strncmp(name, val_names[i].name, val_names[i].name_len))
 			return val_names[i].val_enum;
 
 	return 0;
@@ -256,7 +256,7 @@ static int _opt_str_to_num(struct command *cmd, const char *str)
 			 * check left & right side for possible match
 			 */
 			for (i = middle;;) {
-				if ((!p && !strstr(opt_names_alpha[i]->name, "_long_ARG")) ||
+				if ((!p && !(opt_names_alpha[i]->flags & ARG_LONG_OPT)) ||
 				    (p && !opt_names_alpha[i]->short_opt))
 					return opt_names_alpha[i]->opt_enum; /* Found */
 				/* Check if there is something on the 'left-side' */
@@ -268,7 +268,7 @@ static int _opt_str_to_num(struct command *cmd, const char *str)
 			for (i = middle + 1; i <= last; ++i) {
 				if (strcmp(opt_names_alpha[i]->long_opt, long_name))
 					break;
-				if ((!p && !strstr(opt_names_alpha[i]->name, "_long_ARG")) ||
+				if ((!p && !(opt_names_alpha[i]->flags & ARG_LONG_OPT)) ||
 				    (p && !opt_names_alpha[i]->short_opt))
 					return opt_names_alpha[i]->opt_enum; /* Found */
 			}
@@ -421,12 +421,12 @@ static unsigned _find_lvm_command_enum(const char *name)
 			return middle;
 	}
 
-	return -1;
+	return LVM_COMMAND_COUNT;
 }
 
 const struct command_name *find_command_name(const char *name)
 {
-	int r = _find_lvm_command_enum(name);
+	unsigned r = _find_lvm_command_enum(name);
 
 	return (r < LVM_COMMAND_COUNT) ? &command_names[r] : NULL;
 }
@@ -665,7 +665,7 @@ static void _add_oo_definition_line(const char *name, const char *line)
 
 	start = strchr(line, ':') + 2;
 	if (!(oo->line = strdup(start))) {
-		log_error("Filler to duplicate line %s.", start);
+		log_error("Failed to duplicate line %s.", start);
 		return;
 	}
 }
@@ -1244,16 +1244,9 @@ void factor_common_options(void)
 
 /* FIXME: use a flag in command_name struct? */
 
-int command_has_alternate_extents(const char *name)
+int command_has_alternate_extents(const struct command_name *cname)
 {
-	if (name[0] != 'l')
-		return 0;
-	if (!strcmp(name, "lvcreate") ||
-	    !strcmp(name, "lvresize") ||
-	    !strcmp(name, "lvextend") ||
-	    !strcmp(name, "lvreduce"))
-		return 1;
-	return 0;
+	return (cname->flags & ALTERNATIVE_EXTENTS) ? 1 : 0;
 }
 
 static int _long_name_compare(const void *on1, const void *on2)
@@ -1782,7 +1775,7 @@ void print_usage(struct command *cmd, int longhelp, int desc_first)
 			if (opt_names[opt_enum].short_opt)
 				continue;
 
-			if ((opt_enum == size_ARG) && command_has_alternate_extents(cmd->name))
+			if ((opt_enum == size_ARG) && command_has_alternate_extents(cname))
 				include_extents = 1;
 
 			if (first)
@@ -1804,7 +1797,7 @@ void print_usage(struct command *cmd, int longhelp, int desc_first)
 		for (ro = 0; ro < cmd->ro_count; ro++) {
 			opt_enum = cmd->required_opt_args[ro].opt;
 
-			if ((opt_enum == size_ARG) && command_has_alternate_extents(cmd->name))
+			if ((opt_enum == size_ARG) && command_has_alternate_extents(cname))
 				include_extents = 1;
 
 			if (opt_names[opt_enum].short_opt)
@@ -2084,7 +2077,7 @@ void print_usage_common_cmd(const struct command_name *cname, struct command *cm
 
 void print_usage_notes(const struct command_name *cname)
 {
-	if (cname && command_has_alternate_extents(cname->name))
+	if (cname && command_has_alternate_extents(cname))
 		printf("  Special options for command:\n\t"
 		       "[ --extents Number[PERCENT] ]\n\t"
 		       "The --extents option can be used in place of --size.\n\t"

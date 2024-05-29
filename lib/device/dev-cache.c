@@ -21,6 +21,7 @@
 #include "lib/config/config.h"
 #include "lib/commands/toolcontext.h"
 #include "device_mapper/misc/dm-ioctl.h"
+#include "lib/activate/activate.h"
 #include "lib/misc/lvm-string.h"
 
 #ifdef UDEV_SYNC_SUPPORT
@@ -53,6 +54,7 @@ static struct {
 	struct dm_regex *preferred_names_matcher;
 	const char *dev_dir;
 
+	size_t dev_dir_len;
 	int has_scanned;
 	dev_t st_dev;
 	struct dm_list dirs;
@@ -205,10 +207,9 @@ static int _builtin_preference(const char *path0, const char *path1,
 
 static int _apply_builtin_path_preference_rules(const char *path0, const char *path1)
 {
-	size_t devdir_len;
+	size_t devdir_len = _cache.dev_dir_len;
 	int r;
 
-	devdir_len = strlen(_cache.dev_dir);
 
 	if (!strncmp(path0, _cache.dev_dir, devdir_len) &&
 	    !strncmp(path1, _cache.dev_dir, devdir_len)) {
@@ -453,18 +454,6 @@ out:
 	return r;
 }
 
-int get_dm_uuid_from_sysfs(char *buf, size_t buf_size, int major, int minor)
-{
-	char path[PATH_MAX];
-
-	if (dm_snprintf(path, sizeof(path), "%sdev/block/%d:%d/dm/uuid", dm_sysfs_dir(), major, minor) < 0) {
-		log_error("%d:%d: dm_snprintf failed for path to sysfs dm directory.", major, minor);
-		return 0;
-	}
-
-	return get_sysfs_value(path, buf, buf_size, 0);
-}
-
 static struct dm_list *_get_or_add_list_by_index_key(struct dm_hash_table *idx, const char *key)
 {
 	struct dm_list *list;
@@ -567,14 +556,14 @@ static struct device *_get_device_for_sysfs_dev_name_using_devno(const char *dev
 
 #define NOT_LVM_UUID "-"
 
-static int _get_vgid_and_lvid_for_dev(struct device *dev)
+static int _get_vgid_and_lvid_for_dev(struct cmd_context *cmd, struct device *dev)
 {
 	const size_t lvm_prefix_len = sizeof(UUID_PREFIX) - 1;
 	const size_t lvm_uuid_len = sizeof(UUID_PREFIX) - 1 + 2 * ID_LEN;
 	char uuid[DM_UUID_LEN];
 	size_t uuid_len;
 
-	if (!get_dm_uuid_from_sysfs(uuid, sizeof(uuid), (int) MAJOR(dev->dev), (int) MINOR(dev->dev)))
+	if (!device_get_uuid(cmd, MAJOR(dev->dev), MINOR(dev->dev), uuid, sizeof(uuid)))
 		return_0;
 
 	uuid_len = strlen(uuid);
@@ -597,7 +586,7 @@ static int _get_vgid_and_lvid_for_dev(struct device *dev)
 	return 1;
 }
 
-static int _index_dev_by_vgid_and_lvid(struct device *dev)
+static int _index_dev_by_vgid_and_lvid(struct cmd_context *cmd, struct device *dev)
 {
 	const char *devname = dev_name(dev);
 	char devpath[PATH_MAX];
@@ -614,7 +603,8 @@ static int _index_dev_by_vgid_and_lvid(struct device *dev)
 		return 1;
 
 	/* Get holders for device. */
-	if (dm_snprintf(path, sizeof(path), "%sdev/block/%d:%d/holders/", dm_sysfs_dir(), (int) MAJOR(dev->dev), (int) MINOR(dev->dev)) < 0) {
+	if (dm_snprintf(path, sizeof(path), "%sdev/block/%u:%u/holders/",
+			dm_sysfs_dir(), MAJOR(dev->dev), MINOR(dev->dev)) < 0) {
 		log_error("%s: dm_snprintf failed for path to holders directory.", devname);
 		return 0;
 	}
@@ -662,7 +652,7 @@ static int _index_dev_by_vgid_and_lvid(struct device *dev)
 		 * And if it's a DM device, we're only interested in a holder which is an LVM device.
 		 * Get the VG UUID and LV UUID if we don't have that already.
 		 */
-		if (!holder_dev->vgid && !_get_vgid_and_lvid_for_dev(holder_dev))
+		if (!holder_dev->vgid && !_get_vgid_and_lvid_for_dev(cmd, holder_dev))
 			goto_out;
 
 		if (*holder_dev->vgid == *NOT_LVM_UUID)
@@ -673,7 +663,7 @@ static int _index_dev_by_vgid_and_lvid(struct device *dev)
 		 * If a device is internal, the holder has the same VG UUID as the device.
 		 */
 		if (dm_is_dm_major(MAJOR(dev->dev))) {
-			if (!dev->vgid && !_get_vgid_and_lvid_for_dev(dev))
+			if (!dev->vgid && !_get_vgid_and_lvid_for_dev(cmd, dev))
 				goto_out;
 
 			if (*dev->vgid != *NOT_LVM_UUID && !strcmp(holder_dev->vgid, dev->vgid))
@@ -762,8 +752,8 @@ static int _insert_dev(const char *path, dev_t d)
 	 * Existing device, existing path points to the same device.
 	 */
 	if (dev_by_devt && dev_by_path && (dev_by_devt == dev_by_path)) {
-		log_debug_devs("Found dev %d:%d %s - exists. %.8s",
-			       (int)MAJOR(d), (int)MINOR(d), path, dev->pvid);
+		log_debug_devs("Found dev %u:%u %s - exists. %.8s",
+			       MAJOR(d), MINOR(d), path, dev->pvid);
 		return 1;
 	}
 
@@ -771,8 +761,7 @@ static int _insert_dev(const char *path, dev_t d)
 	 * No device or path found, add devt to cache.devices, add name to cache.names.
 	 */
 	if (!dev_by_devt && !dev_by_path) {
-		log_debug_devs("Found dev %d:%d %s - new.",
-			       (int)MAJOR(d), (int)MINOR(d), path);
+		log_debug_devs("Found dev %u:%u %s - new.", MAJOR(d), MINOR(d), path);
 
 		if (!(dev = (struct device *) btree_lookup(_cache.sysfs_only_devices, (uint32_t) d))) {
 			/* create new device */
@@ -796,8 +785,7 @@ static int _insert_dev(const char *path, dev_t d)
 	 * Existing device, path is new, add path as a new alias for the device.
 	 */
 	if (dev_by_devt && !dev_by_path) {
-		log_debug_devs("Found dev %d:%d %s - new alias.",
-			       (int)MAJOR(d), (int)MINOR(d), path);
+		log_debug_devs("Found dev %u:%u %s - new alias.", MAJOR(d), MINOR(d), path);
 
 		if (!_add_alias(dev, path, HASH))
 			return_0;
@@ -810,9 +798,9 @@ static int _insert_dev(const char *path, dev_t d)
 	 * to a different device.
 	 */
 	if (!dev_by_devt && dev_by_path) {
-		log_debug_devs("Found dev %d:%d %s - new device, path was previously %d:%d.",
-			       (int)MAJOR(d), (int)MINOR(d), path,
-			       (int)MAJOR(dev_by_path->dev), (int)MINOR(dev_by_path->dev));
+		log_debug_devs("Found dev %u:%u %s - new device, path was previously %u:%u.",
+			       MAJOR(d), MINOR(d), path,
+			       MAJOR(dev_by_path->dev), MINOR(dev_by_path->dev));
 
 		if (!(dev = (struct device *) btree_lookup(_cache.sysfs_only_devices, (uint32_t) d))) {
 			/* create new device */
@@ -837,9 +825,9 @@ static int _insert_dev(const char *path, dev_t d)
 	 * a different device.
 	 */
 	if (dev_by_devt && dev_by_path) {
-		log_debug_devs("Found dev %d:%d %s - existing device, path was previously %d:%d.",
-			       (int)MAJOR(d), (int)MINOR(d), path,
-			       (int)MAJOR(dev_by_path->dev), (int)MINOR(dev_by_path->dev));
+		log_debug_devs("Found dev %u:%u %s - existing device, path was previously %u:%u.",
+			       MAJOR(d), MINOR(d), path,
+			       MAJOR(dev_by_path->dev), MINOR(dev_by_path->dev));
 
 		if (!_add_alias(dev, path, REHASH))
 			return_0;
@@ -847,15 +835,16 @@ static int _insert_dev(const char *path, dev_t d)
 		return 1;
 	}
 
-	log_error("Found dev %d:%d %s - failed to use.", (int)MAJOR(d), (int)MINOR(d), path);
+	log_error("Found dev %u:%u %s - failed to use.", MAJOR(d), MINOR(d), path);
 	return 0;
 }
 
 /*
  * Get rid of extra slashes in the path string.
  */
-static void _collapse_slashes(char *str)
+static size_t _collapse_slashes(char *str)
 {
+	char *start = str;
 	char *ptr;
 	int was_slash = 0;
 
@@ -870,11 +859,27 @@ static void _collapse_slashes(char *str)
 		*str++ = *ptr;
 	}
 
-	*str = *ptr;
+	*str = 0;
+
+	return (str - start);
 }
 
 static int _insert_dir(const char *dir)
 {
+	/* alphanetically! sorted list used by bsearch of
+	 * /dev subdirectories that should not contain
+	 * any block device, so no reason to scan them. */
+	static const char _no_scan[][12] = {
+		"bsg/",
+		"bus/",
+		"char/",
+		"cpu/",
+		"dma_heap/",
+		"dri/",
+		"input/",
+		"snd/",
+		"usb/",
+	};
 	int n, dirent_count, r = 1;
 	struct dirent **dirent = NULL;
 	char path[PATH_MAX];
@@ -884,10 +889,20 @@ static int _insert_dir(const char *dir)
 		log_debug_devs("Dir path %s is too long", path);
 		return 0;
 	}
-	_collapse_slashes(path);
-	len = strlen(path);
+
+	len = _collapse_slashes(path);
 	if (len && path[len - 1] != '/')
 		path[len++] = '/';
+
+	if ((len < (5 + sizeof(_no_scan[0]))) && (strncmp("/dev/", path, 5) == 0) && (len > 5)) {
+		path[len] = 0;
+		if (bsearch(path + 5, _no_scan, DM_ARRAY_SIZE(_no_scan), sizeof(_no_scan[0]),
+			    (int (*)(const void*, const void*))strcmp)) {
+			/* Skip insertion of directories that can't have block devices */
+			log_debug("Skipping \"%s\" (no block devices).", path);
+			return 1;
+		}
+	}
 
 	dirent_count = scandir(dir, &dirent, NULL, alphasort);
 	if (dirent_count > 0) {
@@ -912,7 +927,7 @@ static int _insert_dir(const char *dir)
 	return r;
 }
 
-static int _dev_cache_iterate_devs_for_index(void)
+static int _dev_cache_iterate_devs_for_index(struct cmd_context *cmd)
 {
 	struct btree_iter *iter = btree_first(_cache.devices);
 	struct device *dev;
@@ -921,7 +936,7 @@ static int _dev_cache_iterate_devs_for_index(void)
 	while (iter) {
 		dev = btree_get_data(iter);
 
-		if (!_index_dev_by_vgid_and_lvid(dev))
+		if (!_index_dev_by_vgid_and_lvid(cmd, dev))
 			r = 0;
 
 		iter = btree_next(iter);
@@ -930,7 +945,7 @@ static int _dev_cache_iterate_devs_for_index(void)
 	return r;
 }
 
-static int _dev_cache_iterate_sysfs_for_index(const char *path)
+static int _dev_cache_iterate_sysfs_for_index(struct cmd_context *cmd, const char *path)
 {
 	char devname[PATH_MAX];
 	DIR *d;
@@ -968,7 +983,7 @@ static int _dev_cache_iterate_sysfs_for_index(const char *path)
 			}
 		}
 
-		if (!_index_dev_by_vgid_and_lvid(dev))
+		if (!_index_dev_by_vgid_and_lvid(cmd, dev))
 			partial_failure = 1;
 	}
 
@@ -980,7 +995,7 @@ static int _dev_cache_iterate_sysfs_for_index(const char *path)
 	return r;
 }
 
-static int dev_cache_index_devs(void)
+static int _dev_cache_index_devs(struct cmd_context *cmd)
 {
 	static int _sysfs_has_dev_block = -1;
 	char path[PATH_MAX];
@@ -1009,9 +1024,9 @@ static int dev_cache_index_devs(void)
 
 	if (obtain_device_list_from_udev() &&
 	    udev_get_library_context())
-		return _dev_cache_iterate_devs_for_index();  /* with udev */
+		return _dev_cache_iterate_devs_for_index(cmd);  /* with udev */
 
-	return _dev_cache_iterate_sysfs_for_index(path);
+	return _dev_cache_iterate_sysfs_for_index(cmd, path);
 }
 
 #ifdef UDEV_SYNC_SUPPORT
@@ -1203,7 +1218,7 @@ static void _drop_all_aliases(struct device *dev)
 	struct dm_str_list *strl, *strl2;
 
 	dm_list_iterate_items_safe(strl, strl2, &dev->aliases) {
-		log_debug("Drop alias for %d:%d %s.", (int)MAJOR(dev->dev), (int)MINOR(dev->dev), strl->str);
+		log_debug("Drop alias for %u:%u %s.", MAJOR(dev->dev), MINOR(dev->dev), strl->str);
 		dm_hash_remove(_cache.names, strl->str);
 		dm_list_del(&strl->list);
 	}
@@ -1220,7 +1235,7 @@ void dev_cache_scan(struct cmd_context *cmd)
 	setlocale(LC_COLLATE, "");
 
 	if (cmd->check_devs_used)
-		(void) dev_cache_index_devs();
+		(void) _dev_cache_index_devs(cmd);
 }
 
 int dev_cache_has_scanned(void)
@@ -1295,7 +1310,7 @@ int dev_cache_init(struct cmd_context *cmd)
 	if (!(_cache.mem = dm_pool_create("dev_cache", 10 * 1024)))
 		return_0;
 
-	if (!(_cache.names = dm_hash_create(1020)) ||
+	if (!(_cache.names = dm_hash_create(8190)) ||
 	    !(_cache.vgid_index = dm_hash_create(30)) ||
 	    !(_cache.lvid_index = dm_hash_create(29))) {
 		dm_pool_destroy(_cache.mem);
@@ -1318,6 +1333,7 @@ int dev_cache_init(struct cmd_context *cmd)
 		goto bad;
 	}
 
+	_cache.dev_dir_len = strlen(_cache.dev_dir);
 	dm_list_init(&_cache.dirs);
 
 	if (!_init_preferred_names(cmd))
@@ -1458,9 +1474,9 @@ void dev_cache_verify_aliases(struct device *dev)
 
 	dm_list_iterate_items_safe(strl, strl2, &dev->aliases) {
 		if (stat(strl->str, &st) || (st.st_rdev != dev->dev)) {
-			log_debug("Drop alias for %d:%d invalid path %s %d:%d.",
-				  (int)MAJOR(dev->dev), (int)MINOR(dev->dev), strl->str,
-				  (int)MAJOR(st.st_rdev), (int)MINOR(st.st_rdev));
+			log_debug("Drop alias for %u:%u invalid path %s %u:%u.",
+				  MAJOR(dev->dev), MINOR(dev->dev), strl->str,
+				  MAJOR(st.st_rdev), MINOR(st.st_rdev));
 			dm_hash_remove(_cache.names, strl->str);
 			dm_list_del(&strl->list);
 		}
@@ -1492,8 +1508,8 @@ static struct device *_dev_cache_get(struct cmd_context *cmd, const char *name, 
 	 */
 	if (stat(name, &st)) {
 		if (dev) {
-			log_debug("Device path %s is invalid for %d:%d %s.",
-				  name, (int)MAJOR(dev->dev), (int)MINOR(dev->dev), dev_name(dev));
+			log_debug("Device path %s is invalid for %u:%u %s.",
+				  name, MAJOR(dev->dev), MINOR(dev->dev), dev_name(dev));
 
 			dm_hash_remove(_cache.names, name);
 
@@ -1531,16 +1547,16 @@ static struct device *_dev_cache_get(struct cmd_context *cmd, const char *name, 
 		 * approach would be not using dev-cache at all for LVs.
 		 */
 
-		log_debug("Dropping aliases for device entry %d:%d %s for new device %d:%d %s.",
-			  (int)MAJOR(dev->dev), (int)MINOR(dev->dev), dev_name(dev),
-			  (int)MAJOR(st.st_rdev), (int)MINOR(st.st_rdev), name);
+		log_debug("Dropping aliases for device entry %u:%u %s for new device %u:%u %s.",
+			  MAJOR(dev->dev), MINOR(dev->dev), dev_name(dev),
+			  MAJOR(st.st_rdev), MINOR(st.st_rdev), name);
 
 		_drop_all_aliases(dev);
 
 		if (dev_by_devt) {
-			log_debug("Dropping aliases for device entry %d:%d %s for new device %d:%d %s.",
-				   (int)MAJOR(dev_by_devt->dev), (int)MINOR(dev_by_devt->dev), dev_name(dev_by_devt),
-				   (int)MAJOR(st.st_rdev), (int)MINOR(st.st_rdev), name);
+			log_debug("Dropping aliases for device entry %u:%u %s for new device %u:%u %s.",
+				   MAJOR(dev_by_devt->dev), MINOR(dev_by_devt->dev), dev_name(dev_by_devt),
+				   MAJOR(st.st_rdev), MINOR(st.st_rdev), name);
 
 			_drop_all_aliases(dev_by_devt);
 		}
@@ -1551,8 +1567,8 @@ static struct device *_dev_cache_get(struct cmd_context *cmd, const char *name, 
 		 * a warning to look for any other unknown cases.
 		 */
 		if (MAJOR(st.st_rdev) != cmd->dev_types->device_mapper_major) {
-			log_warn("WARNING: new device appeared %d:%d %s",
-				  (int)MAJOR(st.st_rdev), (int)(MINOR(st.st_rdev)), name);
+			log_warn("WARNING: new device appeared %u:%u %s",
+				  MAJOR(st.st_rdev), (MINOR(st.st_rdev)), name);
 		}
 #endif
 
@@ -1609,8 +1625,8 @@ static struct device *_dev_cache_get(struct cmd_context *cmd, const char *name, 
 		 */
 		struct device *dev_by_devt = (struct device *) btree_lookup(_cache.devices, (uint32_t) st.st_rdev);
 		if (dev_by_devt) {
-			log_debug("Dropping aliases for %d:%d before adding new path %s.",
-				  (int)MAJOR(st.st_rdev), (int)(MINOR(st.st_rdev)), name);
+			log_debug("Dropping aliases for %u:%u before adding new path %s.",
+				  MAJOR(st.st_rdev), MINOR(st.st_rdev), name);
 			_drop_all_aliases(dev_by_devt);
 		}
 
@@ -1620,8 +1636,8 @@ static struct device *_dev_cache_get(struct cmd_context *cmd, const char *name, 
 		 * a warning to look for any other unknown cases.
 		 */
 		if (MAJOR(st.st_rdev) != cmd->dev_types->device_mapper_major) {
-			log_warn("WARNING: new device appeared %d:%d %s",
-				  (int)MAJOR(st.st_rdev), (int)(MINOR(st.st_rdev)), name);
+			log_warn("WARNING: new device appeared %u:%u %s.",
+				  MAJOR(st.st_rdev), MINOR(st.st_rdev), name);
 		}
 #endif
 
@@ -1671,7 +1687,7 @@ struct device *dev_cache_get_by_devt(struct cmd_context *cmd, dev_t devt)
 
 	if (dev)
 		return dev;
-	log_debug_devs("No devno %d:%d in dev cache.", (int)MAJOR(devt), (int)MINOR(devt));
+	log_debug_devs("No devno %u:%u in dev cache.", MAJOR(devt), MINOR(devt));
 	return NULL;
 }
 
@@ -2363,30 +2379,30 @@ struct device *setup_dev_in_dev_cache(struct cmd_context *cmd, dev_t devno, cons
 {
 	struct device *dev;
 	struct stat buf;
-	int major = (int)MAJOR(devno);
-	int minor = (int)MINOR(devno);
+	unsigned major = MAJOR(devno);
+	unsigned minor = MINOR(devno);
 
 	if (devname) {
 		if (stat(devname, &buf) < 0) {
-			log_error("Cannot access device %s for %d:%d.", devname, major, minor);
+			log_error("Cannot access device %s for %u:%u.", devname, major, minor);
 			if (!devno)
 				return_NULL;
 			if (!(devname = _get_devname_from_devno(cmd, devno))) {
-				log_error("No device name found from %d:%d.", major, minor);
+				log_error("No device name found from %u:%u.", major, minor);
 				return_NULL;
 			}
 			if (stat(devname, &buf) < 0) {
-				log_error("Cannot access device %s from %d:%d.", devname, major, minor);
+				log_error("Cannot access device %s from %u:%u.", devname, major, minor);
 				return_NULL;
 			}
 		}
 	} else {
 		if (!(devname = _get_devname_from_devno(cmd, devno))) {
-			log_error("No device name found from %d:%d.", major, minor);
+			log_error("No device name found from %u:%u.", major, minor);
 			return_NULL;
 		}
 		if (stat(devname, &buf) < 0) {
-			log_error("Cannot access device %s from %d:%d.", devname, major, minor);
+			log_error("Cannot access device %s from %u:%u.", devname, major, minor);
 			return_NULL;
 		}
 	}
@@ -2397,15 +2413,15 @@ struct device *setup_dev_in_dev_cache(struct cmd_context *cmd, dev_t devno, cons
 	}
 
 	if (devno && (buf.st_rdev != devno)) {
-		log_warn("Found %s devno %d:%d expected %d:%d.", devname,
-			  (int)MAJOR(buf.st_rdev), (int)MINOR(buf.st_rdev), major, minor);
+		log_warn("Found %s devno %u:%u expected %u:%u.", devname,
+			  MAJOR(buf.st_rdev), MINOR(buf.st_rdev), major, minor);
 	}
 
 	if (!_insert_dev(devname, buf.st_rdev))
 		return_NULL;
 
 	if (!(dev = (struct device *) dm_hash_lookup(_cache.names, devname))) {
-		log_error("Device lookup failed for %d:%d %s", major, minor, devname);
+		log_error("Device lookup failed for %u:%u %s", major, minor, devname);
 		return_NULL;
 	}
 

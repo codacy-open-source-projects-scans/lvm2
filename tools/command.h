@@ -226,24 +226,23 @@ struct command {
 /* see global opt_names[] */
 
 struct opt_name {
-	const char name[27];    /* "foo_ARG" */
+	const char *desc;
+	const char long_opt[27];/* --foo */
 	const char short_opt;   /* -f */
 	uint16_t opt_enum;      /* foo_ARG */
-	const char long_opt[28];   /* --foo */
 	uint16_t val_enum;	/* xyz_VAL when --foo takes a val like "--foo xyz" */
 	uint16_t flags;
 	uint16_t prio;
-	const char *desc;
 };
 
 /* see global val_names[] */
 
 struct val_name {
-	const char enum_name[30]; /* "foo_VAL" */
-	uint16_t val_enum;      /* foo_VAL */
 	int (*fn) (struct cmd_context *cmd, struct arg_values *av); /* foo_arg() */
-	const char name[32];    /* FooVal */
 	const char *usage;
+	const char name[30];    /* FooVal */
+	uint16_t name_len;      /* sizeof(FooVal) - 1 */
+	uint16_t val_enum;      /* foo_VAL */
 };
 
 /* see global lv_props[] */
@@ -269,7 +268,7 @@ void print_usage_common_cmd(const struct command_name *cname, struct command *cm
 void print_usage_common_lvm(const struct command_name *cname, struct command *cmd);
 void print_usage_notes(const struct command_name *cname);
 void factor_common_options(void);
-int command_has_alternate_extents(const char *name);
+int command_has_alternate_extents(const struct command_name *cname);
 int configure_command_option_values(const struct command_name *cname, int arg_enum, int val_enum);
 const struct command_name *find_command_name(const char *name);
 

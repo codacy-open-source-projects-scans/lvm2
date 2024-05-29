@@ -71,6 +71,7 @@ static struct cmdline_context _cmdline;
  * For now, any command id not included here uses the old command fn.
  */
 static const struct command_function _command_functions[CMD_COUNT] = {
+	{ CMD_NONE, NULL },
 	{ lvmconfig_general_CMD, lvmconfig },
 	{ lvchange_properties_CMD, lvchange_properties_cmd },
 	{ lvchange_resync_CMD, lvchange_resync_cmd },
@@ -1303,15 +1304,12 @@ static void _set_valid_args_for_command_name(int ci)
 
 static command_fn _find_command_id_function(int command_enum)
 {
-	int i;
+	unsigned i;
 
-	if (!command_enum)
-		return NULL;
-
-	for (i = 0; i < CMD_COUNT; i++) {
+	for (i = 0; i < CMD_COUNT; i++)
 		if (_command_functions[i].command_enum == command_enum)
 			return _command_functions[i].fn;
-	}
+
 	return NULL;
 }
 
@@ -1446,7 +1444,7 @@ static int _command_required_opt_matches(struct cmd_context *cmd, int ci, int ro
 	 * but command[] definitions use only --size.
 	 */
 	if ((opt_enum == size_ARG) && arg_is_set(cmd, extents_ARG) &&
-	    command_has_alternate_extents(commands[ci].name))
+	    command_has_alternate_extents(&command_names[commands[ci].lvm_command_enum]))
 		goto check_val;
 
 	return 0;
@@ -1637,21 +1635,20 @@ static struct command *_find_command(struct cmd_context *cmd, const char *path, 
 	int opt_enum, opt_i;
 	int accepted, count;
 	int variants = 0;
+	uint16_t lvm_command_enum = (cmd->cname) ? cmd->cname->lvm_command_enum : LVM_COMMAND_COUNT;
 
 	name = last_path_component(path);
 
 	/* factor_common_options() is only for usage, so cname->variants is not set. */
-	for (i = 0; i < COMMAND_COUNT; i++) {
-		if (strcmp(name, commands[i].name))
-			continue;
-		variants++;
-	}
+	for (i = 0; i < COMMAND_COUNT; i++)
+		if (lvm_command_enum == commands[i].lvm_command_enum)
+			variants++;
 
 	if (arg_is_set(cmd, type_ARG))
 		type_arg = arg_str_value(cmd, type_ARG, "");
 
 	for (i = 0; i < COMMAND_COUNT; i++) {
-		if (strcmp(name, commands[i].name))
+		if (lvm_command_enum != commands[i].lvm_command_enum)
 			continue;
 
 		if (variants == 1)

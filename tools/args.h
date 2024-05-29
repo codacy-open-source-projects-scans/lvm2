@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2016 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2024 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -94,6 +94,14 @@ arg(atversion_ARG, '\0', "atversion", string_VAL, 0, 0,
     "which does not contain any newer settings for which LVM would\n"
     "issue a warning message when checking the configuration.\n")
 
+arg(auto_ARG, '\0', "auto", 0, 0, 0,
+    "This option is used when automatically importing devices for the root VG.\n"
+    "The auto import is intended to be done once, on first boot, to create an\n"
+    "initial system.devices file for the root VG.\n"
+    "When this option is used, the vgimportdevices --rootvg command does nothing\n"
+    "if system.devices exists, or the file auto-import-rootvg does not exist\n"
+    "(both in the \\fI#DEFAULT_SYS_DIR#/devices/\\fP directory.)\n")
+
 arg(autoactivation_ARG, '\0', "autoactivation", string_VAL, 0, 0,
     "Specify if autoactivation is being used from an event.\n"
     "This allows the command to apply settings that are specific\n"
@@ -129,7 +137,7 @@ arg(bootloaderareasize_ARG, '\0', "bootloaderareasize", sizemb_VAL, 0, 0,
     "To see the bootloader area start and size of\n"
     "an existing PV use pvs -o +pv_ba_start,pv_ba_size.\n")
 
-arg(cache_long_ARG, '\0', "cache", 0, 0, 0,
+arg(cache_long_ARG, '\0', "cache", 0, ARG_LONG_OPT, 0,
     "#pvscan\n"
     "Scan one or more devices and record that they are online.\n"
     "#vgscan\n"
@@ -293,7 +301,7 @@ arg(errorwhenfull_ARG, '\0', "errorwhenfull", bool_VAL, 0, 0,
     "(Also see dm-thin-pool kernel module option no_space_timeout.)\n"
     "See \\fBlvmthin\\fP(7) for more information.\n")
 
-arg(force_long_ARG, '\0', "force", 0, ARG_COUNTABLE, 0,
+arg(force_long_ARG, '\0', "force", 0, ARG_COUNTABLE | ARG_LONG_OPT, 0,
     "Force metadata restore even with thin pool LVs.\n"
     "Use with extreme caution. Most changes to thin metadata\n"
     "cannot be reverted.\n"
@@ -754,6 +762,9 @@ arg(resync_ARG, '\0', "resync", 0, 0, 0,
     "which the LV is without a complete redundant copy of the data.\n"
     "See \\fBlvmraid\\fP(7) for more information.\n")
 
+arg(rootvg_ARG, '\0', "rootvg", 0, 0, 0,
+    "Import devices used for the root VG.\n")
+
 arg(rows_ARG, '\0', "rows", 0, 0, 0,
     "Output columns as rows.\n")
 
@@ -826,7 +837,7 @@ arg(showunsupported_ARG, '\0', "showunsupported", 0, 0, 0,
 arg(startpoll_ARG, '\0', "startpoll", 0, 0, 0,
     "Start polling an LV to continue processing a conversion.\n")
 
-arg(stripes_long_ARG, '\0', "stripes", number_VAL, 0, 0,
+arg(stripes_long_ARG, '\0', "stripes", number_VAL, ARG_LONG_OPT, 0,
     "Specifies the number of stripes in a striped LV. This is the number of\n"
     "PVs (devices) that a striped LV is spread across. Data that\n"
     "appears sequential in the LV is spread across multiple devices in units of\n"
@@ -869,7 +880,7 @@ arg(systemid_ARG, '\0', "systemid", string_VAL, 0, 0,
     "the command, leaving the VG inaccessible to the host.\n"
     "See \\fBlvmsystemid\\fP(7) for more information.\n"
     "#vgchange\n"
-    "Changes the system ID of the VG.  Using this option requires caution\n"
+    "Changes the system ID of the VG. Using this option requires caution\n"
     "because the VG may become foreign to the host running the command,\n"
     "leaving the host unable to access it.\n"
     "See \\fBlvmsystemid\\fP(7) for more information.\n")
@@ -1089,7 +1100,7 @@ arg(activate_ARG, 'a', "activate", activation_VAL, 0, 0,
     "The location and name of the underlying device node may depend on\n"
     "the distribution, configuration (e.g. udev), or release version.\n"
     "\\fBay\\fP specifies autoactivation, which is used by system-generated\n"
-    "activation commands.  By default, LVs are autoactivated.\n"
+    "activation commands. By default, LVs are autoactivated.\n"
     "An autoactivation property can be set on a VG or LV to disable autoactivation,\n"
     "see --setautoactivation y|n in vgchange, lvchange, vgcreate, and lvcreate.\n"
     "Display the property with vgs or lvs \"-o autoactivation\".\n"

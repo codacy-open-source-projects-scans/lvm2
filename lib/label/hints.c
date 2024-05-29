@@ -445,7 +445,7 @@ static int _dev_in_hint_hash(struct cmd_context *cmd, struct device *dev)
 		return 0;
 
 	/* exclude LVs from hint accounting when scan_lvs is 0 */
-	if (!cmd->scan_lvs && dm_is_dm_major(MAJOR(dev->dev)) && dev_is_lv(dev))
+	if (!cmd->scan_lvs && dm_is_dm_major(MAJOR(dev->dev)) && dev_is_lv(cmd, dev))
 		return 0;
 
 	if (!dev_get_size(dev, &devsize) || !devsize)
@@ -737,7 +737,7 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 		 *   list of devs used by this cmd
 		 */
 
-		keylen = strlen("hints_version:");
+		keylen = sizeof("hints_version:") - 1;
 		if (!strncmp(_hint_line, "hints_version:", keylen)) {
 			if (sscanf(_hint_line + keylen, "%d.%d", &hv_major, &hv_minor) != 2) {
 				log_debug("ignore hints with unknown version %d.%d", hv_major, hv_minor);
@@ -754,7 +754,7 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 			continue;
 		}
 
-		keylen = strlen("global_filter:");
+		keylen = sizeof("global_filter:") - 1;
 		if (!strncmp(_hint_line, "global_filter:", keylen)) {
 			_filter_to_str(cmd, devices_global_filter_CFG, &filter_str);
 			if (!filter_str || strcmp(filter_str, _hint_line + keylen)) {
@@ -767,7 +767,7 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 			continue;
 		}
 
-		keylen = strlen("filter:");
+		keylen = sizeof("filter:") - 1;
 		if (!strncmp(_hint_line, "filter:", keylen)) {
 			_filter_to_str(cmd, devices_filter_CFG, &filter_str);
 			if (!filter_str || strcmp(filter_str, _hint_line + keylen)) {
@@ -780,7 +780,7 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 			continue;
 		}
 
-		keylen = strlen("scan_lvs:");
+		keylen = sizeof("scan_lvs:") - 1;
 		if (!strncmp(_hint_line, "scan_lvs:", keylen)) {
 			unsigned scan_lvs = 0;
 			if ((sscanf(_hint_line + keylen, "%u", &scan_lvs) != 1) ||
@@ -792,7 +792,7 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 			continue;
 		}
 
-		keylen = strlen("devices_file:");
+		keylen = sizeof("devices_file:") - 1;
 		if (!strncmp(_hint_line, "devices_file:", keylen)) {
 			const char *df_hint = _hint_line + keylen;
 			const char *df_config = find_config_tree_str(cmd, devices_devicesfile_CFG, NULL);
@@ -811,7 +811,7 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 			continue;
 		}
 
-		keylen = strlen("devs_hash:");
+		keylen = sizeof("devs_hash:") - 1;
 		if (!strncmp(_hint_line, "devs_hash:", keylen)) {
 			if (sscanf(_hint_line + keylen, "%u %u", &read_hash, &read_count) != 2) {
 				log_debug("ignore hints with invalid devs_hash");
@@ -824,7 +824,7 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 		/*
 		 * Ignore any other line prefixes that we don't recognize.
 		 */
-		keylen = strlen("scan:");
+		keylen = sizeof("scan:") - 1;
 		if (strncmp(_hint_line, "scan:", keylen))
 			continue;
 

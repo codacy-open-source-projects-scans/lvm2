@@ -22,6 +22,7 @@
 #include "lib/device/bcache.h"
 #include "lib/label/label.h"
 #include "lib/commands/toolcontext.h"
+#include "lib/activate/activate.h"
 #include "device_mapper/misc/dm-ioctl.h"
 
 #ifdef BLKID_WIPING_SUPPORT
@@ -50,33 +51,16 @@ int dev_is_nvme(struct dev_types *dt, struct device *dev)
 	return (dev->flags & DEV_IS_NVME) ? 1 : 0;
 }
 
-int dev_is_lv(struct device *dev)
+int dev_is_lv(struct cmd_context *cmd, struct device *dev)
 {
-	FILE *fp;
-	char path[PATH_MAX];
-	char buffer[64];
-	int ret = 0;
+	char buffer[128];
 
-	if (dm_snprintf(path, sizeof(path), "%sdev/block/%d:%d/dm/uuid",
-			dm_sysfs_dir(),
-			(int) MAJOR(dev->dev),
-			(int) MINOR(dev->dev)) < 0) {
-		log_warn("Sysfs dm uuid path for %s is too long.", dev_name(dev));
-		return 0;
-	}
+	if (device_get_uuid(cmd, MAJOR(dev->dev), MINOR(dev->dev),
+			    buffer, sizeof(buffer)) &&
+	    !strncmp(buffer, UUID_PREFIX, sizeof(UUID_PREFIX) - 1))
+                return 1;
 
-	if (!(fp = fopen(path, "r")))
-		return 0;
-
-	if (!fgets(buffer, sizeof(buffer), fp))
-		log_debug("Failed to read %s.", path);
-	else if (!strncmp(buffer, "LVM-", 4))
-		ret = 1;
-
-	if (fclose(fp))
-		log_sys_debug("fclose", path);
-
-	return ret;
+	return 0;
 }
 
 int dev_is_used_by_active_lv(struct cmd_context *cmd, struct device *dev, int *used_by_lv_count,
@@ -90,8 +74,8 @@ int dev_is_used_by_active_lv(struct cmd_context *cmd, struct device *dev, int *u
 	struct dirent *dirent;
 	char *holder_name;
 	unsigned dm_dev_major, dm_dev_minor;
-	size_t lvm_prefix_len = sizeof(UUID_PREFIX) - 1;
-	size_t lvm_uuid_len = sizeof(UUID_PREFIX) - 1 + 2 * ID_LEN;
+	const size_t lvm_prefix_len = sizeof(UUID_PREFIX) - 1;
+	const size_t lvm_uuid_len = lvm_prefix_len + 2 * ID_LEN;
 	size_t uuid_len;
 	int used_count = 0;
 	char *used_name = NULL;
@@ -132,25 +116,21 @@ int dev_is_used_by_active_lv(struct cmd_context *cmd, struct device *dev, int *u
 		if (stat(dm_dev_path, &info))
 			continue;
 
-		dm_dev_major = (int)MAJOR(info.st_rdev);
-		dm_dev_minor = (int)MINOR(info.st_rdev);
+		dm_dev_major = MAJOR(info.st_rdev);
+		dm_dev_minor = MINOR(info.st_rdev);
         
 		if (dm_dev_major != cmd->dev_types->device_mapper_major)
 			continue;
 
 		/*
 		 * if "dm-1" is a dm device, then check if it's an LVM LV
-		 * by reading /sys/block/<holder_name>/dm/uuid and seeing
-		 * if the uuid begins with LVM-
-		 * UUID_PREFIX is "LVM-"
+		 * by reading DM status and seeing if the uuid begins
+		 * with UUID_PREFIX  ("LVM-")
 		 */
-
-		dm_uuid[0] = '\0';
-
-		if (!get_dm_uuid_from_sysfs(dm_uuid, sizeof(dm_uuid), dm_dev_major, dm_dev_minor))
+		if (!device_get_uuid(cmd, dm_dev_major, dm_dev_minor, dm_uuid, sizeof(dm_uuid)))
 			continue;
 
-		if (!strncmp(dm_uuid, UUID_PREFIX, 4))
+		if (!strncmp(dm_uuid, UUID_PREFIX, lvm_prefix_len))
 			used_count++;
 
 		if (used_by_dm_name && !used_name)
@@ -270,44 +250,45 @@ struct dev_types *create_dev_types(const char *proc_dir,
 		while (line[i] == ' ')
 			i++;
 
-		/* Look for md device */
-		if (!strncmp("md", line + i, 2) && isspace(*(line + i + 2)))
-			dt->md_major = line_maj;
-
-		/* Look for blkext device */
-		if (!strncmp("blkext", line + i, 6) && isspace(*(line + i + 6)))
-			dt->blkext_major = line_maj;
-
-		/* Look for drbd device */
-		if (!strncmp("drbd", line + i, 4) && isspace(*(line + i + 4)))
-			dt->drbd_major = line_maj;
-
-		/* Look for DASD */
-		if (!strncmp("dasd", line + i, 4) && isspace(*(line + i + 4)))
-			dt->dasd_major = line_maj;
-
-		/* Look for EMC powerpath */
-		if (!strncmp("emcpower", line + i, 8) && isspace(*(line + i + 8)))
-			dt->emcpower_major = line_maj;
-
-		/* Look for Veritas Dynamic Multipathing */
-		if (!strncmp("VxDMP", line + i, 5) && isspace(*(line + i + 5)))
-			dt->vxdmp_major = line_maj;
-
-		if (!strncmp("loop", line + i, 4) && isspace(*(line + i + 4)))
-			dt->loop_major = line_maj;
-
-		if (!strncmp("power2", line + i, 6) && isspace(*(line + i + 6)))
-			dt->power2_major = line_maj;
-
-		/* Look for device-mapper device */
-		/* FIXME Cope with multiple majors */
-		if (!strncmp("device-mapper", line + i, 13) && isspace(*(line + i + 13)))
-			dt->device_mapper_major = line_maj;
-
 		/* Major is SCSI device */
 		if (!strncmp("sd", line + i, 2) && isspace(*(line + i + 2)))
 			dt->dev_type_array[line_maj].flags |= PARTITION_SCSI_DEVICE;
+
+		else if (!strncmp("loop", line + i, 4) && isspace(*(line + i + 4)))
+			dt->loop_major = line_maj;
+
+		/* Look for device-mapper device */
+		/* FIXME Cope with multiple majors */
+		else if (!strncmp("device-mapper", line + i, 13) && isspace(*(line + i + 13)))
+			dt->device_mapper_major = line_maj;
+
+		/* Look for md device */
+		else if (!strncmp("md", line + i, 2) && isspace(*(line + i + 2)))
+			dt->md_major = line_maj;
+
+		/* Look for blkext device */
+		else if (!strncmp("blkext", line + i, 6) && isspace(*(line + i + 6)))
+			dt->blkext_major = line_maj;
+
+		/* Look for drbd device */
+		else if (!strncmp("drbd", line + i, 4) && isspace(*(line + i + 4)))
+			dt->drbd_major = line_maj;
+
+		/* Look for DASD */
+		else if (!strncmp("dasd", line + i, 4) && isspace(*(line + i + 4)))
+			dt->dasd_major = line_maj;
+
+		/* Look for EMC powerpath */
+		else if (!strncmp("emcpower", line + i, 8) && isspace(*(line + i + 8)))
+			dt->emcpower_major = line_maj;
+
+		/* Look for Veritas Dynamic Multipathing */
+		else if (!strncmp("VxDMP", line + i, 5) && isspace(*(line + i + 5)))
+			dt->vxdmp_major = line_maj;
+
+		else if (!strncmp("power2", line + i, 6) && isspace(*(line + i + 6)))
+			dt->power2_major = line_maj;
+
 
 		/* Go through the valid device names and if there is a
 		   match store max number of partitions */
@@ -363,7 +344,7 @@ struct dev_types *create_dev_types(const char *proc_dir,
 	}
 
 	if (fclose(pd))
-		log_sys_error("fclose", proc_devices);
+		log_sys_debug("fclose", proc_devices);
 
 	return dt;
 bad:

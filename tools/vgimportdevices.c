@@ -15,11 +15,16 @@
 #include "tools.h"
 #include "lib/cache/lvmcache.h"
 #include "lib/device/device_id.h"
+#include "device_mapper/misc/dm-ioctl.h"
+#include "lib/activate/activate.h"
 /* coverity[unnecessary_header] needed for MuslC */
 #include <sys/file.h>
 
 struct vgimportdevices_params {
 	uint32_t added_devices;
+	int root_vg_found;
+	char *root_dm_uuid;
+	char *root_vg_name;
 };
 
 static int _vgimportdevices_single(struct cmd_context *cmd,
@@ -34,6 +39,13 @@ static int _vgimportdevices_single(struct cmd_context *cmd,
 	int update_vg = 1;
 	int updated_pvs = 0;
 	const char *idtypestr = NULL; /* deviceidtype_ARG ? */
+
+	if (vp->root_dm_uuid) {
+		if (memcmp(vp->root_dm_uuid + 4, &vg->id, ID_LEN))
+			return ECMD_PROCESSED;
+		vp->root_vg_found = 1;
+		vp->root_vg_name = dm_pool_strdup(cmd->mem, vg_name);
+	}
 
 	dm_list_iterate_items(pvl, &vg->pvs) {
 		if (is_missing_pv(pvl->pv) || !pvl->pv->dev) {
@@ -86,6 +98,58 @@ static int _vgimportdevices_single(struct cmd_context *cmd,
 	return ECMD_PROCESSED;
 }
 
+static int _get_rootvg_dev(struct cmd_context *cmd, char **dm_uuid_out, int *skip)
+{
+	char path[PATH_MAX];
+	struct stat info; 
+
+	/*
+	 * When --auto is set, the command does nothing
+	 * if /etc/lvm/devices/system.devices exists, or
+	 * if /etc/lvm/devices/auto-import-rootvg does not exist.
+	 */
+	if (arg_is_set(cmd, auto_ARG)) {
+		if (devices_file_exists(cmd)) {
+			*skip = 1;
+			return 1;
+		}
+
+		if (dm_snprintf(path, sizeof(path), "%s/devices/auto-import-rootvg", cmd->system_dir) < 0)
+			return_0;
+
+		if (stat(path, &info) < 0) {
+			*skip = 1;
+			return 1;
+		}
+
+		/*
+		 * This flag is just used in device_ids_write to enable
+		 * an extra comment in system.devices indicating that
+		 * the file was auto generated for the root vg.
+		 */
+		cmd->device_ids_auto_import = 1;
+	}
+
+	if (!get_rootvg_dev_uuid(cmd, dm_uuid_out))
+		return_0;
+
+	return 1;
+}
+
+static void _clear_rootvg_auto(struct cmd_context *cmd)
+{
+	char path[PATH_MAX];
+
+	if (dm_snprintf(path, sizeof(path), "%s/devices/auto-import-rootvg", cmd->system_dir) < 0)
+		return;
+
+	if (unlink(path) < 0)
+		log_debug("Failed to unlink %s", path);
+
+	if (unlink(DEVICES_IMPORT_PATH) < 0)
+		log_debug("Failed to unlink %s", DEVICES_IMPORT_PATH);
+}
+
 /*
  * This command always scans all devices on the system,
  * any pre-existing devices_file does not limit the scope.
@@ -129,6 +193,19 @@ int vgimportdevices(struct cmd_context *cmd, int argc, char **argv)
 
 	/* So that we can warn about this. */
 	cmd->handles_missing_pvs = 1;
+
+	/* Import devices for the root VG. */
+	if (arg_is_set(cmd, rootvg_ARG)) {
+		int skip = 0;
+		if (!_get_rootvg_dev(cmd, &vp.root_dm_uuid, &skip)) {
+			log_error("Failed to find root VG.");
+			return ECMD_FAILED;
+		}
+		if (skip) {
+			log_print("Root VG auto import is not enabled.");
+			return ECMD_PROCESSED;
+		}
+	}
 
 	if (!lock_global(cmd, "ex"))
 		return ECMD_FAILED;
@@ -230,7 +307,13 @@ int vgimportdevices(struct cmd_context *cmd, int argc, char **argv)
 		goto out;
 	}
 
-	log_print("Added %u devices to devices file.", vp.added_devices);
+	if (vp.root_vg_found)
+		log_print("Added %u devices to devices file for root VG %s.", vp.added_devices, vp.root_vg_name);
+	else
+		log_print("Added %u devices to devices file.", vp.added_devices);
+
+	if (vp.root_vg_found && arg_is_set(cmd, auto_ARG))
+		_clear_rootvg_auto(cmd);
 out:
 	if ((ret == ECMD_FAILED) && created_file)
 		if (unlink(cmd->devices_file_path) < 0)

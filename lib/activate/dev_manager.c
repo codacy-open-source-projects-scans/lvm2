@@ -569,15 +569,15 @@ static int _ignore_suspended_snapshot_component(struct device *dev)
 
 		if (!strcmp(target_type, TARGET_NAME_SNAPSHOT)) {
 			if (!params || sscanf(params, "%d:%d %d:%d", &major1, &minor1, &major2, &minor2) != 4) {
-				log_warn("WARNING: Incorrect snapshot table found for %d:%d.",
-					 (int)MAJOR(dev->dev), (int)MINOR(dev->dev));
+				log_warn("WARNING: Incorrect snapshot table found for %u:%u.",
+					 MAJOR(dev->dev), MINOR(dev->dev));
 				goto out;
 			}
 			r = r || _device_is_suspended(major1, minor1) || _device_is_suspended(major2, minor2);
 		} else if (!strcmp(target_type, TARGET_NAME_SNAPSHOT_ORIGIN)) {
 			if (!params || sscanf(params, "%d:%d", &major1, &minor1) != 2) {
-				log_warn("WARNING: Incorrect snapshot-origin table found for %d:%d.",
-					 (int)MAJOR(dev->dev), (int)MINOR(dev->dev));
+				log_warn("WARNING: Incorrect snapshot-origin table found for %u:%u.",
+					 MAJOR(dev->dev), MINOR(dev->dev));
 				goto out;
 			}
 			r = r || _device_is_suspended(major1, minor1);
@@ -612,8 +612,8 @@ static int _ignore_unusable_thins(struct device *dev)
 
 	dm_get_next_target(dmt, next, &start, &length, &target_type, &params);
 	if (!params || sscanf(params, "%d:%d", &major, &minor) != 2) {
-		log_warn("WARNING: Cannot get thin-pool major:minor for thin device %d:%d.",
-			  (int)MAJOR(dev->dev), (int)MINOR(dev->dev));
+		log_warn("WARNING: Cannot get thin-pool major:minor for thin device %u:%u.",
+			 MAJOR(dev->dev), MINOR(dev->dev));
 		goto out;
 	}
 	dm_task_destroy(dmt);
@@ -673,8 +673,8 @@ static int _ignore_frozen_raid(struct device *dev, const char *params)
 	if (!dm_get_status_raid(mem, params, &s))
 		stack;
 	else if (s->sync_action && !strcmp(s->sync_action, "frozen")) {
-		log_warn("WARNING: %s frozen raid device (%d:%d) needs inspection.",
-			  dev_name(dev), (int)MAJOR(dev->dev), (int)MINOR(dev->dev));
+		log_warn("WARNING: %s frozen raid device (%u:%u) needs inspection.",
+			 dev_name(dev), MAJOR(dev->dev), MINOR(dev->dev));
 		r = 1;
 	}
 
@@ -880,6 +880,36 @@ int device_is_usable(struct cmd_context *cmd, struct device *dev, struct dev_usa
 	return r;
 }
 
+/* Read UUID from a given DM device into  buf_uuid */
+int device_get_uuid(struct cmd_context *cmd, int major, int minor,
+		    char *uuid_buf, size_t uuid_buf_size)
+{
+	struct dm_task *dmt;
+	struct dm_info info;
+	const char *uuid;
+	int r = 0;
+
+	if (cmd->cache_dm_devs) {
+		if (dm_device_list_find_by_dev(cmd->cache_dm_devs, major, minor, NULL, &uuid)) {
+			dm_strncpy(uuid_buf, uuid, uuid_buf_size);
+			return 1;
+		}
+		uuid_buf[0] = 0;
+		return 0;
+	}
+
+	if (!(dmt = _setup_task_run(DM_DEVICE_INFO, &info, NULL, NULL, NULL,
+				    major, minor, 0, 0, 0)))
+		return_0;
+
+	if (info.exists && (uuid = dm_task_get_uuid(dmt)))
+		r = dm_strncpy(uuid_buf, uuid, uuid_buf_size);
+
+	dm_task_destroy(dmt);
+
+	return r;
+}
+
 /*
  * If active LVs were activated by a version of LVM2 before 2.02.00 we must
  * perform additional checks to find them because they do not have the LVM-
@@ -1032,8 +1062,7 @@ int dev_manager_info(struct cmd_context *cmd,
 	if (!(dlid = build_dm_uuid(cmd->mem, lv, layer)))
 		goto_out;
 
-	if (!cmd->disable_dm_devs &&
-	    cmd->cache_dm_devs &&
+	if (cmd->cache_dm_devs &&
 	    !dm_device_list_find_by_uuid(cmd->cache_dm_devs, dlid, NULL)) {
 		log_debug("Cached as inactive %s.", name);
 		if (dminfo)
@@ -2406,8 +2435,7 @@ static int _add_dev_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 	if (!(dlid = build_dm_uuid(dm->track_pending_delete ? dm->cmd->pending_delete_mem : dm->mem, lv, layer)))
 		return_0;
 
-	if (!dm->cmd->disable_dm_devs &&
-	    dm->cmd->cache_dm_devs) {
+	if (dm->cmd->cache_dm_devs) {
 		if (!dm_device_list_find_by_uuid(dm->cmd->cache_dm_devs, dlid, &dev)) {
 			log_debug("Cached as not present %s.", name);
 			return 1;
@@ -3915,7 +3943,6 @@ static int _tree_action(struct dev_manager *dm, const struct logical_volume *lv,
 	struct dm_tree_node *root;
 	char *dlid;
 	int r = 0;
-	unsigned tmp_state;
 
 	if (action < DM_ARRAY_SIZE(_action_names))
 		log_debug_activation("Creating %s%s tree for %s.",
@@ -3934,14 +3961,11 @@ static int _tree_action(struct dev_manager *dm, const struct logical_volume *lv,
 	dm->activation = ((action == PRELOAD) || (action == ACTIVATE));
 	dm->suspend = (action == SUSPEND_WITH_LOCKFS) || (action == SUSPEND);
 
-	/* ATM do not use caching for anything else then striped target.
-	 * And also skip for CLEAN action */
-	tmp_state = dm->cmd->disable_dm_devs;
-	if (!seg_is_striped_target(first_seg(lv)) || (action == CLEAN))
-		dm->cmd->disable_dm_devs = 1;
+	/* Drop any cache before DM table manipulation within locked section
+	 * TODO: check if it makes sense to manage cache within lock */
+	dm_device_list_destroy(&dm->cmd->cache_dm_devs);
 
 	dtree = _create_partial_dtree(dm, lv, laopts->origin_only);
-	dm->cmd->disable_dm_devs = tmp_state;
 
 	if (!dtree)
 		return_0;
@@ -4102,9 +4126,9 @@ int dev_manager_device_uses_vg(struct device *dev,
 
 	dm_tree_set_optional_uuid_suffixes(dtree, (const char**)_uuid_suffix_list);
 
-	if (!dm_tree_add_dev(dtree, (uint32_t) MAJOR(dev->dev), (uint32_t) MINOR(dev->dev))) {
-		log_error("Failed to add device %s (%" PRIu32 ":%" PRIu32") to dtree.",
-			  dev_name(dev), (uint32_t) MAJOR(dev->dev), (uint32_t) MINOR(dev->dev));
+	if (!dm_tree_add_dev(dtree, MAJOR(dev->dev), MINOR(dev->dev))) {
+		log_error("Failed to add device %s (%u:%u) to dtree.",
+			  dev_name(dev), MAJOR(dev->dev), MINOR(dev->dev));
 		goto out;
 	}
 
@@ -4161,7 +4185,7 @@ int get_crypt_table_offset(dev_t crypt_devt, uint32_t *offset_bytes)
 	 * <cipher> <key> <iv_offset> <device> <offset> [<#opt_params> <opt_params>]
 	 * <offset> is reported in 512 byte sectors.
 	 */
-	for (i = 0; i < strlen(params); i++) {
+	for (i = 0; params[i]; i++) {
 		if (params[i] == ' ') {
 			spaces++;
 			if (spaces == 4)

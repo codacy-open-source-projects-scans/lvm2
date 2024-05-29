@@ -175,8 +175,8 @@ struct dm_names {
 
 struct dm_active_device {
 	struct dm_list list;
-	int major;
-	int minor;
+	uint32_t major;
+	uint32_t minor;
 	char *name;	/* device name */
 
 	uint32_t event_nr; /* valid when DM_DEVICE_LIST_HAS_EVENT_NR is set */
@@ -235,8 +235,11 @@ int dm_task_get_device_list(struct dm_task *dmt, struct dm_list **devs_list,
  *  0: uuid not present
  *  1: listed and dm_active_device will be set for not NULL pointer
  */
-int dm_device_list_find_by_uuid(struct dm_list *devs_list, const char *uuid,
+int dm_device_list_find_by_uuid(const struct dm_list *devs_list, const char *uuid,
 				const struct dm_active_device **dev);
+int dm_device_list_find_by_dev(const struct dm_list *devs_list,
+			       uint32_t major, uint32_t minor,
+			       const char **name, const char **uuid);
 /* Release all associated memory with list of active DM devices */
 void dm_device_list_destroy(struct dm_list **devs_list);
 

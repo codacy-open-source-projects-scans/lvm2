@@ -159,7 +159,7 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 
 struct processing_handle *init_processing_handle(struct cmd_context *cmd, struct processing_handle *parent_handle);
 int init_selection_handle(struct cmd_context *cmd, struct processing_handle *handle,
-			  report_type_t initial_report_type);
+			  unsigned initial_report_type);
 void destroy_processing_handle(struct cmd_context *cmd, struct processing_handle *handle);
 
 int select_match_vg(struct cmd_context *cmd, struct processing_handle *handle,
@@ -243,5 +243,7 @@ int lvremove_single(struct cmd_context *cmd, struct logical_volume *lv,
                     struct processing_handle *handle __attribute__((unused)));
 
 int get_lvt_enum(struct logical_volume *lv);
+
+int get_rootvg_dev_uuid(struct cmd_context *cmd, char **dm_uuid_out);
 
 #endif
