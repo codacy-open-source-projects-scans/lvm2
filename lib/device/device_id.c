@@ -25,6 +25,8 @@
 #include "lib/cache/lvmcache.h"
 #include "lib/datastruct/str_list.h"
 #include "lib/metadata/metadata-exported.h"
+#include "lib/activate/activate.h"
+#include "device_mapper/misc/dm-ioctl.h"
 
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -432,8 +434,8 @@ static int _read_sys_block(struct cmd_context *cmd, struct device *dev,
 
 	sysfs_dir = cmd->device_id_sysfs_dir ?: dm_sysfs_dir();
  retry:
-	if (dm_snprintf(path, sizeof(path), "%sdev/block/%d:%d/%s",
-			sysfs_dir, (int)MAJOR(devt), (int)MINOR(devt), suffix) < 0) {
+	if (dm_snprintf(path, sizeof(path), "%sdev/block/%u:%u/%s",
+			sysfs_dir, MAJOR(devt), MINOR(devt), suffix) < 0) {
 		log_error("Failed to create sysfs path for %s", dev_name(dev));
 		return 0;
 	}
@@ -504,58 +506,59 @@ static int _dm_uuid_has_prefix(char *sysbuf, const char *prefix)
 }
 
 /* the dm uuid uses the wwid of the underlying dev */
-int dev_has_mpath_uuid(struct cmd_context *cmd, struct device *dev, const char **idname_out)
+int dev_has_mpath_uuid(struct cmd_context *cmd, struct device *dev, char **idname_out)
 {
-	char sysbuf[PATH_MAX] = { 0 };
-	const char *idname;
 
-	if (!read_sys_block(cmd, dev, "dm/uuid", sysbuf, sizeof(sysbuf)))
-		return 0;
+	char uuid[DM_UUID_LEN];
+	char *idname;
 
-	if (!_dm_uuid_has_prefix(sysbuf, "mpath-"))
+	if (!device_get_uuid(cmd, MAJOR(dev->dev), MINOR(dev->dev), uuid, sizeof(uuid)))
+		return_0;
+
+	if (!_dm_uuid_has_prefix(uuid, "mpath-"))
 		return 0;
 
 	if (!idname_out)
 		return 1;
-	if (!(idname = strdup(sysbuf)))
+	if (!(idname = strdup(uuid)))
 		return_0;
 	*idname_out = idname;
 	return 1;
 }
 
-static int _dev_has_crypt_uuid(struct cmd_context *cmd, struct device *dev, const char **idname_out)
+static int _dev_has_crypt_uuid(struct cmd_context *cmd, struct device *dev, char **idname_out)
 {
-	char sysbuf[PATH_MAX] = { 0 };
-	const char *idname;
+	char uuid[DM_UUID_LEN];
+	char *idname;
 
-	if (!read_sys_block(cmd, dev, "dm/uuid", sysbuf, sizeof(sysbuf)))
-		return 0;
+	if (!device_get_uuid(cmd, MAJOR(dev->dev), MINOR(dev->dev), uuid, sizeof(uuid)))
+		return_0;
 
-	if (!_dm_uuid_has_prefix(sysbuf, "CRYPT-"))
+	if (!_dm_uuid_has_prefix(uuid, "CRYPT-"))
 		return 0;
 
 	if (!idname_out)
 		return 1;
-	if (!(idname = strdup(sysbuf)))
+	if (!(idname = strdup(uuid)))
 		return_0;
 	*idname_out = idname;
 	return 1;
 }
 
-static int _dev_has_lvmlv_uuid(struct cmd_context *cmd, struct device *dev, const char **idname_out)
+static int _dev_has_lvmlv_uuid(struct cmd_context *cmd, struct device *dev, char **idname_out)
 {
-	char sysbuf[PATH_MAX] = { 0 };
-	const char *idname;
+	char uuid[DM_UUID_LEN];
+	char *idname;
 
-	if (!read_sys_block(cmd, dev, "dm/uuid", sysbuf, sizeof(sysbuf)))
-		return 0;
+	if (!device_get_uuid(cmd, MAJOR(dev->dev), MINOR(dev->dev), uuid, sizeof(uuid)))
+		return_0;
 
-	if (!_dm_uuid_has_prefix(sysbuf, "LVM-"))
+	if (!_dm_uuid_has_prefix(uuid, UUID_PREFIX))
 		return 0;
 
 	if (!idname_out)
 		return 1;
-	if (!(idname = strdup(sysbuf)))
+	if (!(idname = strdup(uuid)))
 		return_0;
 	*idname_out = idname;
 	return 1;
@@ -765,57 +768,44 @@ static int _dev_read_sys_serial(struct cmd_context *cmd, struct device *dev,
 	return 0;
 }
 
-const char *device_id_system_read(struct cmd_context *cmd, struct device *dev, uint16_t idtype)
+char *device_id_system_read(struct cmd_context *cmd, struct device *dev, uint16_t idtype)
 {
 	char sysbuf[PATH_MAX] = { 0 };
 	char sysbuf2[PATH_MAX] = { 0 };
-	const char *idname = NULL;
+	char *idname;
 	struct dev_wwid *dw;
 	unsigned i;
 
-	if (idtype == DEV_ID_TYPE_SYS_WWID)
+	switch (idtype) {
+	case DEV_ID_TYPE_SYS_WWID:
 		dev_read_sys_wwid(cmd, dev, sysbuf, sizeof(sysbuf), NULL);
-
-	else if (idtype == DEV_ID_TYPE_SYS_SERIAL)
+                break;
+	case DEV_ID_TYPE_SYS_SERIAL:
 		_dev_read_sys_serial(cmd, dev, sysbuf, sizeof(sysbuf));
-
-	else if (idtype == DEV_ID_TYPE_MPATH_UUID) {
-		read_sys_block(cmd, dev, "dm/uuid", sysbuf, sizeof(sysbuf));
-		/* if (strncmp(sysbuf, "mpath", 5)) sysbuf[0] = '\0'; */
-	}
-
-	else if (idtype == DEV_ID_TYPE_CRYPT_UUID) {
-		read_sys_block(cmd, dev, "dm/uuid", sysbuf, sizeof(sysbuf));
-		/* if (strncmp(sysbuf, "CRYPT", 5)) sysbuf[0] = '\0'; */
-	}
-
-	else if (idtype == DEV_ID_TYPE_LVMLV_UUID) {
-		read_sys_block(cmd, dev, "dm/uuid", sysbuf, sizeof(sysbuf));
-		/* if (strncmp(sysbuf, "LVM", 3)) sysbuf[0] = '\0'; */
-	}
-
-	else if (idtype == DEV_ID_TYPE_MD_UUID) {
+                break;
+	case DEV_ID_TYPE_MPATH_UUID:
+	case DEV_ID_TYPE_CRYPT_UUID:
+	case DEV_ID_TYPE_LVMLV_UUID:
+		(void)device_get_uuid(cmd, MAJOR(dev->dev), MINOR(dev->dev), sysbuf, sizeof(sysbuf));
+                break;
+	case DEV_ID_TYPE_MD_UUID:
 		read_sys_block(cmd, dev, "md/uuid", sysbuf, sizeof(sysbuf));
-	}
-
-	else if (idtype == DEV_ID_TYPE_LOOP_FILE) {
+                break;
+	case DEV_ID_TYPE_LOOP_FILE:
 		read_sys_block(cmd, dev, "loop/backing_file", sysbuf, sizeof(sysbuf));
 		/* if backing file is deleted, fall back to devname */
 		if (strstr(sysbuf, "(deleted)"))
 			sysbuf[0] = '\0';
-	}
-
-	else if (idtype == DEV_ID_TYPE_DEVNAME) {
+                break;
+	case DEV_ID_TYPE_DEVNAME:
 		if (dm_list_empty(&dev->aliases))
 			goto_bad;
 		if (!(idname = strdup(dev_name(dev))))
 			goto_bad;
 		return idname;
-	}
-
-	else if (idtype == DEV_ID_TYPE_WWID_NAA ||
-		 idtype == DEV_ID_TYPE_WWID_EUI ||
-		 idtype == DEV_ID_TYPE_WWID_T10) {
+	case DEV_ID_TYPE_WWID_NAA:
+	case DEV_ID_TYPE_WWID_EUI:
+	case DEV_ID_TYPE_WWID_T10:
 		if (!(dev->flags & DEV_ADDED_VPD_WWIDS))
 			dev_read_vpd_wwids(cmd, dev);
 		dm_list_iterate_items(dw, &dev->wwids) {
@@ -876,9 +866,9 @@ const char *device_id_system_read(struct cmd_context *cmd, struct device *dev, u
 }
 
 static int device_id_system_read_preferred(struct cmd_context *cmd, struct device *dev,
-					   uint16_t *new_idtype, const char **new_idname)
+					   uint16_t *new_idtype, char **new_idname)
 {
-	const char *idname = NULL;
+	char *idname = NULL;
 	uint16_t idtype;
 
 	if (MAJOR(dev->dev) == cmd->dev_types->device_mapper_major) {
@@ -958,7 +948,7 @@ static int _dev_has_stable_id(struct cmd_context *cmd, struct device *dev)
 {
 	char sysbuf[PATH_MAX] = { 0 };
 	struct dev_id *id;
-	const char *idname;
+	char *idname;
 
 	/*
 	 * An idtype other than DEVNAME is stable, i.e. it doesn't change after
@@ -996,26 +986,26 @@ static int _dev_has_stable_id(struct cmd_context *cmd, struct device *dev)
 	if ((idname = device_id_system_read(cmd, dev, DEV_ID_TYPE_SYS_WWID))) {
 		/* see comment above */
 		if (!strstr(idname, "QEMU")) {
-			free((void*)idname);
+			free(idname);
 			return 1;
 		}
-		free((void*)idname);
+		free(idname);
 		return 0;
 	}
 
 	if ((idname = device_id_system_read(cmd, dev, DEV_ID_TYPE_SYS_SERIAL))) {
-		free((void*)idname);
+		free(idname);
 		return 1;
 	}
 
 	if ((MAJOR(dev->dev) == cmd->dev_types->loop_major) &&
 	    (idname = device_id_system_read(cmd, dev, DEV_ID_TYPE_LOOP_FILE))) {
-		free((void*)idname);
+		free(idname);
 		return 1;
 	}
 
 	if ((MAJOR(dev->dev) == cmd->dev_types->device_mapper_major)) {
-		if (!read_sys_block(cmd, dev, "dm/uuid", sysbuf, sizeof(sysbuf)))
+		if (!device_get_uuid(cmd, MAJOR(dev->dev), MINOR(dev->dev), sysbuf, sizeof(sysbuf)))
 			goto_out;
 
 		if (_dm_uuid_has_prefix(sysbuf, "mpath-"))
@@ -1922,8 +1912,8 @@ int device_id_add(struct cmd_context *cmd, struct device *dev, const char *pvid_
 {
 	char pvid[ID_LEN+1] = { 0 };
 	uint16_t idtype = 0;
-	const char *idname = NULL;
-	const char *check_idname = NULL;
+	char *idname = NULL;
+	char *check_idname = NULL;
 	const char *update_matching_kind = NULL;
 	const char *update_matching_name = NULL;
 	struct dev_use *du, *update_du = NULL, *du_dev, *du_pvid, *du_devname, *du_devid;
@@ -2139,7 +2129,7 @@ id_done:
 			if (!cmd->current_settings.yes &&
 			    yes_no_prompt("Add device with duplicate PV to devices file?") == 'n') {
 				log_print_unless_silent("Device not added.");
-				free((void *)check_idname);
+				free(check_idname);
 				return 1;
 			}
 		}
@@ -2166,7 +2156,7 @@ id_done:
 		}
 	}
 
-	free((void *)check_idname);
+	free(check_idname);
 
 	if (!update_du) {
 		log_debug("Adding new entry to devices file for %s PVID %s %s %s.",
@@ -2384,8 +2374,8 @@ static int _match_dm_names(struct cmd_context *cmd, char *idname, struct device 
 	dev2 = dev_cache_get_existing(cmd, idname, NULL);
 
 	if (dev2 && (dev == dev2)) {
-		log_debug("Match dm names %s %s for %d:%d (from cache)",
-			  dev_name(dev), idname, (int)MAJOR(dev->dev), (int)MINOR(dev->dev));
+		log_debug("Match dm names %s %s for %u:%u (from cache).",
+			  dev_name(dev), idname, MAJOR(dev->dev), MINOR(dev->dev));
 		return 1;
 	}
 
@@ -2403,8 +2393,8 @@ static int _match_dm_names(struct cmd_context *cmd, char *idname, struct device 
 
 		if ((MAJOR(buf.st_rdev) == cmd->dev_types->device_mapper_major) &&
 		    (MINOR(buf.st_rdev) == MINOR(dev->dev))) {
-			log_debug("Match dm names %s %s for %d:%d (from stat)",
-				  dev_name(dev), idname, (int)MAJOR(dev->dev), (int)MINOR(dev->dev));
+			log_debug("Match dm names %s %s for %u:%u (from stat)",
+				  dev_name(dev), idname, MAJOR(dev->dev), MINOR(dev->dev));
 			return 1;
 		}
 	}
@@ -2452,7 +2442,7 @@ static int _match_du_to_dev(struct cmd_context *cmd, struct dev_use *du, struct 
 	 * so we can skip trying to match certain du entries based simply on
 	 * the major number of dev.
 	 */
-	if (!_idtype_compatible_with_major_number(cmd, du->idtype, (int)MAJOR(dev->dev))) {
+	if (!_idtype_compatible_with_major_number(cmd, du->idtype, MAJOR(dev->dev))) {
 		/*
 		log_debug("Mismatch device_id %s %s to %s: wrong major",
 			  idtype_to_str(du->idtype), du->idname ?: ".", dev_name(dev));
@@ -3968,7 +3958,7 @@ void device_ids_search(struct cmd_context *cmd, struct dm_list *new_devs,
 		new_devname = NULL;
 
 		if (cmd->device_ids_refresh_trigger || all_ids) {
-			if (!device_id_system_read_preferred(cmd, dev, &new_idtype, (const char **)&new_idname))
+			if (!device_id_system_read_preferred(cmd, dev, &new_idtype, &new_idname))
 				continue;
 			new_idname2 = strdup(new_idname);
 			new_devname = strdup(devname);
