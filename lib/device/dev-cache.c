@@ -14,15 +14,16 @@
  */
 
 #include "base/memory/zalloc.h"
+#include "base/data-struct/radix-tree.h"
 #include "lib/misc/lib.h"
 #include "lib/device/dev-type.h"
 #include "lib/device/device_id.h"
-#include "lib/datastruct/btree.h"
 #include "lib/config/config.h"
 #include "lib/commands/toolcontext.h"
 #include "device_mapper/misc/dm-ioctl.h"
 #include "lib/activate/activate.h"
 #include "lib/misc/lvm-string.h"
+#include "lib/mm/xlate.h"
 
 #ifdef UDEV_SYNC_SUPPORT
 #include <libudev.h>
@@ -35,8 +36,10 @@
 #include <sys/file.h>
 
 struct dev_iter {
-	struct btree_iter *current;
+	union radix_value *values;
 	struct dev_filter *filter;
+	unsigned nr_values;
+	unsigned pos;
 };
 
 struct dir_list {
@@ -46,11 +49,13 @@ struct dir_list {
 
 static struct {
 	struct dm_pool *mem;
-	struct dm_hash_table *names;
+	struct radix_tree *names;
 	struct dm_hash_table *vgid_index;
 	struct dm_hash_table *lvid_index;
-	struct btree *sysfs_only_devices; /* see comments in _get_device_for_sysfs_dev_name_using_devno */
-	struct btree *devices;
+	struct radix_tree *dm_uuids;
+	struct radix_tree *dm_devnos;
+	struct radix_tree *sysfs_only_devices; /* see comments in _get_device_for_sysfs_dev_name_using_devno */
+	struct radix_tree *devices;
 	struct dm_regex *preferred_names_matcher;
 	const char *dev_dir;
 
@@ -343,9 +348,10 @@ static int _add_alias(struct device *dev, const char *path, enum add_hash hash)
 	struct dm_str_list *strl;
 	const char *oldpath;
 	int prefer_old = 1;
+	size_t path_len = strlen(path);
 
 	if (hash == REHASH)
-		dm_hash_remove(_cache.names, path);
+		radix_tree_remove(_cache.names, path, path_len);
 
 	/* Is name already there? */
 	dm_list_iterate_items(strl, &dev->aliases)
@@ -376,7 +382,7 @@ static int _add_alias(struct device *dev, const char *path, enum add_hash hash)
 		dm_list_add_h(&dev->aliases, &sl->list);
 out:
 	if ((hash != NO_HASH) &&
-	    !dm_hash_insert(_cache.names, path, dev)) {
+	    !radix_tree_insert_ptr(_cache.names, path, path_len, dev)) {
 		log_error("Couldn't add name to hash in dev cache.");
 		return 0;
 	}
@@ -454,6 +460,15 @@ out:
 	return r;
 }
 
+/* Change bit ordering for devno to generate more compact bTree */
+static inline uint32_t _shuffle_devno(dev_t d)
+{
+	return cpu_to_be32(d);
+	//return (d & 0xff) << 24 | (d & 0xff00) << 8 | (d & 0xff0000) >> 8 | (d & 0xff000000) >> 24;
+	//return (d & 0xff000000) >> 24 | (d & 0xffff00) | ((d & 0xff) << 24);
+	//return (uint32_t) d;
+}
+
 static struct dm_list *_get_or_add_list_by_index_key(struct dm_hash_table *idx, const char *key)
 {
 	struct dm_list *list;
@@ -474,6 +489,21 @@ static struct dm_list *_get_or_add_list_by_index_key(struct dm_hash_table *idx, 
 	}
 
 	return list;
+}
+
+static bool _dev_cache_insert_devno(struct radix_tree *rt, dev_t devno, void *dev)
+{
+	union radix_value v = { .ptr = dev };
+	uint32_t key = _shuffle_devno(devno);
+
+	return radix_tree_insert(rt, &key, sizeof(key), v);
+}
+
+static struct device *_dev_cache_get_dev_by_devno(struct radix_tree *rt, dev_t devno)
+{
+	uint32_t key = _shuffle_devno(devno);
+
+	return radix_tree_lookup_ptr(rt, &key, sizeof(key));
 }
 
 static struct device *_insert_sysfs_dev(dev_t devno, const char *devname)
@@ -503,7 +533,7 @@ static struct device *_insert_sysfs_dev(dev_t devno, const char *devname)
 		return_NULL;
 	}
 
-	if (!btree_insert(_cache.sysfs_only_devices, (uint32_t) devno, dev)) {
+	if (!_dev_cache_insert_devno(_cache.sysfs_only_devices, devno, dev)) {
 		log_error("Couldn't add device to binary tree of sysfs-only devices in dev cache.");
 		_free(dev);
 		return NULL;
@@ -534,7 +564,7 @@ static struct device *_get_device_for_sysfs_dev_name_using_devno(const char *dev
 	}
 
 	devno = MKDEV(major, minor);
-	if (!(dev = (struct device *) btree_lookup(_cache.devices, (uint32_t) devno))) {
+	if (!(dev = _dev_cache_get_dev_by_devno(_cache.devices, devno))) {
 		/*
 		 * If we get here, it means the device is referenced in sysfs, but it's not yet in /dev.
 		 * This may happen in some rare cases right after LVs get created - we sync with udev
@@ -546,7 +576,7 @@ static struct device *_get_device_for_sysfs_dev_name_using_devno(const char *dev
 		 * where different directory for dev nodes is used (e.g. our test suite). So track
 		 * such devices in _cache.sysfs_only_devices hash for the vgid/lvid check to work still.
 		 */
-		if (!(dev = (struct device *) btree_lookup(_cache.sysfs_only_devices, (uint32_t) devno)) &&
+		if (!(dev = _dev_cache_get_dev_by_devno(_cache.sysfs_only_devices, devno)) &&
 		    !(dev = _insert_sysfs_dev(devno, devname)))
 			return_NULL;
 	}
@@ -629,7 +659,7 @@ static int _index_dev_by_vgid_and_lvid(struct cmd_context *cmd, struct device *d
 			goto out;
 		}
 
-		if (!(holder_dev = (struct device *) dm_hash_lookup(_cache.names, devpath))) {
+		if (!(holder_dev = dev_cache_get_dev_by_name(devpath))) {
 			/*
 			 * Cope with situation where canonical /<dev_dir>/<dirent->d_name>
 			 * does not exist, but some other node name or symlink exists in
@@ -723,8 +753,7 @@ void dev_cache_failed_path(struct device *dev, const char *path)
 {
 	struct dm_str_list *strl;
 
-	if (dm_hash_lookup(_cache.names, path))
-		dm_hash_remove(_cache.names, path);
+	radix_tree_remove(_cache.names, path, strlen(path));
 
 	dm_list_iterate_items(strl, &dev->aliases) {
 		if (!strcmp(strl->str, path)) {
@@ -744,8 +773,8 @@ static int _insert_dev(const char *path, dev_t d)
 	struct device *dev_by_devt;
 	struct device *dev_by_path;
 
-	dev_by_devt = (struct device *) btree_lookup(_cache.devices, (uint32_t) d);
-	dev_by_path = (struct device *) dm_hash_lookup(_cache.names, path);
+	dev_by_devt = _dev_cache_get_dev_by_devno(_cache.devices, d);
+	dev_by_path = dev_cache_get_dev_by_name(path);
 	dev = dev_by_devt;
 
 	/*
@@ -762,14 +791,12 @@ static int _insert_dev(const char *path, dev_t d)
 	 */
 	if (!dev_by_devt && !dev_by_path) {
 		log_debug_devs("Found dev %u:%u %s - new.", MAJOR(d), MINOR(d), path);
-
-		if (!(dev = (struct device *) btree_lookup(_cache.sysfs_only_devices, (uint32_t) d))) {
+		if (!(dev = _dev_cache_get_dev_by_devno(_cache.sysfs_only_devices, d)))
 			/* create new device */
 			if (!(dev = _dev_create(d)))
 				return_0;
-		}
 
-		if (!(btree_insert(_cache.devices, (uint32_t) d, dev))) {
+		if (!(_dev_cache_insert_devno(_cache.devices, d, dev))) {
 			log_error("Couldn't insert device into binary tree.");
 			_free(dev);
 			return 0;
@@ -802,13 +829,13 @@ static int _insert_dev(const char *path, dev_t d)
 			       MAJOR(d), MINOR(d), path,
 			       MAJOR(dev_by_path->dev), MINOR(dev_by_path->dev));
 
-		if (!(dev = (struct device *) btree_lookup(_cache.sysfs_only_devices, (uint32_t) d))) {
+		if (!(dev = _dev_cache_get_dev_by_devno(_cache.sysfs_only_devices, d))) {
 			/* create new device */
 			if (!(dev = _dev_create(d)))
 				return_0;
 		}
 
-		if (!(btree_insert(_cache.devices, (uint32_t) d, dev))) {
+		if (!(_dev_cache_insert_devno(_cache.devices, d, dev))) {
 			log_error("Couldn't insert device into binary tree.");
 			_free(dev);
 			return 0;
@@ -929,18 +956,13 @@ static int _insert_dir(const char *dir)
 
 static int _dev_cache_iterate_devs_for_index(struct cmd_context *cmd)
 {
-	struct btree_iter *iter = btree_first(_cache.devices);
-	struct device *dev;
+	struct dev_iter *iter = dev_iter_create(NULL, 0);
+	struct device *dev = NULL;
 	int r = 1;
 
-	while (iter) {
-		dev = btree_get_data(iter);
-
+	while ((dev = dev_iter_get(NULL, iter)))
 		if (!_index_dev_by_vgid_and_lvid(cmd, dev))
 			r = 0;
-
-		iter = btree_next(iter);
-	}
 
 	return r;
 }
@@ -974,8 +996,8 @@ static int _dev_cache_iterate_sysfs_for_index(struct cmd_context *cmd, const cha
 		}
 
 		devno = MKDEV(major, minor);
-		if (!(dev = (struct device *) btree_lookup(_cache.devices, (uint32_t) devno)) &&
-		    !(dev = (struct device *) btree_lookup(_cache.sysfs_only_devices, (uint32_t) devno))) {
+		if (!(dev = _dev_cache_get_dev_by_devno(_cache.devices, devno)) &&
+		    !(dev = _dev_cache_get_dev_by_devno(_cache.sysfs_only_devices, devno))) {
 			if (!dm_device_get_name(major, minor, 1, devname, sizeof(devname)) ||
 			    !(dev = _insert_sysfs_dev(devno, devname))) {
 				partial_failure = 1;
@@ -1219,7 +1241,7 @@ static void _drop_all_aliases(struct device *dev)
 
 	dm_list_iterate_items_safe(strl, strl2, &dev->aliases) {
 		log_debug("Drop alias for %u:%u %s.", MAJOR(dev->dev), MINOR(dev->dev), strl->str);
-		dm_hash_remove(_cache.names, strl->str);
+		radix_tree_remove(_cache.names, strl->str, strlen(strl->str));
 		dm_list_del(&strl->list);
 	}
 }
@@ -1303,6 +1325,78 @@ out:
 	return r;
 }
 
+int dev_cache_update_dm_devs(struct cmd_context *cmd)
+{
+	struct dm_active_device *dm_dev;
+	unsigned devs_features;
+	uint32_t d;
+
+	dm_device_list_destroy(&cmd->cache_dm_devs);
+
+	if (_cache.dm_devnos) {
+		radix_tree_destroy(_cache.dm_devnos);
+		_cache.dm_devnos = NULL;
+	}
+
+	if (_cache.dm_uuids) {
+		radix_tree_destroy(_cache.dm_uuids);
+		_cache.dm_uuids = NULL;
+	}
+
+	if (!get_device_list(NULL, &cmd->cache_dm_devs, &devs_features))
+		return 1;
+
+	if (!(devs_features & DM_DEVICE_LIST_HAS_UUID)) {
+		/* Cache unusable with older kernels without UUIDs in LIST */
+		dm_device_list_destroy(&cmd->cache_dm_devs);
+		return 1;
+	}
+
+	if (!(_cache.dm_devnos = radix_tree_create(NULL, NULL)) ||
+	    !(_cache.dm_uuids = radix_tree_create(NULL, NULL))) {
+		return_0; // FIXME
+	}
+
+	/* Insert every active DM device into radix trees */
+	dm_list_iterate_items(dm_dev, cmd->cache_dm_devs) {
+		d = _shuffle_devno(dm_dev->devno);
+
+		if (!radix_tree_insert_ptr(_cache.dm_devnos, &d, sizeof(d), dm_dev))
+			return_0;
+
+		if (dm_dev->uuid[0] &&
+		    !radix_tree_insert_ptr(_cache.dm_uuids, dm_dev->uuid, strlen(dm_dev->uuid), dm_dev))
+			return_0;
+	}
+
+	//radix_tree_dump(_cache.dm_devnos, stdout);
+	//radix_tree_dump(_cache.dm_uuids, stdout);
+
+	return 1;
+}
+
+/* Find active DM device in devs array for given major:minor */
+const struct dm_active_device *
+dev_cache_get_dm_dev_by_devno(struct cmd_context *cmd, dev_t devno)
+{
+	uint32_t d = _shuffle_devno(devno);
+
+	if (!_cache.dm_devnos)
+		return NULL;
+
+	return radix_tree_lookup_ptr(_cache.dm_devnos, &d, sizeof(d));
+}
+
+/* Find active DM device in devs array for given DM UUID */
+const struct dm_active_device *
+dev_cache_get_dm_dev_by_uuid(struct cmd_context *cmd, const char *dm_uuid)
+{
+	if (!_cache.dm_uuids)
+		return NULL;
+
+	return radix_tree_lookup_ptr(_cache.dm_uuids, dm_uuid, strlen(dm_uuid));
+}
+
 int dev_cache_init(struct cmd_context *cmd)
 {
 	_cache.names = NULL;
@@ -1310,7 +1404,7 @@ int dev_cache_init(struct cmd_context *cmd)
 	if (!(_cache.mem = dm_pool_create("dev_cache", 10 * 1024)))
 		return_0;
 
-	if (!(_cache.names = dm_hash_create(8190)) ||
+	if (!(_cache.names = radix_tree_create(NULL, NULL)) ||
 	    !(_cache.vgid_index = dm_hash_create(30)) ||
 	    !(_cache.lvid_index = dm_hash_create(29))) {
 		dm_pool_destroy(_cache.mem);
@@ -1318,12 +1412,12 @@ int dev_cache_init(struct cmd_context *cmd)
 		return_0;
 	}
 
-	if (!(_cache.devices = btree_create(_cache.mem))) {
+	if (!(_cache.devices = radix_tree_create(NULL, NULL))) {
 		log_error("Couldn't create binary tree for dev-cache.");
 		goto bad;
 	}
 
-	if (!(_cache.sysfs_only_devices = btree_create(_cache.mem))) {
+	if (!(_cache.sysfs_only_devices = radix_tree_create(NULL, NULL))) {
 		log_error("Couldn't create binary tree for sysfs-only devices in dev cache.");
 		goto bad;
 	}
@@ -1346,27 +1440,36 @@ int dev_cache_init(struct cmd_context *cmd)
 	return 0;
 }
 
+struct dev_visitor {
+	struct radix_tree_iterator it;
+	int close_immediate;
+	int free;
+	unsigned num_open;
+};
 /*
  * Returns number of devices still open.
  */
-static int _check_for_open_devices(int close_immediate)
+static bool _visit_check_for_open_devices(struct radix_tree_iterator *it,
+					  const void *key, size_t keylen,
+					  union radix_value v)
 {
-	struct device *dev;
-	struct dm_hash_node *n;
-	int num_open = 0;
+	struct dev_visitor *vt = container_of(it, struct dev_visitor, it);
+	struct device *dev = v.ptr;
 
-	dm_hash_iterate(n, _cache.names) {
-		dev = (struct device *) dm_hash_get_data(_cache.names, n);
-		if (dev->fd >= 0) {
-			log_error("Device '%s' has been left open (%d remaining references).",
-				  dev_name(dev), dev->open_count);
-			num_open++;
-			if (close_immediate && !dev_close_immediate(dev))
-				stack;
-		}
+	if (dev->fd >= 0) {
+		log_error("Device '%s' has been left open (%d remaining references).",
+			  dev_name(dev), dev->open_count);
+		vt->num_open++;
+		if (vt->close_immediate && !dev_close_immediate(dev))
+			stack;
 	}
 
-	return num_open;
+	if (vt->free) {
+		free_dids(&dev->ids);
+		free_wwids(&dev->wwids);
+	}
+
+	return true;
 }
 
 /*
@@ -1374,31 +1477,37 @@ static int _check_for_open_devices(int close_immediate)
  */
 int dev_cache_check_for_open_devices(void)
 {
-	return _check_for_open_devices(0);
+	struct dev_visitor vt = {
+		.it.visit = _visit_check_for_open_devices,
+	};
+
+	radix_tree_iterate(_cache.names, NULL, 0, &vt.it);
+
+	return vt.num_open;
 }
 
 int dev_cache_exit(void)
 {
-	struct device *dev;
-	struct dm_hash_node *n;
-	int num_open = 0;
+	struct dev_visitor vt = {
+		.it.visit = _visit_check_for_open_devices,
+		.close_immediate = 1, /* close open devices */
+		.free = 1,            /* free dids, wwids */
+	};
 
 	if (_cache.names) {
-		if ((num_open = _check_for_open_devices(1)) > 0)
-			log_error(INTERNAL_ERROR "%d device(s) were left open and have been closed.", num_open);
+		/* check for open devices */
+		radix_tree_iterate(_cache.names, NULL, 0, &vt.it);
 
-		dm_hash_iterate(n, _cache.names) {
-			dev = (struct device *) dm_hash_get_data(_cache.names, n);
-			free_dids(&dev->ids);
-			free_wwids(&dev->wwids);
-		}
+		if (vt.num_open)
+			log_error(INTERNAL_ERROR "%d device(s) were left open and have been closed.",
+				  vt.num_open);
 	}
 
 	if (_cache.mem)
 		dm_pool_destroy(_cache.mem);
 
 	if (_cache.names)
-		dm_hash_destroy(_cache.names);
+		radix_tree_destroy(_cache.names);
 
 	if (_cache.vgid_index)
 		dm_hash_destroy(_cache.vgid_index);
@@ -1406,9 +1515,21 @@ int dev_cache_exit(void)
 	if (_cache.lvid_index)
 		dm_hash_destroy(_cache.lvid_index);
 
+	if (_cache.dm_devnos)
+		radix_tree_destroy(_cache.dm_devnos);
+
+	if (_cache.dm_uuids)
+		radix_tree_destroy(_cache.dm_uuids);
+
+	if (_cache.devices)
+	       radix_tree_destroy(_cache.devices);
+
+	if (_cache.sysfs_only_devices)
+	       radix_tree_destroy(_cache.sysfs_only_devices);
+
 	memset(&_cache, 0, sizeof(_cache));
 
-	return (!num_open);
+	return (!vt.num_open);
 }
 
 int dev_cache_add_dir(const char *path)
@@ -1439,9 +1560,9 @@ int dev_cache_add_dir(const char *path)
 	return 1;
 }
 
-struct device *dev_hash_get(const char *name)
+struct device *dev_cache_get_dev_by_name(const char *name)
 {
-	return (struct device *) dm_hash_lookup(_cache.names, name);
+	return radix_tree_lookup_ptr(_cache.names, name, strlen(name));
 }
 
 static void _remove_alias(struct device *dev, const char *name)
@@ -1477,7 +1598,7 @@ void dev_cache_verify_aliases(struct device *dev)
 			log_debug("Drop alias for %u:%u invalid path %s %u:%u.",
 				  MAJOR(dev->dev), MINOR(dev->dev), strl->str,
 				  MAJOR(st.st_rdev), MINOR(st.st_rdev));
-			dm_hash_remove(_cache.names, strl->str);
+			radix_tree_remove(_cache.names, strl->str, strlen(strl->str));
 			dm_list_del(&strl->list);
 		}
 	}
@@ -1485,7 +1606,7 @@ void dev_cache_verify_aliases(struct device *dev)
 
 static struct device *_dev_cache_get(struct cmd_context *cmd, const char *name, struct dev_filter *f, int existing)
 {
-	struct device *dev = (struct device *) dm_hash_lookup(_cache.names, name);
+	struct device *dev = dev_cache_get_dev_by_name(name);
 	struct stat st;
 	int ret;
 
@@ -1511,7 +1632,7 @@ static struct device *_dev_cache_get(struct cmd_context *cmd, const char *name, 
 			log_debug("Device path %s is invalid for %u:%u %s.",
 				  name, MAJOR(dev->dev), MINOR(dev->dev), dev_name(dev));
 
-			dm_hash_remove(_cache.names, name);
+			radix_tree_remove(_cache.names, name, strlen(name));
 
 			_remove_alias(dev, name);
 
@@ -1537,7 +1658,7 @@ static struct device *_dev_cache_get(struct cmd_context *cmd, const char *name, 
 	 * Remove incorrect info and then add new dev-cache entry.
 	 */
 	if (dev && (st.st_rdev != dev->dev)) {
-		struct device *dev_by_devt = (struct device *) btree_lookup(_cache.devices, (uint32_t) st.st_rdev);
+		struct device *dev_by_devt = _dev_cache_get_dev_by_devno(_cache.devices, st.st_rdev);
 
 		/*
 		 * lvm commands create this condition when they
@@ -1576,7 +1697,7 @@ static struct device *_dev_cache_get(struct cmd_context *cmd, const char *name, 
 			return_NULL;
 
 		/* Get the struct dev that was just added. */
-		dev = (struct device *) dm_hash_lookup(_cache.names, name);
+		dev = dev_cache_get_dev_by_name(name);
 
 		if (!dev) {
 			log_error("Failed to get device %s", name);
@@ -1623,7 +1744,8 @@ static struct device *_dev_cache_get(struct cmd_context *cmd, const char *name, 
 		 * Without dropping the aliases, it's plausible that lvm commands
 		 * could end up using the wrong dm device.
 		 */
-		struct device *dev_by_devt = (struct device *) btree_lookup(_cache.devices, (uint32_t) st.st_rdev);
+		struct device *dev_by_devt = _dev_cache_get_dev_by_devno(_cache.devices, st.st_rdev);
+
 		if (dev_by_devt) {
 			log_debug("Dropping aliases for %u:%u before adding new path %s.",
 				  MAJOR(st.st_rdev), MINOR(st.st_rdev), name);
@@ -1645,7 +1767,7 @@ static struct device *_dev_cache_get(struct cmd_context *cmd, const char *name, 
 			return_NULL;
 
 		/* Get the struct dev that was just added. */
-		dev = (struct device *) dm_hash_lookup(_cache.names, name);
+		dev = dev_cache_get_dev_by_name(name);
 
 		if (!dev) {
 			log_error("Failed to get device %s", name);
@@ -1683,7 +1805,7 @@ struct device *dev_cache_get(struct cmd_context *cmd, const char *name, struct d
 
 struct device *dev_cache_get_by_devt(struct cmd_context *cmd, dev_t devt)
 {
-	struct device *dev = (struct device *) btree_lookup(_cache.devices, (uint32_t) devt);
+	struct device *dev = _dev_cache_get_dev_by_devno(_cache.devices, devt);
 
 	if (dev)
 		return dev;
@@ -1693,19 +1815,16 @@ struct device *dev_cache_get_by_devt(struct cmd_context *cmd, dev_t devt)
 
 struct device *dev_cache_get_by_pvid(struct cmd_context *cmd, const char *pvid)
 {
-	struct btree_iter *iter = btree_first(_cache.devices);
+	struct dev_iter *iter = dev_iter_create(NULL, 0);
 	struct device *dev;
 
-	while (iter) {
-		dev = btree_get_data(iter);
-
+	while ((dev = dev_iter_get(NULL, iter)))
 		if (!memcmp(dev->pvid, pvid, ID_LEN))
-			return dev;
+			break;
 
-		iter = btree_next(iter);
-	}
+	dev_iter_destroy(iter);
 
-	return NULL;
+	return dev;
 }
 
 struct dev_iter *dev_iter_create(struct dev_filter *f, int unused)
@@ -1713,11 +1832,18 @@ struct dev_iter *dev_iter_create(struct dev_filter *f, int unused)
 	struct dev_iter *di = malloc(sizeof(*di));
 
 	if (!di) {
-		log_error("dev_iter allocation failed");
+		log_error("dev_iter allocation failed.");
 		return NULL;
 	}
 
-	di->current = btree_first(_cache.devices);
+	if (!radix_tree_values(_cache.devices, NULL, 0,
+			       &di->values, &di->nr_values)) {
+		log_error("dev_iter values allocation failed.");
+		free(di);
+		return NULL;
+	}
+
+	di->pos = 0;
 	di->filter = f;
 	if (di->filter)
 		di->filter->use_count++;
@@ -1729,28 +1855,23 @@ void dev_iter_destroy(struct dev_iter *iter)
 {
 	if (iter->filter)
 		iter->filter->use_count--;
+	free(iter->values);
 	free(iter);
-}
-
-static struct device *_iter_next(struct dev_iter *iter)
-{
-	struct device *d = btree_get_data(iter->current);
-	iter->current = btree_next(iter->current);
-	return d;
 }
 
 struct device *dev_iter_get(struct cmd_context *cmd, struct dev_iter *iter)
 {
 	struct dev_filter *f;
+	struct device *d;
 	int ret;
 
-	while (iter->current) {
-		struct device *d = _iter_next(iter);
+	while (iter->pos < iter->nr_values) {
+		d = iter->values[iter->pos++].ptr;
 		ret = 1;
 
 		f = iter->filter;
 
-		if (f && !(d->flags & DEV_REGULAR))
+		if (f && cmd && !(d->flags & DEV_REGULAR))
 			ret = f->passes_filter(cmd, f, d, NULL);
 
 		if (!f || (d->flags & DEV_REGULAR) || ret)
@@ -1775,19 +1896,17 @@ const char *dev_name(const struct device *dev)
 
 bool dev_cache_has_md_with_end_superblock(struct dev_types *dt)
 {
-	struct btree_iter *iter = btree_first(_cache.devices);
 	struct device *dev;
+	struct dev_iter *iter = dev_iter_create(NULL, 0);
+	bool ret = false;
 
-	while (iter) {
-		dev = btree_get_data(iter);
+	while ((dev = dev_iter_get(NULL, iter)))
+		if ((ret = dev_is_md_with_end_superblock(dt, dev)))
+			break;
 
-		if (dev_is_md_with_end_superblock(dt, dev))
-			return true;
+	dev_iter_destroy(iter);
 
-		iter = btree_next(iter);
-	}
-
-	return false;
+	return ret;
 }
 
 static int _setup_devices_list(struct cmd_context *cmd)
@@ -2172,7 +2291,7 @@ int setup_device(struct cmd_context *cmd, const char *devname)
 	if (!_insert_dev(devname, buf.st_rdev))
 		return_0;
 
-	if (!(dev = (struct device *) dm_hash_lookup(_cache.names, devname)))
+	if (!(dev = dev_cache_get_dev_by_name(devname)))
 		return_0;
 
 	/* Match this device to an entry in devices_file so it will not
@@ -2359,7 +2478,7 @@ int setup_devname_in_dev_cache(struct cmd_context *cmd, const char *devname)
 	if (!_insert_dev(devname, buf.st_rdev))
 		return_0;
 
-	if (!dm_hash_lookup(_cache.names, devname))
+	if (!dev_cache_get_dev_by_name(devname))
 		return_0;
 
 	return 1;
@@ -2420,7 +2539,7 @@ struct device *setup_dev_in_dev_cache(struct cmd_context *cmd, dev_t devno, cons
 	if (!_insert_dev(devname, buf.st_rdev))
 		return_NULL;
 
-	if (!(dev = (struct device *) dm_hash_lookup(_cache.names, devname))) {
+	if (!(dev = dev_cache_get_dev_by_name(devname))) {
 		log_error("Device lookup failed for %u:%u %s", major, minor, devname);
 		return_NULL;
 	}

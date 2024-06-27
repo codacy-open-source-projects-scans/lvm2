@@ -37,6 +37,12 @@ struct dev_filter {
 struct dm_list *dev_cache_get_dev_list_for_vgid(const char *vgid);
 struct dm_list *dev_cache_get_dev_list_for_lvid(const char *lvid);
 
+int dev_cache_update_dm_devs(struct cmd_context *cmd);
+const struct dm_active_device *
+dev_cache_get_dm_dev_by_devno(struct cmd_context *cmd, dev_t devno);
+const struct dm_active_device *
+dev_cache_get_dm_dev_by_uuid(struct cmd_context *cmd, const char *dm_uuid);
+
 /*
  * The global device cache.
  */
@@ -58,7 +64,7 @@ struct device *dev_cache_get_by_devt(struct cmd_context *cmd, dev_t devt);
 struct device *dev_cache_get_by_pvid(struct cmd_context *cmd, const char *pvid);
 void dev_cache_verify_aliases(struct device *dev);
 
-struct device *dev_hash_get(const char *name);
+struct device *dev_cache_get_dev_by_name(const char *name);
 
 void dev_set_preferred_name(struct dm_str_list *sl, struct device *dev);
 

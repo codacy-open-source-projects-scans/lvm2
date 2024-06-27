@@ -875,7 +875,6 @@ int label_scan_for_pvid(struct cmd_context *cmd, char *pvid, struct device **dev
 	char buf[LABEL_SIZE] __attribute__((aligned(8)));
 	struct dm_list devs;
 	struct dev_iter *iter;
-	struct device_list *devl, *devl2;
 	struct device *dev;
 	struct pv_header *pvh;
 	int ret = 0;
@@ -891,6 +890,9 @@ int label_scan_for_pvid(struct cmd_context *cmd, char *pvid, struct device **dev
 		return 0;
 	}
 
+	if (!label_scan_setup_bcache())
+		return_0;
+
 	/*
 	 * Iterating over all available devices with cmd->filter filters
 	 * devices; those returned from dev_iter_get are the devs that
@@ -902,23 +904,10 @@ int label_scan_for_pvid(struct cmd_context *cmd, char *pvid, struct device **dev
 		return 0;
 	}
 
-	log_debug_devs("Filtering devices to scan");
-
-	while ((dev = dev_iter_get(cmd, iter))) {
-		if (!(devl = zalloc(sizeof(*devl))))
-			continue;
-		devl->dev = dev;
-		dm_list_add(&devs, &devl->list);
-	};
-	dev_iter_destroy(iter);
-
-	if (!label_scan_setup_bcache())
-		goto_out;
 
 	log_debug_devs("Reading labels for pvid");
 
-	dm_list_iterate_items(devl, &devs) {
-		dev = devl->dev;
+	while ((dev = dev_iter_get(cmd, iter))) {
 
 		memset(buf, 0, sizeof(buf));
 
@@ -933,7 +922,7 @@ int label_scan_for_pvid(struct cmd_context *cmd, char *pvid, struct device **dev
 		pvh = (struct pv_header *)(buf + 32);
 
 		if (!memcmp(pvh->pv_uuid, pvid, ID_LEN)) {
-			*dev_out = devl->dev;
+			*dev_out = dev;
 			_scan_dev_close(dev);
 			break;
 		}
@@ -942,10 +931,8 @@ int label_scan_for_pvid(struct cmd_context *cmd, char *pvid, struct device **dev
 	}
 	ret = 1;
  out:
-	dm_list_iterate_items_safe(devl, devl2, &devs) {
-		dm_list_del(&devl->list);
-		free(devl);
-	}
+	dev_iter_destroy(iter);
+
 	return ret;
 }
 
@@ -1259,7 +1246,6 @@ int label_scan(struct cmd_context *cmd)
 	uint64_t max_metadata_size_bytes;
 	int using_hints;
 	int create_hints = 0; /* NEWHINTS_NONE */
-	unsigned devs_features = 0;
 
 	log_debug_devs("Finding devices to scan");
 
@@ -1271,14 +1257,10 @@ int label_scan(struct cmd_context *cmd)
 	if (!label_scan_setup_bcache())
 		return_0;
 
-	/* Initialize device_list cache early so
+	/* Initialize dm device cache early so
 	 * 'Hints' file processing can also use it */
-	dm_device_list_destroy(&cmd->cache_dm_devs);
-	if (get_device_list(NULL, &cmd->cache_dm_devs, &devs_features))
-		if (!(devs_features & DM_DEVICE_LIST_HAS_UUID))
-			/* Using older kernels without UUIDs in LIST,
-			 * -> cannot use cache */
-			dm_device_list_destroy(&cmd->cache_dm_devs);
+	if (!dev_cache_update_dm_devs(cmd))
+		return_0;
 
 	/*
 	 * Creates a list of available devices, does not open or read any,
@@ -1673,7 +1655,6 @@ void label_scan_invalidate_lvs(struct cmd_context *cmd, struct dm_list *lvs)
 	struct dm_active_device *dm_dev;
 	struct device *dev;
 	struct lv_list *lvl;
-	dev_t devt;
 
 	/*
 	 * This is only needed when the command sees PVs stacked on LVs which
@@ -1688,8 +1669,7 @@ void label_scan_invalidate_lvs(struct cmd_context *cmd, struct dm_list *lvs)
 		dm_list_iterate_items(dm_dev, cmd->cache_dm_devs)
 			if (dm_dev->uuid &&
 			    strncmp(dm_dev->uuid, UUID_PREFIX, sizeof(UUID_PREFIX) - 1) == 0) {
-				devt = MKDEV(dm_dev->major, dm_dev->minor);
-				if ((dev = dev_cache_get_by_devt(cmd, devt)))
+				if ((dev = dev_cache_get_by_devt(cmd, dm_dev->devno)))
 					label_scan_invalidate(dev);
 			}
 	} else

@@ -758,12 +758,19 @@ int device_is_usable(struct cmd_context *cmd, struct device *dev, struct dev_usa
 	struct dm_task *dmt;
 	struct dm_info info;
 	const char *name, *uuid;
+	const struct dm_active_device *dm_dev;
 	uint64_t start, length;
 	char *target_type = NULL;
 	char *params;
 	void *next = NULL;
 	int only_error_or_zero_target = 1;
 	int r = 0;
+
+	if (cmd->cache_dm_devs &&
+	    /* With cache we can avoid status calls for unusable UUIDs */
+	    (dm_dev = dev_cache_get_dm_dev_by_devno(cmd, dev->dev)) &&
+	    !_is_usable_uuid(dev, dm_dev->name, dm_dev->uuid, check.check_reserved, check.check_lv, is_lv))
+		return 0;
 
 	if (!(dmt = _setup_task_run(DM_DEVICE_STATUS, &info, NULL, NULL, NULL,
 				    MAJOR(dev->dev), MINOR(dev->dev), 0, 0, 0)))
@@ -886,12 +893,13 @@ int device_get_uuid(struct cmd_context *cmd, int major, int minor,
 {
 	struct dm_task *dmt;
 	struct dm_info info;
+	const struct dm_active_device *dm_dev;
 	const char *uuid;
 	int r = 0;
 
 	if (cmd->cache_dm_devs) {
-		if (dm_device_list_find_by_dev(cmd->cache_dm_devs, major, minor, NULL, &uuid)) {
-			dm_strncpy(uuid_buf, uuid, uuid_buf_size);
+		if ((dm_dev = dev_cache_get_dm_dev_by_devno(cmd, MKDEV(major, minor)))) {
+			dm_strncpy(uuid_buf, dm_dev->uuid, uuid_buf_size);
 			return 1;
 		}
 		uuid_buf[0] = 0;
@@ -1053,6 +1061,7 @@ int dev_manager_info(struct cmd_context *cmd,
 		     struct dm_info *dminfo, uint32_t *read_ahead,
 		     struct lv_seg_status *seg_status)
 {
+	char old_style_dlid[sizeof(UUID_PREFIX) + 2 * ID_LEN];
 	char *dlid, *name;
 	int r = 0;
 
@@ -1062,8 +1071,11 @@ int dev_manager_info(struct cmd_context *cmd,
 	if (!(dlid = build_dm_uuid(cmd->mem, lv, layer)))
 		goto_out;
 
+	dm_strncpy(old_style_dlid, dlid, sizeof(old_style_dlid));
+
 	if (cmd->cache_dm_devs &&
-	    !dm_device_list_find_by_uuid(cmd->cache_dm_devs, dlid, NULL)) {
+	    !dev_cache_get_dm_dev_by_uuid(cmd, dlid) &&
+	    !dev_cache_get_dm_dev_by_uuid(cmd, old_style_dlid)) {
 		log_debug("Cached as inactive %s.", name);
 		if (dminfo)
 			memset(dminfo, 0, sizeof(*dminfo));
@@ -2427,7 +2439,7 @@ static int _add_dev_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 {
 	char *dlid, *name;
 	struct dm_info info, info2;
-	const struct dm_active_device *dev;
+	const struct dm_active_device *dm_dev;
 
 	if (!(name = dm_build_dm_name(dm->mem, lv->vg->name, lv->name, layer)))
 		return_0;
@@ -2436,14 +2448,14 @@ static int _add_dev_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 		return_0;
 
 	if (dm->cmd->cache_dm_devs) {
-		if (!dm_device_list_find_by_uuid(dm->cmd->cache_dm_devs, dlid, &dev)) {
+		if (!(dm_dev = dev_cache_get_dm_dev_by_uuid(dm->cmd, dlid))) {
 			log_debug("Cached as not present %s.", name);
 			return 1;
 		}
 		info = (struct dm_info) {
 			.exists = 1,
-			.major = dev->major,
-			.minor = dev->minor,
+			.major = MAJOR(dm_dev->devno),
+			.minor = MINOR(dm_dev->devno),
 		};
 		log_debug("Cached as present %s %s (%d:%d).",
 			  name, dlid, info.major, info.minor);
@@ -3633,7 +3645,18 @@ static int _add_new_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 	if (!layer && lv_is_writecache_origin(lv))
 		layer = lv_layer(lv); /* "real" */
 
-	if (!(dlid = build_dm_uuid(dm->mem, lv, layer)))
+	/*
+	 * FIXME: we would like to have -private suffixes used for device not processed by udev
+	 * however ATM we also sometimes want to provide /dev/vg/lv symlinks to such devices
+	 * and also be able to correctly report its status with lvs.
+	 *
+	 * Until problems are resolved this code path needs to be disabled.
+	 */
+	if (0 && lvlayer->visible_component) {
+		/* Component LV will be public, do not add any layer suffixes */
+		if (!(dlid = dm_build_dm_uuid(dm->mem, UUID_PREFIX, lv->lvid.s, NULL)))
+			return_0;
+	} else if (!(dlid = build_dm_uuid(dm->mem, lv,layer)))
 		return_0;
 
 	/* We've already processed this node if it already has a context ptr */
