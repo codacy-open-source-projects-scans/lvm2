@@ -1223,9 +1223,21 @@ static int _lockd_all_lvs(struct cmd_context *cmd, struct volume_group *vg)
 /* vgremove before the vg is removed */
 
 int lockd_free_vg_before(struct cmd_context *cmd, struct volume_group *vg,
-			 int changing)
+			 int changing, int yes)
 {
 	int lock_type_num = get_lock_type_from_string(vg->lock_type);
+
+	if (cmd->lockopt & LOCKOPT_FORCE) {
+		if (!yes && yes_no_prompt("Force unprotected removal of shared VG? [y/n]: ") == 'n') {
+			log_error("VG not removed.");
+			return 0;
+		}
+		if (vg->sanlock_lv) {
+			_deactivate_sanlock_lv(cmd, vg);
+			_remove_sanlock_lv(cmd, vg);
+		}
+		return 1;
+	}
 
 	/*
 	 * Check that no LVs are active on other hosts.
@@ -1298,15 +1310,12 @@ void lockd_free_vg_final(struct cmd_context *cmd, struct volume_group *vg)
  * for starting the lockspace.  To use the vg after starting
  * the lockspace, follow the standard method which is:
  * lock the vg, read/use/write the vg, unlock the vg.
- *
- * start_init is 1 when the VG is being started after the
- * command has done lockd_init_vg().  This tells lvmlockd
- * that the VG lockspace being started is new.
  */
 
-int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int start_init, int *exists)
+int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int *exists)
 {
 	char uuid[64] __attribute__((aligned(8)));
+	const char *opts = NULL;
 	daemon_reply reply;
 	uint32_t lockd_flags = 0;
 	int host_id = 0;
@@ -1328,8 +1337,13 @@ int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int start_i
 		return 0;
 	}
 
-	log_debug("lockd start VG %s lock_type %s init %d",
-		  vg->name, vg->lock_type ? vg->lock_type : "empty", start_init);
+	if (cmd->lockopt & LOCKOPT_ADOPTLS)
+		opts = "adopt_only";
+	else if (cmd->lockopt & LOCKOPT_ADOPT)
+		opts = "adopt";
+
+	log_debug("lockd start VG %s lock_type %s",
+		  vg->name, vg->lock_type ? vg->lock_type : "empty");
 
 	if (!id_write_format(&vg->id, uuid, sizeof(uuid)))
 		return_0;
@@ -1364,7 +1378,7 @@ int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int start_i
 				"vg_uuid = %s", uuid[0] ? uuid : "none",
 				"version = " FMTd64, (int64_t) vg->seqno,
 				"host_id = " FMTd64, (int64_t) host_id,
-				"opts = %s", start_init ? "start_init" : "none",
+				"opts = %s", opts ?:  "none",
 				NULL);
 		_lockd_free_pv_list(&lock_pvs);
 	} else {
@@ -1377,7 +1391,7 @@ int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int start_i
 				"vg_uuid = %s", uuid[0] ? uuid : "none",
 				"version = " FMTd64, (int64_t) vg->seqno,
 				"host_id = " FMTd64, (int64_t) host_id,
-				"opts = %s", start_init ? "start_init" : "none",
+				"opts = %s", opts ?:  "none",
 				NULL);
 	}
 
@@ -1832,6 +1846,11 @@ int lockd_global(struct cmd_context *cmd, const char *def_mode)
 		return 0;
 	}
 
+	if (cmd->lockopt & LOCKOPT_ADOPTGL)
+		opts = "adopt_only";
+	else if (cmd->lockopt & LOCKOPT_ADOPT)
+		opts = "adopt";
+
 	if (!strcmp(mode, "sh") && cmd->lockd_global_ex)
 		return 1;
 
@@ -1904,7 +1923,10 @@ int lockd_global(struct cmd_context *cmd, const char *def_mode)
 	if (result == -ENOLS ||
 	    result == -ESTARTING ||
 	    result == -EVGKILLED ||
-	    result == -ELOCKIO) {
+	    result == -ELOCKIO ||
+	    result == -EORPHAN ||
+	    result == -EADOPT_RETRY ||
+	    result == -EADOPT_NONE) {
 		/*
 		 * If an ex global lock fails, then the command fails.
 		 */
@@ -1917,6 +1939,12 @@ int lockd_global(struct cmd_context *cmd, const char *def_mode)
 				log_error("Global lock failed: storage errors for sanlock leases");
 			else if (result == -EVGKILLED)
 				log_error("Global lock failed: storage failed for sanlock leases");
+			else if (result == -EORPHAN)
+				log_error("Global lock failed: orphan lock needs to be adopted");
+			else if (result == -EADOPT_NONE)
+				log_error("Global lock failed: adopt found no orphan");
+			else if (result == -EADOPT_RETRY)
+				log_error("Global lock failed: adopt found other mode");
 			else
 				log_error("Global lock failed: error %d", result);
 
@@ -1945,8 +1973,23 @@ int lockd_global(struct cmd_context *cmd, const char *def_mode)
 			goto allow;
 		}
 
+		if (result == -EORPHAN) {
+			log_warn("Skipping global lock: orphan lock needs to be adopted");
+			goto allow;
+		}
+
+		if (result == -EADOPT_NONE) {
+			log_warn("Skipping global lock: adopt found no orphan");
+			goto allow;
+		}
+
+		if (result == -EADOPT_RETRY) {
+			log_warn("Skipping global lock: adopt found other mode");
+			goto allow;
+		}
+
 		if ((lockd_flags & LD_RF_NO_GL_LS) || (lockd_flags & LD_RF_NO_LOCKSPACES)) {
-			log_warn("Skipping global lock: lockspace not found or started");
+			log_debug("Skipping global lock: lockspace not found or started");
 			goto allow;
 		}
 
@@ -2014,15 +2057,22 @@ int lockd_global(struct cmd_context *cmd, const char *def_mode)
  * this result is passed into vg_read().  After vg_read() reads the VG,
  * it checks if the VG lock_type (sanlock or dlm) requires a lock to be
  * held, and if so, it verifies that the lock was correctly acquired by
- * looking at lockd_state.  If vg_read() sees that the VG is a local VG,
- * i.e. lock_type is not sanlock or dlm, then no lock is required, and it
- * ignores lockd_state (which would indicate no lock was found.)
+ * looking at lockd_state.
+ *
+ * If vg_read() sees that the VG is a local VG, i.e. lock_type is not
+ * sanlock or dlm, then no lock is required, and it ignores lockd_state,
+ * which would indicate no lock was found.... although a newer
+ * optimization avoids calling lockd_vg() at all for local VGs
+ * by checking the lock_type in lvmcache saved by label_scan.  In extremely
+ * rare case where the lock_type changes between label_scan and vg_read,
+ * the caller will go back and repeat lockd_vg()+vg_read().
  */
 
 int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 	     uint32_t flags, uint32_t *lockd_state)
 {
 	const char *mode = NULL;
+	const char *opts = NULL;
 	uint32_t lockd_flags;
 	uint32_t prev_state = *lockd_state;
 	int retries = 0;
@@ -2089,6 +2139,11 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 	if (!mode)
 		mode = cmd->lockd_vg_default_sh ? "sh" : "ex";
 
+	if (cmd->lockopt & LOCKOPT_ADOPTVG)
+		opts = "adopt_only";
+	else if (cmd->lockopt & LOCKOPT_ADOPT)
+		opts = "adopt";
+
 	if (!strcmp(mode, "ex"))
 		*lockd_state |= LDST_EX;
 
@@ -2110,7 +2165,7 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 	log_debug("lockd VG %s mode %s", vg_name, mode);
 
 	if (!_lockd_request(cmd, "lock_vg",
-			      vg_name, NULL, NULL, NULL, NULL, NULL, mode, NULL,
+			      vg_name, NULL, NULL, NULL, NULL, NULL, mode, opts,
 			      NULL, &result, &lockd_flags)) {
 		/*
 		 * No result from lvmlockd, it is probably not running.
@@ -2223,6 +2278,43 @@ int lockd_vg(struct cmd_context *cmd, const char *vg_name, const char *def_mode,
 			goto out;
 		}
 	}
+
+	if (result == -EORPHAN) {
+		if (!strcmp(mode, "sh")) {
+			log_warn("VG %s lock skipped: orphan lock needs to be adopted.", vg_name);
+			ret = 1;
+			goto out;
+		} else {
+			log_error("VG %s lock failed: orphan lock needs to be adopted.", vg_name);
+			ret = 0;
+			goto out;
+		}
+	}
+
+	if (result == -EADOPT_NONE) {
+		if (!strcmp(mode, "sh")) {
+			log_warn("VG %s lock skipped: adopt found no orphan.", vg_name);
+			ret = 1;
+			goto out;
+		} else {
+			log_error("VG %s lock failed: adopt found no orphan.", vg_name);
+			ret = 0;
+			goto out;
+		}
+	}
+
+	if (result == -EADOPT_RETRY) {
+		if (!strcmp(mode, "sh")) {
+			log_warn("VG %s lock skipped: adopt found other mode.", vg_name);
+			ret = 1;
+			goto out;
+		} else {
+			log_error("VG %s lock failed: adopt found other mode.", vg_name);
+			ret = 0;
+			goto out;
+		}
+	}
+
 	/*
 	 * No lockspace for the VG was found.  It may be a local
 	 * VG that lvmlockd doesn't keep track of, or it may be
@@ -2283,12 +2375,22 @@ int lockd_vg_update(struct volume_group *vg)
 	int result;
 	int ret;
 
-	if (!vg_is_shared(vg))
-		return 1;
 	if (!_use_lvmlockd)
 		return 0;
 	if (!_lvmlockd_connected)
 		return 0;
+	if (!vg_is_shared(vg))
+		return 1;
+
+#if !LVMLOCKD_USE_SANLOCK_LVB
+	/*
+	 * lvb (for lock version) is disabled for sanlock since
+	 * lock versions are not used any more, and it's more
+	 * costly for sanlock to implement (extra i/o.)
+	 */
+	if (!strcmp(vg->lock_type, "sanlock"))
+		return 1;
+#endif
 
 	reply = _lockd_send("vg_update",
 				"pid = " FMTd64, (int64_t) getpid(),
@@ -2396,8 +2498,9 @@ int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
 		  const char *lock_args, const char *def_mode, uint32_t flags)
 {
 	char lv_uuid[64] __attribute__((aligned(8)));
-	const char *mode = NULL;
+	char opt_buf[64] = {};
 	const char *opts = NULL;
+	const char *mode = NULL;
 	uint32_t lockd_flags;
 	int refreshed = 0;
 	int result;
@@ -2461,8 +2564,15 @@ int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
 	if (!mode)
 		mode = "ex";
 
-	if (flags & LDLV_PERSISTENT)
-		opts = "persistent";
+	if ((flags & LDLV_PERSISTENT) ||
+	    (cmd->lockopt & LOCKOPT_ADOPTLV) ||
+	    (cmd->lockopt & LOCKOPT_ADOPT)) {
+		dm_snprintf(opt_buf, sizeof(opt_buf), "%s%s%s",
+			    (flags & LDLV_PERSISTENT) ? "persistent," : "",
+			    (cmd->lockopt & LOCKOPT_ADOPTLV) ? "adopt_only" : "",
+			    (cmd->lockopt & LOCKOPT_ADOPT) ? "adopt" : "");
+		opts = opt_buf;
+	}
 
  retry:
 	log_debug("lockd LV %s/%s mode %s uuid %s", vg->name, lv_name, mode, lv_uuid);
@@ -2500,6 +2610,21 @@ int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
 
 	if (result == -EAGAIN) {
 		log_error("LV locked by other host: %s/%s", vg->name, lv_name);
+		return 0;
+	}
+
+	if (result == -EORPHAN) {
+		log_error("LV %s/%s lock failed: orphan lock needs to be adopted.", vg->name, lv_name);
+		return 0;
+	}
+
+	if (result == -EADOPT_NONE) {
+		log_error("LV %s/%s lock failed: adopt found no orphan.", vg->name, lv_name);
+		return 0;
+	}
+
+	if (result == -EADOPT_RETRY) {
+		log_error("LV %s/%s lock failed: adopt found other mode.", vg->name, lv_name);
 		return 0;
 	}
 
@@ -2683,8 +2808,27 @@ int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
 		return 0;
 	}
 
+	if (!_lvmlockd_connected && !strcmp(def_mode, "un")) {
+		log_debug("Skip LV unlock: no lvmlockd");
+		return 1;
+	}
+
 	if (!_lvmlockd_connected)
 		return 0;
+
+	/*
+	 * This addresses the specific case of: vgchange -an vg
+	 * when vg is a shared VG that is not started.  Without
+	 * this check, the command will try and fail to unlock
+	 * every LV, which is wasted effort if the lockspace is
+	 * not started, especially with many LVs in the VG.
+	 * The command still attempts to deactivate the LVs,
+	 * which it should in case they are active for some reason.
+	 */
+	if (lv->vg->lockd_not_started && !strcmp(def_mode, "un")) {
+		log_debug("Skip LV unlock: no lockspace");
+		return 1;
+	}
 
 	if (lv_is_thin_type(lv))
 		return _lockd_lv_thin(cmd, lv, def_mode, flags);
@@ -2758,8 +2902,8 @@ int lockd_lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
 {
 	char lv_uuid[64] __attribute__((aligned(8)));
 	char path[PATH_MAX];
-	int shupdate = (lp->lockopt && strstr(lp->lockopt, "shupdate"));
-	int norefresh = (lp->lockopt && strstr(lp->lockopt, "norefresh"));
+	int shupdate = cmd->lockopt & LOCKOPT_SHUPDATE;
+	int norefresh = cmd->lockopt & LOCKOPT_NOREFRESH;
 	int rv;
 
 	if (!vg_is_shared(lv->vg))
@@ -3232,7 +3376,7 @@ int lockd_rename_vg_final(struct cmd_context *cmd, struct volume_group *vg, int 
 		 * Depending on the problem that caused the rename to
 		 * fail, it may make sense to not restart the VG here.
 		 */
-		if (!lockd_start_vg(cmd, vg, 0, NULL))
+		if (!lockd_start_vg(cmd, vg, NULL))
 			log_error("Failed to restart VG %s lockspace.", vg->name);
 		return 1;
 	}
@@ -3272,7 +3416,7 @@ int lockd_rename_vg_final(struct cmd_context *cmd, struct volume_group *vg, int 
 		}
 	}
 
-	if (!lockd_start_vg(cmd, vg, 1, NULL))
+	if (!lockd_start_vg(cmd, vg, NULL))
 		log_error("Failed to start VG %s lockspace.", vg->name);
 
 	return 1;
@@ -3429,3 +3573,70 @@ int lockd_lv_refresh(struct cmd_context *cmd, struct lvresize_params *lp)
 	return 1;
 }
 
+static void _split_line(char *buf, int *argc, char **argv, int max_args, char sep)
+{
+	char *p = buf;
+	int i;
+
+	argv[0] = p;
+
+	for (i = 1; i < max_args; i++) {
+		p = strchr(p, sep);
+		if (!p)
+			break;
+		*p++ = '\0';
+
+		argv[i] = p;
+	}
+	*argc = i;
+}
+
+#define MAX_LOCKOPT 16
+
+void lockd_lockopt_get_flags(const char *str, uint32_t *flags)
+{
+	char buf[PATH_MAX];
+	char *argv[MAX_LOCKOPT];
+	int argc;
+	int i;
+
+	if (!str)
+		return;
+
+	dm_strncpy(buf, str, sizeof(buf));
+
+	_split_line(buf, &argc, argv, MAX_LOCKOPT, ',');
+
+	for (i = 0; i < argc; i++) {
+		if (!strcmp(argv[i], "force"))
+			*flags |= LOCKOPT_FORCE;
+		else if (!strcmp(argv[i], "shupdate"))
+			*flags |= LOCKOPT_SHUPDATE;
+		else if (!strcmp(argv[i], "norefresh"))
+			*flags |= LOCKOPT_NOREFRESH;
+		else if (!strcmp(argv[i], "skipgl"))
+			*flags |= LOCKOPT_SKIPGL;
+		else if (!strcmp(argv[i], "skipvg"))
+			*flags |= LOCKOPT_SKIPVG;
+		else if (!strcmp(argv[i], "skiplv"))
+			*flags |= LOCKOPT_SKIPLV;
+		else if (!strcmp(argv[i], "auto"))
+			*flags |= LOCKOPT_AUTO;
+		else if (!strcmp(argv[i], "nowait"))
+			*flags |= LOCKOPT_NOWAIT;
+		else if (!strcmp(argv[i], "autonowait"))
+			*flags |= LOCKOPT_AUTONOWAIT;
+		else if (!strcmp(argv[i], "adoptls"))
+			*flags |= LOCKOPT_ADOPTLS;
+		else if (!strcmp(argv[i], "adoptgl"))
+			*flags |= LOCKOPT_ADOPTGL;
+		else if (!strcmp(argv[i], "adoptvg"))
+			*flags |= LOCKOPT_ADOPTVG;
+		else if (!strcmp(argv[i], "adoptlv"))
+			*flags |= LOCKOPT_ADOPTLV;
+		else if (!strcmp(argv[i], "adopt"))
+			*flags |= LOCKOPT_ADOPT;
+		else
+			log_warn("Ignoring unknown lockopt value: %s", argv[i]);
+	}
+}

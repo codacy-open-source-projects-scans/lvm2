@@ -39,7 +39,25 @@
 #define LDST_FAIL_OTHER		0x00000020
 #define LDST_FAIL		(LDST_FAIL_REQUEST | LDST_FAIL_NOLS | LDST_FAIL_STARTING | LDST_FAIL_OTHER)
 
+/* --lockopt flags */
+#define LOCKOPT_FORCE		0x00000001
+#define LOCKOPT_SHUPDATE	0x00000002
+#define LOCKOPT_NOREFRESH	0x00000004
+#define LOCKOPT_SKIPGL		0x00000008
+#define LOCKOPT_SKIPVG		0x00000010
+#define LOCKOPT_SKIPLV		0x00000020
+#define LOCKOPT_AUTO		0x00000040
+#define LOCKOPT_NOWAIT		0x00000080
+#define LOCKOPT_AUTONOWAIT	0x00000100
+#define LOCKOPT_ADOPTLS		0x00000200
+#define LOCKOPT_ADOPTGL		0x00000400
+#define LOCKOPT_ADOPTVG		0x00000800
+#define LOCKOPT_ADOPTLV		0x00001000
+#define LOCKOPT_ADOPT		0x00002000
+
 #ifdef LVMLOCKD_SUPPORT
+
+void lockd_lockopt_get_flags(const char *str, uint32_t *flags);
 
 struct lvresize_params;
 struct lvcreate_params;
@@ -53,10 +71,11 @@ void lvmlockd_init(struct cmd_context *cmd);
 void lvmlockd_connect(void);
 void lvmlockd_disconnect(void);
 
+
 /* vgcreate/vgremove use init/free */
 
 int lockd_init_vg(struct cmd_context *cmd, struct volume_group *vg, const char *lock_type, int lv_lock_count);
-int lockd_free_vg_before(struct cmd_context *cmd, struct volume_group *vg, int changing);
+int lockd_free_vg_before(struct cmd_context *cmd, struct volume_group *vg, int changing, int yes);
 void lockd_free_vg_final(struct cmd_context *cmd, struct volume_group *vg);
 
 /* vgrename */
@@ -66,7 +85,7 @@ int lockd_rename_vg_final(struct cmd_context *cmd, struct volume_group *vg, int 
 
 /* start and stop the lockspace for a vg */
 
-int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int start_init, int *exists);
+int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int *exists);
 int lockd_stop_vg(struct cmd_context *cmd, struct volume_group *vg);
 int lockd_start_wait(struct cmd_context *cmd);
 
@@ -107,6 +126,10 @@ int lockd_query_lv(struct cmd_context *cmd, struct logical_volume *lv, int *ex, 
 
 #else /* LVMLOCKD_SUPPORT */
 
+static inline void lockd_lockopt_get_flags(const char *str, uint32_t *flags)
+{
+}
+
 static inline void lvmlockd_set_socket(const char *sock)
 {
 }
@@ -137,7 +160,7 @@ static inline int lockd_init_vg(struct cmd_context *cmd, struct volume_group *vg
 	return 1;
 }
 
-static inline int lockd_free_vg_before(struct cmd_context *cmd, struct volume_group *vg, int changing)
+static inline int lockd_free_vg_before(struct cmd_context *cmd, struct volume_group *vg, int changing, int yes)
 {
 	return 1;
 }
@@ -157,7 +180,7 @@ static inline int lockd_rename_vg_final(struct cmd_context *cmd, struct volume_g
 	return 1;
 }
 
-static inline int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int start_init, int *exists)
+static inline int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int *exists)
 {
 	return 0;
 }

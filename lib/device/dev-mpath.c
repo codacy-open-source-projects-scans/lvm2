@@ -535,7 +535,7 @@ static int _dev_is_mpath_component_sysfs(struct cmd_context *cmd, struct device 
 
 		/* Check whether holder's UUID uses MPATH prefix */
 		/* TODO: reuse/merge with dev_has_mpath_uuid() as this function also recognizes kpartx partition */
-		if (device_get_uuid(cmd, dm_dev_major, dm_dev_minor, uuid, sizeof(uuid)) &&
+		if (devno_dm_uuid(cmd, dm_dev_major, dm_dev_minor, uuid, sizeof(uuid)) &&
 		    !strncmp(uuid, MPATH_PREFIX, sizeof(MPATH_PREFIX) - 1)) {
 			log_debug_devs("dev_is_mpath_component %s holder %s %u:%u ignore mpath component",
 					dev_name(dev), holder_name, dm_dev_major, dm_dev_minor);
@@ -576,7 +576,7 @@ static int _dev_in_wwid_file(struct cmd_context *cmd, struct device *dev,
 	 * Check the primary device, not the partition.
 	 */
 	if (primary_result == 2) {
-		if (!(dev = dev_cache_get_by_devt(cmd, primary_dev))) {
+		if (!(dev = dev_cache_get_by_devno(cmd, primary_dev))) {
 			log_debug("dev_is_mpath_component %s no primary dev", dev_name(dev));
 			return 0;
 		}

@@ -418,7 +418,7 @@ int add_areas_line(struct dev_manager *dm, struct lv_segment *seg,
 {
         return 0;
 }
-int device_is_usable(struct cmd_context *cmd, struct device *dev, struct dev_usable_check_params check, int *is_lv)
+int dm_device_is_usable(struct cmd_context *cmd, struct device *dev, struct dev_usable_check_params check, int *is_lv)
 {
         return 0;
 }
@@ -672,13 +672,13 @@ int target_present(struct cmd_context *cmd, const char *target_name,
 				      &maj, &min, &patchlevel);
 }
 
-int get_device_list(const struct volume_group *vg, struct dm_list **devs,
-		    unsigned *devs_features)
+int get_dm_active_devices(const struct volume_group *vg, struct dm_list **devs,
+			  unsigned *devs_features)
 {
 	if (!activation())
 		return 0;
 
-	return dev_manager_get_device_list(NULL, devs, devs_features);
+	return dev_manager_get_dm_active_devices(NULL, devs, devs_features);
 }
 
 /*

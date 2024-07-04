@@ -647,7 +647,6 @@ static int _passes_lock_start_filter(struct cmd_context *cmd,
 static int _vgchange_lock_start(struct cmd_context *cmd, struct volume_group *vg,
 				struct vgchange_params *vp)
 {
-	const char *start_opt = arg_str_value(cmd, lockopt_ARG, NULL);
 	int auto_opt = 0;
 	int exists = 0;
 	int r;
@@ -659,10 +658,9 @@ static int _vgchange_lock_start(struct cmd_context *cmd, struct volume_group *vg
 		goto do_start;
 
 	/*
-	 * Recognize both "auto" and "autonowait" options.
 	 * Any waiting is done at the end of vgchange.
 	 */
-	if (start_opt && !strncmp(start_opt, "auto", 4))
+	if ((cmd->lockopt & LOCKOPT_AUTO) || (cmd->lockopt & LOCKOPT_AUTONOWAIT))
 		auto_opt = 1;
 
 	if (!_passes_lock_start_filter(cmd, vg, activation_lock_start_list_CFG)) {
@@ -676,7 +674,7 @@ static int _vgchange_lock_start(struct cmd_context *cmd, struct volume_group *vg
 	}
 
 do_start:
-	r = lockd_start_vg(cmd, vg, 0, &exists);
+	r = lockd_start_vg(cmd, vg, &exists);
 
 	if (r)
 		vp->lock_start_count++;
@@ -1141,16 +1139,15 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 	return ret;
 }
 
-static int _vgchange_locktype(struct cmd_context *cmd, struct volume_group *vg)
+static int _vgchange_locktype(struct cmd_context *cmd, struct volume_group *vg, int *no_change)
 {
 	const char *lock_type = arg_str_value(cmd, locktype_ARG, NULL);
-	const char *lockopt = arg_str_value(cmd, lockopt_ARG, NULL);
 	struct lv_list *lvl;
 	struct logical_volume *lv;
 	int lv_lock_count = 0;
 
 	/* Special recovery case. */
-	if (lock_type && lockopt && !strcmp(lock_type, "none") && !strcmp(lockopt, "force")) {
+	if (lock_type && !strcmp(lock_type, "none") && (cmd->lockopt & LOCKOPT_FORCE)) {
 		vg->status &= ~CLUSTERED;
 		vg->lock_type = "none";
 		vg->lock_args = NULL;
@@ -1171,6 +1168,7 @@ static int _vgchange_locktype(struct cmd_context *cmd, struct volume_group *vg)
 	if (lock_type && !strcmp(vg->lock_type, lock_type)) {
 		log_warn("WARNING: New lock type %s matches the current lock type %s.",
 			 lock_type, vg->lock_type);
+		*no_change = 1;
 		return 1;
 	}
 
@@ -1214,7 +1212,7 @@ static int _vgchange_locktype(struct cmd_context *cmd, struct volume_group *vg)
 	 * lockd type to ..., first undo lockd type
 	 */
 	if (is_lockd_type(vg->lock_type)) {
-		if (!lockd_free_vg_before(cmd, vg, 1))
+		if (!lockd_free_vg_before(cmd, vg, 1, 0))
 			return 0;
 
 		lockd_free_vg_final(cmd, vg);
@@ -1309,8 +1307,13 @@ static int _vgchange_locktype_single(struct cmd_context *cmd, const char *vg_nam
 			             struct volume_group *vg,
 			             struct processing_handle *handle)
 {
-	if (!_vgchange_locktype(cmd, vg))
+	int no_change = 0;
+
+	if (!_vgchange_locktype(cmd, vg, &no_change))
 		return_ECMD_FAILED;
+
+	if (no_change)
+		return ECMD_PROCESSED;
 
 	if (!vg_write(vg) || !vg_commit(vg))
 		return_ECMD_FAILED;
@@ -1341,8 +1344,8 @@ int vgchange_locktype_cmd(struct cmd_context *cmd, int argc, char **argv)
 {
 	struct processing_handle *handle;
 	const char *lock_type = arg_str_value(cmd, locktype_ARG, NULL);
-	const char *lockopt = arg_str_value(cmd, lockopt_ARG, NULL);
 	int ret;
+
 
 	/*
 	 * vgchange --locktype none --lockopt force VG
@@ -1366,14 +1369,9 @@ int vgchange_locktype_cmd(struct cmd_context *cmd, int argc, char **argv)
 	 * disable locking.  lockd_gl(), lockd_vg() and lockd_lv() will
 	 * just return success when they see the disable flag set.
 	 */
-	if (lockopt && !strcmp(lockopt, "force")) {
-		if (lock_type && strcmp(lock_type, "none")) {
-			log_error("Lock type can only be forced to \"none\" for recovery.");
-			return 0;
-		}
-
+	if (cmd->lockopt & LOCKOPT_FORCE) {
 		if (!arg_is_set(cmd, yes_ARG) &&
-		     yes_no_prompt("Forcibly change VG lock type to none? [y/n]: ") == 'n') {
+		     yes_no_prompt("Forcibly change VG lock type to %s? [y/n]: ", lock_type) == 'n') {
 			log_error("VG lock type not changed.");
 			return 0;
 		}
@@ -1479,19 +1477,17 @@ int vgchange_lock_start_stop_cmd(struct cmd_context *cmd, int argc, char **argv)
 	/* Wait for lock-start ops that were initiated in vgchange_lockstart. */
 
 	if (arg_is_set(cmd, lockstart_ARG) && vp.lock_start_count) {
-		const char *start_opt = arg_str_value(cmd, lockopt_ARG, NULL);
-
 		if (!lockd_global(cmd, "un"))
 			stack;
 
-		if (!start_opt || !strcmp(start_opt, "auto")) {
+		if ((cmd->lockopt & LOCKOPT_NOWAIT) || (cmd->lockopt & LOCKOPT_AUTONOWAIT)) {
+			log_print_unless_silent("Starting locking.  VG can only be read until locks are ready.");
+		} else {
 			if (vp.lock_start_sanlock)
-				log_print_unless_silent("Starting locking.  Waiting for sanlock may take 20 sec to 3 min...");
+				log_print_unless_silent("Starting locking.  Waiting for sanlock may take a few seconds to 3 min...");
 			else
 				log_print_unless_silent("Starting locking.  Waiting until locks are ready...");
 			lockd_start_wait(cmd);
-		} else if (!strcmp(start_opt, "nowait") || !strcmp(start_opt, "autonowait")) {
-			log_print_unless_silent("Starting locking.  VG can only be read until locks are ready.");
 		}
 	}
 
@@ -1536,17 +1532,6 @@ int vgchange_systemid_cmd(struct cmd_context *cmd, int argc, char **argv)
 {
 	struct processing_handle *handle;
 	int ret;
-
-	/*
-	 * This is a special case where taking the global lock is
-	 * not needed to protect global state, because the change is
-	 * only to an existing VG.  But, taking the global lock ex is
-	 * helpful in this case to trigger a global cache validation
-	 * on other hosts, to cause them to see the new system_id or
-	 * lock_type.
-	 */
-	if (!lockd_global(cmd, "ex"))
-		return 0;
 
 	if (!(handle = init_processing_handle(cmd, NULL))) {
 		log_error("Failed to initialize processing handle.");

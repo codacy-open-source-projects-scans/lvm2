@@ -251,11 +251,6 @@ struct label *label_create(struct labeller *labeller)
 	return label;
 }
 
-
-/* global variable for accessing the bcache populated by label scan */
-/* FIXME/TODO convert to cmd_context */
-static struct bcache *scan_bcache;
-
 #define BCACHE_BLOCK_SIZE_IN_SECTORS 256 /* 256*512 = 128K */
 
 static bool _in_bcache(struct device *dev)
@@ -537,8 +532,8 @@ static int _scan_dev_open(struct device *dev)
 			 */
 			log_debug("Drop alias for %u:%u failed open %s (%d).",
 				  MAJOR(dev->dev), MINOR(dev->dev), name, errno);
-			dev_cache_failed_path(dev, name);
-			dev_cache_verify_aliases(dev);
+			dev_cache_failed_path(dev->cmd, dev, name);
+			dev_cache_verify_aliases(dev->cmd, dev);
 			goto next_name;
 		}
 	}
@@ -548,8 +543,8 @@ static int _scan_dev_open(struct device *dev)
 		log_warn("Invalid path %s for device %u:%u, trying different path.",
 			 name, MAJOR(dev->dev), MINOR(dev->dev));
 		(void)close(fd);
-		dev_cache_failed_path(dev, name);
-		dev_cache_verify_aliases(dev);
+		dev_cache_failed_path(dev->cmd, dev, name);
+		dev_cache_verify_aliases(dev->cmd, dev);
 		goto next_name;
 	}
 
@@ -641,7 +636,7 @@ static int _scan_list(struct cmd_context *cmd, struct dev_filter *f,
 	log_debug_devs("Scanning %d devices for VG info", dm_list_size(devs));
 
  scan_more:
-	rem_prefetches = bcache_max_prefetches(scan_bcache);
+	rem_prefetches = bcache_max_prefetches(cmd->dev_blocks);
 	submit_count = 0;
 
 	dm_list_iterate_items_safe(devl, devl2, devs) {
@@ -668,7 +663,7 @@ static int _scan_list(struct cmd_context *cmd, struct dev_filter *f,
 			}
 		}
 
-		bcache_prefetch(scan_bcache, devl->dev->bcache_di, 0);
+		bcache_prefetch(cmd->dev_blocks, devl->dev->bcache_di, 0);
 
 		rem_prefetches--;
 		submit_count++;
@@ -683,7 +678,7 @@ static int _scan_list(struct cmd_context *cmd, struct dev_filter *f,
 		bb = NULL;
 		is_lvm_device = 0;
 
-		if (!bcache_get(scan_bcache, devl->dev->bcache_di, 0, 0, &bb)) {
+		if (!bcache_get(cmd->dev_blocks, devl->dev->bcache_di, 0, 0, &bb)) {
 			log_debug_devs("Scan failed to read %s.", dev_name(devl->dev));
 			scan_read_errors++;
 			scan_failed_count++;
@@ -734,7 +729,7 @@ static int _scan_list(struct cmd_context *cmd, struct dev_filter *f,
 		 * e.g. to pvcreate them.
 		 */
 		if (!is_lvm_device && !want_other_devs) {
-			_invalidate_di(scan_bcache, devl->dev->bcache_di);
+			_invalidate_di(cmd->dev_blocks, devl->dev->bcache_di);
 			_scan_dev_close(devl->dev);
 		}
 
@@ -769,14 +764,14 @@ static int _scan_list(struct cmd_context *cmd, struct dev_filter *f,
 #define MIN_BCACHE_BLOCKS 32    /* 4MB (32 * 128KB) */
 #define MAX_BCACHE_BLOCKS 4096  /* 512MB (4096 * 128KB) */
 
-int label_scan_setup_bcache(void)
+int label_scan_setup_bcache(struct cmd_context *cmd)
 {
 	struct io_engine *ioe = NULL;
 	int iomem_kb = io_memory_size();
 	int block_size_kb = (BCACHE_BLOCK_SIZE_IN_SECTORS * 512) / 1024;
 	int cache_blocks;
 
-	if (scan_bcache)
+	if (cmd->dev_blocks)
 		return 1;
 
 	cache_blocks = iomem_kb / block_size_kb;
@@ -803,7 +798,7 @@ int label_scan_setup_bcache(void)
 		}
 	}
 
-	if (!(scan_bcache = bcache_create(BCACHE_BLOCK_SIZE_IN_SECTORS, cache_blocks, ioe))) {
+	if (!(cmd->dev_blocks = bcache_create(BCACHE_BLOCK_SIZE_IN_SECTORS, cache_blocks, ioe))) {
 		log_error("Failed to set up io layer with %d blocks.", cache_blocks);
 		return 0;
 	}
@@ -890,7 +885,7 @@ int label_scan_for_pvid(struct cmd_context *cmd, char *pvid, struct device **dev
 		return 0;
 	}
 
-	if (!label_scan_setup_bcache())
+	if (!label_scan_setup_bcache(cmd))
 		return_0;
 
 	/*
@@ -899,7 +894,7 @@ int label_scan_for_pvid(struct cmd_context *cmd, char *pvid, struct device **dev
 	 * pass filters, and are those we can use.
 	 */
 
-	if (!(iter = dev_iter_create(cmd->filter, 0))) {
+	if (!(iter = dev_iter_create(cmd, cmd->filter, 0))) {
 		log_error("Scanning failed to get devices.");
 		return 0;
 	}
@@ -1046,7 +1041,7 @@ int label_scan_vg_online(struct cmd_context *cmd, const char *vgname,
 		dm_list_iterate_items(po, &pvs_online) {
 			if (po->dev)
 				continue;
-			if (!(po->dev = dev_cache_get_by_devt(cmd, po->devno))) {
+			if (!(po->dev = dev_cache_get_by_devno(cmd, po->devno))) {
 				log_error("No device found for %u:%u PVID %s.",
 					  MAJOR(po->devno), MINOR(po->devno), po->pvid);
 				goto bad;
@@ -1128,7 +1123,7 @@ int label_scan_vg_online(struct cmd_context *cmd, const char *vgname,
 
 	log_debug("label_scan_vg_online: read and filter devs");
 
-	label_scan_setup_bcache();
+	label_scan_setup_bcache(cmd);
 
 	dm_list_iterate_items_safe(devl, devl2, &devs) {
 		struct dev_use *du;
@@ -1254,12 +1249,16 @@ int label_scan(struct cmd_context *cmd)
 	dm_list_init(&scan_devs);
 	dm_list_init(&hints_list);
 
-	if (!label_scan_setup_bcache())
+	if (!label_scan_setup_bcache(cmd))
 		return_0;
 
-	/* Initialize dm device cache early so
-	 * 'Hints' file processing can also use it */
-	if (!dev_cache_update_dm_devs(cmd))
+	/*
+	 * Initialize cache of dm device uuids, which uses a special dm kernel
+	 * feature for efficiently querying many dm devs together.  (It's done
+	 * here, before processing the hints file, so that the dm uuid checks
+	 * in hint processing can benefit from the dm uuid cache.)
+	 */
+	if (!dm_devs_cache_update(cmd))
 		return_0;
 
 	/*
@@ -1284,7 +1283,7 @@ int label_scan(struct cmd_context *cmd)
 	 */
 	if (cmd->md_component_detection && !cmd->use_full_md_check &&
 	    !strcmp(cmd->md_component_checks, "auto") &&
-	    dev_cache_has_md_with_end_superblock(cmd->dev_types)) {
+	    dev_cache_has_md_with_end_superblock(cmd, cmd->dev_types)) {
 		log_debug("Enable full md component check.");
 		cmd->use_full_md_check = 1;
 	}
@@ -1295,7 +1294,7 @@ int label_scan(struct cmd_context *cmd)
 	 * Invalidate bcache data for all devs (there will usually be no bcache
 	 * data to invalidate.)
 	 */
-	if (!(iter = dev_iter_create(NULL, 0))) {
+	if (!(iter = dev_iter_create(cmd, NULL, 0))) {
 		log_error("Failed to get device list.");
 		return 0;
 	}
@@ -1549,7 +1548,7 @@ int label_read_pvid(struct device *dev, int *has_pvid)
  */
 int label_scan_devs_cached(struct cmd_context *cmd, struct dev_filter *f, struct dm_list *devs)
 {
-	if (!scan_bcache)
+	if (!cmd->dev_blocks)
 		return 0;
 
 	_scan_list(cmd, f, devs, 0, NULL);
@@ -1569,12 +1568,12 @@ int label_scan_devs(struct cmd_context *cmd, struct dev_filter *f, struct dm_lis
 {
 	struct device_list *devl;
 
-	if (!label_scan_setup_bcache())
+	if (!label_scan_setup_bcache(cmd))
 		return_0;
 
 	dm_list_iterate_items(devl, devs) {
 		if (_in_bcache(devl->dev))
-			_invalidate_di(scan_bcache, devl->dev->bcache_di);
+			_invalidate_di(cmd->dev_blocks, devl->dev->bcache_di);
 	}
 
 	_scan_list(cmd, f, devs, 0, NULL);
@@ -1586,12 +1585,12 @@ int label_scan_devs_rw(struct cmd_context *cmd, struct dev_filter *f, struct dm_
 {
 	struct device_list *devl;
 
-	if (!label_scan_setup_bcache())
+	if (!label_scan_setup_bcache(cmd))
 		return_0;
 
 	dm_list_iterate_items(devl, devs) {
 		if (_in_bcache(devl->dev))
-			_invalidate_di(scan_bcache, devl->dev->bcache_di);
+			_invalidate_di(cmd->dev_blocks, devl->dev->bcache_di);
 		devl->dev->flags |= DEV_BCACHE_WRITE;
 	}
 
@@ -1625,7 +1624,7 @@ int label_scan_devs_excl(struct cmd_context *cmd, struct dev_filter *f, struct d
 void label_scan_invalidate(struct device *dev)
 {
 	if (_in_bcache(dev)) {
-		_invalidate_di(scan_bcache, dev->bcache_di);
+		_invalidate_di(dev->cmd->dev_blocks, dev->bcache_di);
 		_scan_dev_close(dev);
 	}
 }
@@ -1642,18 +1641,19 @@ void label_scan_invalidate_lv(struct cmd_context *cmd, struct logical_volume *lv
 	struct device *dev;
 	dev_t devt;
 
+	/* FIXME: use dev_cache_get_existing() with the lv name,
+	   which allow us to skip the getting devno from lv_info. */
+
 	if (lv_info(cmd, lv, 0, &lvinfo, 0, 0) && lvinfo.exists) {
 		/* FIXME: Still unclear what is it supposed to find */
 		devt = MKDEV(lvinfo.major, lvinfo.minor);
-		if ((dev = dev_cache_get_by_devt(cmd, devt)))
+		if ((dev = dev_cache_get_by_devno(cmd, devt)))
 			label_scan_invalidate(dev);
 	}
 }
 
 void label_scan_invalidate_lvs(struct cmd_context *cmd, struct dm_list *lvs)
 {
-	struct dm_active_device *dm_dev;
-	struct device *dev;
 	struct lv_list *lvl;
 
 	/*
@@ -1665,18 +1665,12 @@ void label_scan_invalidate_lvs(struct cmd_context *cmd, struct dm_list *lvs)
 
 	log_debug("Invalidating devs for any PVs on LVs.");
 
-	if (cmd->cache_dm_devs) {
-		dm_list_iterate_items(dm_dev, cmd->cache_dm_devs)
-			if (dm_dev->uuid &&
-			    strncmp(dm_dev->uuid, UUID_PREFIX, sizeof(UUID_PREFIX) - 1) == 0) {
-				if ((dev = dev_cache_get_by_devt(cmd, dm_dev->devno)))
-					label_scan_invalidate(dev);
-			}
-	} else
-		/* With older kernels without UUIDs we have to go the old way
-		 * and check for every LVs UUID one by one */
+	if (dm_devs_cache_use(cmd))
+		dm_devs_cache_label_invalidate(cmd);
+	else {
 		dm_list_iterate_items(lvl, lvs)
 			label_scan_invalidate_lv(cmd, lvl->lv);
+	}
 }
 
 /*
@@ -1689,7 +1683,7 @@ void label_scan_drop(struct cmd_context *cmd)
 	struct dev_iter *iter;
 	struct device *dev;
 
-	if (!(iter = dev_iter_create(NULL, 0)))
+	if (!(iter = dev_iter_create(cmd, NULL, 0)))
 		return;
 
 	while ((dev = dev_iter_get(cmd, iter))) {
@@ -1707,13 +1701,13 @@ void label_scan_drop(struct cmd_context *cmd)
 
 void label_scan_destroy(struct cmd_context *cmd)
 {
-	if (!scan_bcache)
+	if (!cmd->dev_blocks)
 		return;
 
 	label_scan_drop(cmd);
 
-	bcache_destroy(scan_bcache);
-	scan_bcache = NULL;
+	bcache_destroy(cmd->dev_blocks);
+	cmd->dev_blocks = NULL;
 }
 
 /*
@@ -1765,7 +1759,7 @@ int label_scan_open_excl(struct device *dev)
 {
 	if (_in_bcache(dev) && !(dev->flags & DEV_BCACHE_EXCL)) {
 		log_debug("close and reopen excl %s", dev_name(dev));
-		_invalidate_di(scan_bcache, dev->bcache_di);
+		_invalidate_di(dev->cmd->dev_blocks, dev->bcache_di);
 		_scan_dev_close(dev);
 	}
 	dev->flags |= DEV_BCACHE_EXCL;
@@ -1777,7 +1771,7 @@ int label_scan_open_rw(struct device *dev)
 {
 	if (_in_bcache(dev) && !(dev->flags & DEV_BCACHE_WRITE)) {
 		log_debug("close and reopen rw %s", dev_name(dev));
-		_invalidate_di(scan_bcache, dev->bcache_di);
+		_invalidate_di(dev->cmd->dev_blocks, dev->bcache_di);
 		_scan_dev_close(dev);
 	}
 	dev->flags |= DEV_BCACHE_WRITE;
@@ -1864,7 +1858,7 @@ int label_scan_reopen_rw(struct device *dev)
 
 bool dev_read_bytes(struct device *dev, uint64_t start, size_t len, void *data)
 {
-	if (!scan_bcache) {
+	if (!dev->cmd->dev_blocks) {
 		/* Should not happen */
 		log_error("dev_read bcache not set up %s", dev_name(dev));
 		return false;
@@ -1879,7 +1873,7 @@ bool dev_read_bytes(struct device *dev, uint64_t start, size_t len, void *data)
 		}
 	}
 
-	if (!bcache_read_bytes(scan_bcache, dev->bcache_di, start, len, data)) {
+	if (!bcache_read_bytes(dev->cmd->dev_blocks, dev->bcache_di, start, len, data)) {
 		log_error("Error reading device %s at %llu length %u.",
 			  dev_name(dev), (unsigned long long)start, (uint32_t)len);
 		label_scan_invalidate(dev);
@@ -1894,7 +1888,7 @@ bool dev_write_bytes(struct device *dev, uint64_t start, size_t len, void *data)
 	if (test_mode())
 		return true;
 
-	if (!scan_bcache) {
+	if (!dev->cmd->dev_blocks) {
 		/* Should not happen */
 		log_error("dev_write bcache not set up %s", dev_name(dev));
 		return false;
@@ -1903,7 +1897,7 @@ bool dev_write_bytes(struct device *dev, uint64_t start, size_t len, void *data)
 	if (_in_bcache(dev) && !(dev->flags & DEV_BCACHE_WRITE)) {
 		/* FIXME: avoid tossing out bcache blocks just to replace fd. */
 		log_debug("close and reopen to write %s", dev_name(dev));
-		_invalidate_di(scan_bcache, dev->bcache_di);
+		_invalidate_di(dev->cmd->dev_blocks, dev->bcache_di);
 		_scan_dev_close(dev);
 
 		dev->flags |= DEV_BCACHE_WRITE;
@@ -1920,7 +1914,7 @@ bool dev_write_bytes(struct device *dev, uint64_t start, size_t len, void *data)
 		}
 	}
 
-	if (!bcache_write_bytes(scan_bcache, dev->bcache_di, start, len, data)) {
+	if (!bcache_write_bytes(dev->cmd->dev_blocks, dev->bcache_di, start, len, data)) {
 		log_error("Error writing device %s at %llu length %u.",
 			  dev_name(dev), (unsigned long long)start, (uint32_t)len);
 		dev_unset_last_byte(dev);
@@ -1928,7 +1922,7 @@ bool dev_write_bytes(struct device *dev, uint64_t start, size_t len, void *data)
 		return false;
 	}
 
-	if (!bcache_flush(scan_bcache)) {
+	if (!bcache_flush(dev->cmd->dev_blocks)) {
 		log_error("Error writing device %s at %llu length %u.",
 			  dev_name(dev), (unsigned long long)start, (uint32_t)len);
 		dev_unset_last_byte(dev);
@@ -1940,12 +1934,12 @@ bool dev_write_bytes(struct device *dev, uint64_t start, size_t len, void *data)
 
 bool dev_invalidate_bytes(struct device *dev, uint64_t start, size_t len)
 {
-	return bcache_invalidate_bytes(scan_bcache, dev->bcache_di, start, len);
+	return bcache_invalidate_bytes(dev->cmd->dev_blocks, dev->bcache_di, start, len);
 }
 
 void dev_invalidate(struct device *dev)
 {
-	bcache_invalidate_di(scan_bcache, dev->bcache_di);
+	bcache_invalidate_di(dev->cmd->dev_blocks, dev->bcache_di);
 }
 
 bool dev_write_zeros(struct device *dev, uint64_t start, size_t len)
@@ -1960,14 +1954,14 @@ bool dev_set_bytes(struct device *dev, uint64_t start, size_t len, uint8_t val)
 	if (test_mode())
 		return true;
 
-	if (!scan_bcache) {
+	if (!dev->cmd->dev_blocks) {
 		log_error("dev_set_bytes bcache not set up %s", dev_name(dev));
 		return false;
 	}
 
 	if (_in_bcache(dev) && !(dev->flags & DEV_BCACHE_WRITE)) {
 		log_debug("close and reopen to write %s", dev_name(dev));
-		_invalidate_di(scan_bcache, dev->bcache_di);
+		_invalidate_di(dev->cmd->dev_blocks, dev->bcache_di);
 		_scan_dev_close(dev);
 		/* goes to label_scan_open() since bcache_di < 0 */
 	}
@@ -1985,9 +1979,9 @@ bool dev_set_bytes(struct device *dev, uint64_t start, size_t len, uint8_t val)
 	dev_set_last_byte(dev, start + len);
 
 	if (!val)
-		rv = bcache_zero_bytes(scan_bcache, dev->bcache_di, start, len);
+		rv = bcache_zero_bytes(dev->cmd->dev_blocks, dev->bcache_di, start, len);
 	else
-		rv = bcache_set_bytes(scan_bcache, dev->bcache_di, start, len, val);
+		rv = bcache_set_bytes(dev->cmd->dev_blocks, dev->bcache_di, start, len, val);
 
 	if (!rv) {
 		log_error("Error writing device value %s at %llu length %u.",
@@ -1995,7 +1989,7 @@ bool dev_set_bytes(struct device *dev, uint64_t start, size_t len, uint8_t val)
 		goto fail;
 	}
 
-	if (!bcache_flush(scan_bcache)) {
+	if (!bcache_flush(dev->cmd->dev_blocks)) {
 		log_error("Error writing device %s at %llu length %u.",
 			  dev_name(dev), (unsigned long long)start, (uint32_t)len);
 		goto fail;
@@ -2039,10 +2033,10 @@ void dev_set_last_byte(struct device *dev, uint64_t offset)
 		bs = 512;
 	}
 
-	bcache_set_last_byte(scan_bcache, dev->bcache_di, offset, bs);
+	bcache_set_last_byte(dev->cmd->dev_blocks, dev->bcache_di, offset, bs);
 }
 
 void dev_unset_last_byte(struct device *dev)
 {
-	bcache_unset_last_byte(scan_bcache, dev->bcache_di);
+	bcache_unset_last_byte(dev->cmd->dev_blocks, dev->bcache_di);
 }

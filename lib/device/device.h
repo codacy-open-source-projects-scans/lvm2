@@ -149,6 +149,7 @@ struct device {
 	uint64_t end;
 	struct dev_ext ext;
 	const char *duplicate_prefer_reason;
+	struct cmd_context *cmd;
 
 	const char *vgid; /* if device is an LV */
 	const char *lvid; /* if device is an LV */
@@ -220,7 +221,6 @@ int dev_open(struct device *dev);
 int dev_open_quiet(struct device *dev);
 int dev_open_flags(struct device *dev, int flags, int direct, int quiet);
 int dev_open_readonly(struct device *dev);
-int dev_open_readonly_buffered(struct device *dev);
 int dev_open_readonly_quiet(struct device *dev);
 int dev_close(struct device *dev);
 int dev_close_immediate(struct device *dev);
@@ -229,10 +229,6 @@ int dev_fd(struct device *dev);
 const char *dev_name(const struct device *dev);
 
 void dev_flush(struct device *dev);
-
-struct device *dev_create_file(const char *filename, struct device *dev,
-			       struct dm_str_list *alias, int use_malloc);
-void dev_destroy_file(struct device *dev);
 
 int dev_mpath_init(const char *config_wwids_file);
 void dev_mpath_exit(void);

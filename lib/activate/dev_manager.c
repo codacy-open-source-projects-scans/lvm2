@@ -448,8 +448,9 @@ static int _ignore_blocked_mirror_devices(struct cmd_context *cmd,
 	void *next = NULL;
 	struct dm_task *dmt = NULL;
 	int r = 0;
-	struct device *tmp_dev;
-	char buf[16];
+	char fake_dev_name[16];
+	struct device fake_dev = { 0 };
+	struct dm_str_list *alias;
 
 	if (!(mem = dm_pool_create("blocked_mirrors", 128)))
 		return_0;
@@ -470,21 +471,25 @@ static int _ignore_blocked_mirror_devices(struct cmd_context *cmd,
 					     dev_name(dev));
 			check_for_blocking = 1;
 		} else {
-
-			if (dm_snprintf(buf, sizeof(buf), "%u:%u",
+			dev_init(&fake_dev);
+			if (dm_snprintf(fake_dev_name, sizeof(fake_dev_name), "%u:%u",
 					sm->logs[0].major, sm->logs[0].minor) < 0)
 				goto_out;
 
-			if (!(tmp_dev = dev_create_file(buf, NULL, NULL, 0)))
+			if (!(alias = dm_pool_zalloc(mem, sizeof(*alias))))
 				goto_out;
+			if (!(alias->str = dm_pool_strdup(mem, fake_dev_name)))
+				goto_out;
+			dm_list_add(&fake_dev.aliases, &alias->list);
+			fake_dev.flags = DEV_REGULAR;
+			fake_dev.dev = MKDEV(sm->logs[0].major, sm->logs[0].minor);
 
-			tmp_dev->dev = MKDEV(sm->logs[0].major, sm->logs[0].minor);
-			if (device_is_usable(cmd, tmp_dev, (struct dev_usable_check_params)
-					     { .check_empty = 1,
-					       .check_blocked = 1,
-					       .check_suspended = ignore_suspended_devices(),
-					       .check_error_target = 1,
-					       .check_reserved = 0 }, NULL))
+			if (dm_device_is_usable(cmd, &fake_dev, (struct dev_usable_check_params)
+					       { .check_empty = 1,
+					         .check_blocked = 1,
+					         .check_suspended = ignore_suspended_devices(),
+					         .check_error_target = 1,
+					         .check_reserved = 0 }, NULL))
 				goto out; /* safe to use */
 			stack;
 		}
@@ -738,7 +743,7 @@ static int _is_usable_uuid(const struct device *dev, const char *name, const cha
 }
 
 /*
- * device_is_usable
+ * dm_device_is_usable
  * @dev
  * @check_lv_names
  *
@@ -753,7 +758,7 @@ static int _is_usable_uuid(const struct device *dev, const char *name, const cha
  *
  * Returns: 1 if usable, 0 otherwise
  */
-int device_is_usable(struct cmd_context *cmd, struct device *dev, struct dev_usable_check_params check, int *is_lv)
+int dm_device_is_usable(struct cmd_context *cmd, struct device *dev, struct dev_usable_check_params check, int *is_lv)
 {
 	struct dm_task *dmt;
 	struct dm_info info;
@@ -766,9 +771,9 @@ int device_is_usable(struct cmd_context *cmd, struct device *dev, struct dev_usa
 	int only_error_or_zero_target = 1;
 	int r = 0;
 
-	if (cmd->cache_dm_devs &&
+	if (dm_devs_cache_use(cmd) &&
 	    /* With cache we can avoid status calls for unusable UUIDs */
-	    (dm_dev = dev_cache_get_dm_dev_by_devno(cmd, dev->dev)) &&
+	    (dm_dev = dm_devs_cache_get_by_devno(cmd, dev->dev)) &&
 	    !_is_usable_uuid(dev, dm_dev->name, dm_dev->uuid, check.check_reserved, check.check_lv, is_lv))
 		return 0;
 
@@ -888,8 +893,8 @@ int device_is_usable(struct cmd_context *cmd, struct device *dev, struct dev_usa
 }
 
 /* Read UUID from a given DM device into  buf_uuid */
-int device_get_uuid(struct cmd_context *cmd, int major, int minor,
-		    char *uuid_buf, size_t uuid_buf_size)
+int devno_dm_uuid(struct cmd_context *cmd, int major, int minor,
+		  char *uuid_buf, size_t uuid_buf_size)
 {
 	struct dm_task *dmt;
 	struct dm_info info;
@@ -897,8 +902,8 @@ int device_get_uuid(struct cmd_context *cmd, int major, int minor,
 	const char *uuid;
 	int r = 0;
 
-	if (cmd->cache_dm_devs) {
-		if ((dm_dev = dev_cache_get_dm_dev_by_devno(cmd, MKDEV(major, minor)))) {
+	if (dm_devs_cache_use(cmd)) {
+		if ((dm_dev = dm_devs_cache_get_by_devno(cmd, MKDEV(major, minor)))) {
 			dm_strncpy(uuid_buf, dm_dev->uuid, uuid_buf_size);
 			return 1;
 		}
@@ -916,6 +921,13 @@ int device_get_uuid(struct cmd_context *cmd, int major, int minor,
 	dm_task_destroy(dmt);
 
 	return r;
+}
+
+int dev_dm_uuid(struct cmd_context *cmd, struct device *dev,
+		char *uuid_buf, size_t uuid_buf_size)
+{
+	return devno_dm_uuid(cmd, MAJOR(dev->dev), MINOR(dev->dev),
+			     uuid_buf, uuid_buf_size);
 }
 
 /*
@@ -1036,7 +1048,12 @@ int dev_manager_check_prefix_dm_major_minor(uint32_t major, uint32_t minor, cons
 	return r;
 }
 
-int dev_manager_get_device_list(const char *prefix, struct dm_list **devs, unsigned *devs_features)
+/*
+ * Get a list of active dm devices from the kernel.
+ * The 'devs' list contains a struct dm_active_device.
+ */
+
+int dev_manager_get_dm_active_devices(const char *prefix, struct dm_list **devs, unsigned *devs_features)
 {
 	struct dm_task *dmt;
 	int r = 1;
@@ -1073,9 +1090,9 @@ int dev_manager_info(struct cmd_context *cmd,
 
 	dm_strncpy(old_style_dlid, dlid, sizeof(old_style_dlid));
 
-	if (cmd->cache_dm_devs &&
-	    !dev_cache_get_dm_dev_by_uuid(cmd, dlid) &&
-	    !dev_cache_get_dm_dev_by_uuid(cmd, old_style_dlid)) {
+	if (dm_devs_cache_use(cmd) &&
+	    !dm_devs_cache_get_by_uuid(cmd, dlid) &&
+	    !dm_devs_cache_get_by_uuid(cmd, old_style_dlid)) {
 		log_debug("Cached as inactive %s.", name);
 		if (dminfo)
 			memset(dminfo, 0, sizeof(*dminfo));
@@ -2447,8 +2464,8 @@ static int _add_dev_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 	if (!(dlid = build_dm_uuid(dm->track_pending_delete ? dm->cmd->pending_delete_mem : dm->mem, lv, layer)))
 		return_0;
 
-	if (dm->cmd->cache_dm_devs) {
-		if (!(dm_dev = dev_cache_get_dm_dev_by_uuid(dm->cmd, dlid))) {
+	if (dm_devs_cache_use(dm->cmd)) {
+		if (!(dm_dev = dm_devs_cache_get_by_uuid(dm->cmd, dlid))) {
 			log_debug("Cached as not present %s.", name);
 			return 1;
 		}
@@ -2602,7 +2619,7 @@ static int _pool_callback(struct dm_tree_node *node,
 		}
 	}
 
-	dm_device_list_destroy(&cmd->cache_dm_devs); /* Cache no longer valid */
+	dm_devs_cache_destroy(cmd);
 
 	log_debug("Running check command on %s", mpath);
 
@@ -3986,7 +4003,7 @@ static int _tree_action(struct dev_manager *dm, const struct logical_volume *lv,
 
 	/* Drop any cache before DM table manipulation within locked section
 	 * TODO: check if it makes sense to manage cache within lock */
-	dm_device_list_destroy(&dm->cmd->cache_dm_devs);
+	dm_devs_cache_destroy(dm->cmd);
 
 	dtree = _create_partial_dtree(dm, lv, laopts->origin_only);
 

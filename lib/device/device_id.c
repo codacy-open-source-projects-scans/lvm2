@@ -512,7 +512,7 @@ int dev_has_mpath_uuid(struct cmd_context *cmd, struct device *dev, char **idnam
 	char uuid[DM_UUID_LEN];
 	char *idname;
 
-	if (!device_get_uuid(cmd, MAJOR(dev->dev), MINOR(dev->dev), uuid, sizeof(uuid)))
+	if (!dev_dm_uuid(cmd, dev, uuid, sizeof(uuid)))
 		return_0;
 
 	if (!_dm_uuid_has_prefix(uuid, "mpath-"))
@@ -531,7 +531,7 @@ static int _dev_has_crypt_uuid(struct cmd_context *cmd, struct device *dev, char
 	char uuid[DM_UUID_LEN];
 	char *idname;
 
-	if (!device_get_uuid(cmd, MAJOR(dev->dev), MINOR(dev->dev), uuid, sizeof(uuid)))
+	if (!dev_dm_uuid(cmd, dev, uuid, sizeof(uuid)))
 		return_0;
 
 	if (!_dm_uuid_has_prefix(uuid, "CRYPT-"))
@@ -550,7 +550,7 @@ static int _dev_has_lvmlv_uuid(struct cmd_context *cmd, struct device *dev, char
 	char uuid[DM_UUID_LEN];
 	char *idname;
 
-	if (!device_get_uuid(cmd, MAJOR(dev->dev), MINOR(dev->dev), uuid, sizeof(uuid)))
+	if (!dev_dm_uuid(cmd, dev, uuid, sizeof(uuid)))
 		return_0;
 
 	if (!_dm_uuid_has_prefix(uuid, UUID_PREFIX))
@@ -786,7 +786,7 @@ char *device_id_system_read(struct cmd_context *cmd, struct device *dev, uint16_
 	case DEV_ID_TYPE_MPATH_UUID:
 	case DEV_ID_TYPE_CRYPT_UUID:
 	case DEV_ID_TYPE_LVMLV_UUID:
-		(void)device_get_uuid(cmd, MAJOR(dev->dev), MINOR(dev->dev), sysbuf, sizeof(sysbuf));
+		(void)dev_dm_uuid(cmd, dev, sysbuf, sizeof(sysbuf));
                 break;
 	case DEV_ID_TYPE_MD_UUID:
 		read_sys_block(cmd, dev, "md/uuid", sysbuf, sizeof(sysbuf));
@@ -1005,7 +1005,7 @@ static int _dev_has_stable_id(struct cmd_context *cmd, struct device *dev)
 	}
 
 	if ((MAJOR(dev->dev) == cmd->dev_types->device_mapper_major)) {
-		if (!device_get_uuid(cmd, MAJOR(dev->dev), MINOR(dev->dev), sysbuf, sizeof(sysbuf)))
+		if (!dev_dm_uuid(cmd, dev, sysbuf, sizeof(sysbuf)))
 			goto_out;
 
 		if (_dm_uuid_has_prefix(sysbuf, "mpath-"))
@@ -2738,7 +2738,7 @@ void device_ids_match(struct cmd_context *cmd)
 		 */
 		found = 0;
 
-		if (!(iter = dev_iter_create(NULL, 0)))
+		if (!(iter = dev_iter_create(cmd, NULL, 0)))
 			continue;
 		while ((dev = dev_iter_get(cmd, iter))) {
 			/* skip a dev that's already matched to another entry */
@@ -2855,7 +2855,7 @@ static void _get_devs_with_serial_numbers(struct cmd_context *cmd, struct dm_lis
 	struct dev_id *id;
 	const char *idname;
 
-	if (!(iter = dev_iter_create(NULL, 0)))
+	if (!(iter = dev_iter_create(cmd, NULL, 0)))
 		return;
 	while ((dev = dev_iter_get(cmd, iter))) {
 		/* if serial has already been read for this dev then use it */
@@ -3794,7 +3794,7 @@ void device_ids_search(struct cmd_context *cmd, struct dm_list *new_devs,
 	 * filter), in the process of doing this search outside the deviceid
 	 * filter.
 	 */
-	if (!(iter = dev_iter_create(NULL, 0)))
+	if (!(iter = dev_iter_create(cmd, NULL, 0)))
 		return;
 	while ((dev = dev_iter_get(cmd, iter))) {
 		if (dev->flags & DEV_MATCHED_USE_ID)

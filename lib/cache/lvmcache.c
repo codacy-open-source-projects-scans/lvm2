@@ -3002,6 +3002,16 @@ int lvmcache_vg_is_foreign(struct cmd_context *cmd, const char *vgname, const ch
 	return ret;
 }
 
+int lvmcache_vg_is_lockd_type(struct cmd_context *cmd, const char *vgname, const char *vgid)
+{
+	struct lvmcache_vginfo *vginfo;
+
+	if ((vginfo = lvmcache_vginfo_from_vgname(vgname, vgid)))
+		return is_lockd_type(vginfo->lock_type);
+
+	return 0;
+}
+
 /*
  * Example of reading four devs in sequence from the same VG:
  *
@@ -3227,11 +3237,11 @@ const char *dev_filtered_reason(struct device *dev)
 	return "device cannot be used";
 }
 
-const char *devname_error_reason(const char *devname)
+const char *devname_error_reason(struct cmd_context *cmd, const char *devname)
 {
 	struct device *dev;
 
-	if ((dev = dev_cache_get_dev_by_name(devname))) {
+	if ((dev = dev_cache_get_by_name(cmd, devname))) {
 		if (dev->filtered_flags)
 			return dev_filtered_reason(dev);
 		if (lvmcache_dev_is_unused_duplicate(dev))

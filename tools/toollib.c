@@ -1777,7 +1777,7 @@ int process_each_label(struct cmd_context *cmd, int argc, char **argv,
 		goto out;
 	}
 
-	if (!(iter = dev_iter_create(cmd->filter, 1))) {
+	if (!(iter = dev_iter_create(cmd, cmd->filter, 1))) {
 		log_error("dev_iter creation failed.");
 		ret_max = ECMD_FAILED;
 		goto out;
@@ -2178,6 +2178,7 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t read_flags,
 	int ret;
 	int skip;
 	int notfound;
+	int is_lockd;
 	int process_all = 0;
 	int do_report_ret_code = 1;
 
@@ -2197,6 +2198,7 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t read_flags,
 		vg_uuid = vgnl->vgid;
 		skip = 0;
 		notfound = 0;
+		is_lockd = lvmcache_vg_is_lockd_type(cmd, vg_name, vg_uuid);
 
 		uuid[0] = '\0';
 		if (is_orphan_vg(vg_name)) {
@@ -2214,8 +2216,8 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t read_flags,
 		}
 
 		log_very_verbose("Processing VG %s %s", vg_name, uuid);
-
-		if (!lockd_vg(cmd, vg_name, NULL, 0, &lockd_state)) {
+do_lockd:
+		if (is_lockd && !lockd_vg(cmd, vg_name, NULL, 0, &lockd_state)) {
 			stack;
 			ret_max = ECMD_FAILED;
 			report_log_ret_code(ret_max);
@@ -2237,6 +2239,14 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t read_flags,
 		if (skip || notfound)
 			goto endvg;
 
+		if (!is_lockd && vg_is_shared(vg)) {
+			/* The lock_type changed since label_scan, won't really occur in practice. */
+			log_debug("Repeat lock and read for local to shared vg");
+			unlock_and_release_vg(cmd, vg, vg_name);
+			is_lockd = 1;
+			goto do_lockd;
+		}
+
 		/* Process this VG? */
 		if ((process_all ||
 		    (!dm_list_empty(arg_vgnames) && str_list_match_item(arg_vgnames, vg_name)) ||
@@ -2257,7 +2267,7 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t read_flags,
 		unlock_vg(cmd, vg, vg_name);
 endvg:
 		release_vg(vg);
-		if (!lockd_vg(cmd, vg_name, "un", 0, &lockd_state))
+		if (is_lockd && !lockd_vg(cmd, vg_name, "un", 0, &lockd_state))
 			stack;
 
 		log_set_report_object_name_and_id(NULL, NULL);
@@ -3876,6 +3886,7 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t read_flag
 	int ret;
 	int skip;
 	int notfound;
+	int is_lockd;
 	int do_report_ret_code = 1;
 
 	log_set_report_object_type(LOG_REPORT_OBJECT_TYPE_VG);
@@ -3885,6 +3896,7 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t read_flag
 		vg_uuid = vgnl->vgid;
 		skip = 0;
 		notfound = 0;
+		is_lockd = lvmcache_vg_is_lockd_type(cmd, vg_name, vg_uuid);
 
 		uuid[0] = '\0';
 		if (vg_uuid && !id_write_format((const struct id*)vg_uuid, uuid, sizeof(uuid)))
@@ -3930,7 +3942,8 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t read_flag
 
 		log_very_verbose("Processing VG %s %s", vg_name, vg_uuid ? uuid : "");
 
-		if (!lockd_vg(cmd, vg_name, NULL, 0, &lockd_state)) {
+do_lockd:
+		if (is_lockd && !lockd_vg(cmd, vg_name, NULL, 0, &lockd_state)) {
 			ret_max = ECMD_FAILED;
 			report_log_ret_code(ret_max);
 			continue;
@@ -3951,6 +3964,14 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t read_flag
 		if (skip || notfound)
 			goto endvg;
 
+		if (!is_lockd && vg_is_shared(vg)) {
+			/* The lock_type changed since label_scan, won't really occur in practice. */
+			log_debug("Repeat lock and read for local to shared vg");
+			unlock_and_release_vg(cmd, vg, vg_name);
+			is_lockd = 1;
+			goto do_lockd;
+		}
+
 		ret = process_each_lv_in_vg(cmd, vg, &lvnames, tags_arg, 0,
 					    handle, check_single_lv, process_single_lv);
 		if (ret != ECMD_PROCESSED)
@@ -3962,7 +3983,7 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t read_flag
 		unlock_vg(cmd, vg, vg_name);
 endvg:
 		release_vg(vg);
-		if (!lockd_vg(cmd, vg_name, "un", 0, &lockd_state))
+		if (is_lockd && !lockd_vg(cmd, vg_name, "un", 0, &lockd_state))
 			stack;
 		log_set_report_object_name_and_id(NULL, NULL);
 	}
@@ -4180,7 +4201,7 @@ static int _get_arg_devices(struct cmd_context *cmd,
 		}
 
 		if (!(dil->dev = dev_cache_get_existing(cmd, sl->str, cmd->filter))) {
-			log_error("Cannot use %s: %s", sl->str, devname_error_reason(sl->str));
+			log_error("Cannot use %s: %s", sl->str, devname_error_reason(cmd, sl->str));
 			ret_max = EINIT_FAILED;
 		} else {
 			memcpy(dil->pvid, dil->dev->pvid, ID_LEN);
@@ -4214,7 +4235,7 @@ static int _process_other_devices(struct cmd_context *cmd,
 	 * was set by label_scan which did filtering.
 	 */
 
-	if (!(iter = dev_iter_create(NULL, 0)))
+	if (!(iter = dev_iter_create(cmd, NULL, 0)))
 		return_0;
 
 	while ((dev = dev_iter_get(cmd, iter))) {
@@ -4516,6 +4537,7 @@ static int _process_pvs_in_vgs(struct cmd_context *cmd, uint32_t read_flags,
 	int ret;
 	int skip;
 	int notfound;
+	int is_lockd;
 	int do_report_ret_code = 1;
 
 	log_set_report_object_type(LOG_REPORT_OBJECT_TYPE_VG);
@@ -4525,6 +4547,7 @@ static int _process_pvs_in_vgs(struct cmd_context *cmd, uint32_t read_flags,
 		vg_uuid = vgnl->vgid;
 		skip = 0;
 		notfound = 0;
+		is_lockd = lvmcache_vg_is_lockd_type(cmd, vg_name, vg_uuid);
 
 		uuid[0] = '\0';
 		if (is_orphan_vg(vg_name)) {
@@ -4540,8 +4563,8 @@ static int _process_pvs_in_vgs(struct cmd_context *cmd, uint32_t read_flags,
 			ret_max = ECMD_FAILED;
 			goto_out;
 		}
-
-		if (!lockd_vg(cmd, vg_name, NULL, 0, &lockd_state)) {
+do_lockd:
+		if (is_lockd && !lockd_vg(cmd, vg_name, NULL, 0, &lockd_state)) {
 			ret_max = ECMD_FAILED;
 			report_log_ret_code(ret_max);
 			continue;
@@ -4563,6 +4586,14 @@ static int _process_pvs_in_vgs(struct cmd_context *cmd, uint32_t read_flags,
 		}
 		if (notfound)
 			goto endvg;
+
+		if (vg && !is_lockd && vg_is_shared(vg)) {
+			/* The lock_type changed since label_scan, won't really occur in practice. */
+			log_debug("Repeat lock and read for local to shared vg");
+			unlock_and_release_vg(cmd, vg, vg_name);
+			is_lockd = 1;
+			goto do_lockd;
+		}
 
 		/*
 		 * Don't call "continue" when skip is set, because we need to remove
@@ -4586,7 +4617,7 @@ endvg:
 		if (error_vg)
 			unlock_and_release_vg(cmd, error_vg, vg_name);
 		release_vg(vg);
-		if (!lockd_vg(cmd, vg_name, "un", 0, &lockd_state))
+		if (is_lockd && !lockd_vg(cmd, vg_name, "un", 0, &lockd_state))
 			stack;
 
 		/* Quit early when possible. */
@@ -5547,7 +5578,7 @@ int pvcreate_each_device(struct cmd_context *cmd,
 	 */
 	dm_list_iterate_items_safe(pd, pd2, &pp->arg_devices) {
 		if (!cmd->filter->passes_filter(cmd, cmd->filter, pd->dev, NULL)) {
-			log_error("Cannot use %s: %s", pd->name, devname_error_reason(pd->name));
+			log_error("Cannot use %s: %s", pd->name, devname_error_reason(cmd, pd->name));
 			dm_list_del(&pd->list);
 			dm_list_add(&pp->arg_fail, &pd->list);
 		}
@@ -5773,7 +5804,7 @@ do_command:
 
 	dm_list_iterate_items_safe(pd, pd2, &pp->arg_process) {
 		if (!cmd->filter->passes_filter(cmd, cmd->filter, pd->dev, NULL)) {
-			log_error("Cannot use %s: %s", pd->name, devname_error_reason(pd->name));
+			log_error("Cannot use %s: %s", pd->name, devname_error_reason(cmd, pd->name));
 			dm_list_del(&pd->list);
 			dm_list_add(&pp->arg_fail, &pd->list);
 		}
@@ -6035,7 +6066,7 @@ int get_rootvg_dev_uuid(struct cmd_context *cmd, char **dm_uuid_out)
 	if (stat(me->mnt_dir, &info) < 0)
 		return_0;
 
-	if (!device_get_uuid(cmd, MAJOR(info.st_dev), MINOR(info.st_dev), dm_uuid, sizeof(dm_uuid)))
+	if (!devno_dm_uuid(cmd, MAJOR(info.st_dev), MINOR(info.st_dev), dm_uuid, sizeof(dm_uuid)))
 		return_0;
 
 	log_debug("Found root dm_uuid %s", dm_uuid);

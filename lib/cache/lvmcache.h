@@ -179,6 +179,8 @@ void lvmcache_get_max_name_lengths(struct cmd_context *cmd,
 
 int lvmcache_vg_is_foreign(struct cmd_context *cmd, const char *vgname, const char *vgid);
 
+int lvmcache_vg_is_lockd_type(struct cmd_context *cmd, const char *vgname, const char *vgid);
+
 bool lvmcache_scan_mismatch(struct cmd_context *cmd, const char *vgname, const char *vgid);
 
 int lvmcache_vginfo_has_pvid(struct lvmcache_vginfo *vginfo, const char *pvid_arg);
@@ -216,7 +218,7 @@ void lvmcache_get_mdas(struct cmd_context *cmd,
                        struct dm_list *mda_list);
 
 const char *dev_filtered_reason(struct device *dev);
-const char *devname_error_reason(const char *devname);
+const char *devname_error_reason(struct cmd_context *cmd, const char *devname);
 
 struct metadata_area *lvmcache_get_dev_mda(struct device *dev, int mda_num);
 
