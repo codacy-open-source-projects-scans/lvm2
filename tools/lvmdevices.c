@@ -40,7 +40,7 @@ static void _search_devs_for_pvids(struct cmd_context *cmd, struct dm_list *sear
 	 * any filters, since we do not want filters to read any of the
 	 * devices yet.
 	 */
-	if (!(iter = dev_iter_create(cmd, NULL, 0)))
+	if (!(iter = dev_iter_create(NULL, 0)))
 		return;
 	while ((dev = dev_iter_get(cmd, iter))) {
 		/* Skip devs with a valid match to a du. */
@@ -628,7 +628,7 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 
 		unlink_searched_devnames(cmd);
 
-		label_scan_setup_bcache(cmd);
+		label_scan_setup_bcache();
 
 		dm_list_iterate_items(du, &cmd->use_devices) {
 			if (!du->dev)
@@ -697,7 +697,7 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 			if (update_set)
 				dm_list_del(&du->list);
 
-			if (!(mpath_dev = dev_cache_get_by_devno(cmd, mpath_devno)))
+			if (!(mpath_dev = dev_cache_get_by_devt(cmd, mpath_devno)))
 				continue;
 
 			if (!get_du_for_dev(cmd, mpath_dev)) {
@@ -806,7 +806,7 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 		 * reads pvid from dev header, sets dev->pvid.
 		 * (it's ok if the device is not a PV and has no PVID)
 		 */
-		label_scan_setup_bcache(cmd);
+		label_scan_setup_bcache();
 		if (!label_read_pvid(dev, NULL)) {
 			log_error("Failed to read %s.", devname);
 			goto bad;
@@ -845,7 +845,7 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 		char pvid[ID_LEN+1] = { 0 };
 		const char *pvid_arg;
 
-		label_scan_setup_bcache(cmd);
+		label_scan_setup_bcache();
 
 		/*
 		 * Iterate through all devs on the system, reading the
