@@ -5792,6 +5792,11 @@ static int _lvconvert_detach_writecache_when_clean(struct cmd_context *cmd,
 	int is_lockd;
 	int ret = 0;
 
+	if (dm_list_empty(&lr->poll_idls)) {
+		log_error(INTERNAL_ERROR "Cannot detach writecache.");
+		return 0;
+	}
+
 	idl = dm_list_item(dm_list_first(&lr->poll_idls), struct convert_poll_id_list);
 	id = idl->id;
 	is_lockd = lvmcache_vg_is_lockd_type(cmd, id->vg_name, NULL);
@@ -6518,6 +6523,11 @@ static int _lvconvert_integrity_single(struct cmd_context *cmd,
 {
 	struct integrity_settings settings = { .tag_size = 0 };
 	int ret;
+
+	if (arg_is_set(cmd, integritysettings_ARG)) {
+		if (!get_integrity_settings(cmd, &settings))
+			return_ECMD_FAILED;
+	}
 
 	if (!integrity_mode_set(arg_str_value(cmd, raidintegritymode_ARG, NULL), &settings))
 		return_ECMD_FAILED;
