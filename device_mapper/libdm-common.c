@@ -1796,7 +1796,7 @@ static int _mountinfo_parse_line(const char *line, unsigned *maj, unsigned *min,
 }
 
 /*
- * Function to operate on individal mountinfo line,
+ * Function to operate on individual mountinfo line,
  * minor, major and mount target are parsed and unmangled
  */
 int dm_mountinfo_read(dm_mountinfo_line_callback_fn read_fn, void *cb_data)
@@ -1961,7 +1961,7 @@ static int _sysfs_find_kernel_name(uint32_t major, uint32_t minor, char *buf, si
 				    !strcmp(name_dev, "holders") ||
 				    !strcmp(name_dev, "integrity") ||
 				    !strcmp(name_dev, "loop") ||
-				    !strcmp(name_dev, "queueu") ||
+				    !strcmp(name_dev, "queue") ||
 				    !strcmp(name_dev, "md") ||
 				    !strcmp(name_dev, "mq") ||
 				    !strcmp(name_dev, "power") ||
@@ -2416,7 +2416,7 @@ static int _get_cookie_sem(uint32_t cookie, int *semid)
 			break;
 		case EACCES:
 			log_error("No permission to access "
-				  "notificaton semaphore identified "
+				  "notification semaphore identified "
 				  "by cookie value %" PRIu32 " (0x%x)",
 				  cookie, cookie);
 			break;

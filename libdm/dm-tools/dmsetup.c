@@ -108,7 +108,7 @@ struct option {
 #define DM_STATS_PROGRAM_ID "dmstats"
 
 /*
- * Basic commands this code implments.
+ * Basic commands this code implements.
  */
 typedef enum {
 	DMSETUP_CMD = 0,
@@ -787,7 +787,7 @@ static int _update_interval_times(void)
 	}
 
 	/*
-	 * Take cycle timstamp as close as possible to ioctl return.
+	 * Take cycle timestamp as close as possible to ioctl return.
 	 *
 	 * FIXME: use per-region timestamp deltas for interval estimate.
 	 */
@@ -2034,7 +2034,7 @@ static int _simple(int task, const char *name, uint32_t event_nr, int display)
 	if (_switches[CHECKS_ARG] && !dm_task_enable_checks(dmt))
 		goto_out;
 
-	/* FIXME: needs to coperate with udev */
+	/* FIXME: needs to cooperate with udev */
 	if (!_set_task_add_node(dmt))
 		goto_out;
 
@@ -2858,7 +2858,7 @@ _tsym_vt100 = {
 /*
  * Tree drawing functions.
  */
-/* FIXME Get rid of these statics - use dynamic struct */
+/* FIXME Get rid of these statistics - use dynamic struct */
 /* FIXME Explain what these vars are for */
 static int _tree_width[MAX_DEPTH], _tree_more[MAX_DEPTH];
 static int _termwidth = 80;	/* Maximum output width */
@@ -4654,9 +4654,9 @@ FIELD_F(STATS, NUM, "RSz/s", 5, dm_stats_read_secs, "read_size_per_sec", "Size o
 FIELD_F(STATS, NUM, "WSz/s", 5, dm_stats_write_secs, "write_size_per_sec", "Size of data written per second.")
 FIELD_F(STATS, NUM, "AvgRqSz", 7, dm_stats_arqsz, "avg_request_size", "Average request size.")
 FIELD_F(STATS, NUM, "QSize", 5, dm_stats_qusz, "queue_size", "Average queue size.")
-FIELD_F(STATS, NUM, "AWait", 5, dm_stats_await, "await", "Averate wait time.")
-FIELD_F(STATS, NUM, "RdAWait", 7, dm_stats_r_await, "read_await", "Averate read wait time.")
-FIELD_F(STATS, NUM, "WrAWait", 7, dm_stats_w_await, "write_await", "Averate write wait time.")
+FIELD_F(STATS, NUM, "AWait", 5, dm_stats_await, "await", "Average wait time.")
+FIELD_F(STATS, NUM, "RdAWait", 7, dm_stats_r_await, "read_await", "Average read wait time.")
+FIELD_F(STATS, NUM, "WrAWait", 7, dm_stats_w_await, "write_await", "Average write wait time.")
 FIELD_F(STATS, NUM, "Throughput", 10, dm_stats_tput, "throughput", "Throughput.")
 FIELD_F(STATS, NUM, "SvcTm", 5, dm_stats_svctm, "service_time", "Service time.")
 FIELD_F(STATS, NUM, "Util%", 5, dm_stats_util, "util", "Utilization.")
@@ -5410,7 +5410,7 @@ static int _stats_create_file(CMD_ARGS)
 	dm_filemapd_mode_t mode;
 
 	if (names) {
-		log_error("Device names are not compatibile with --filemap.");
+		log_error("Device names are not compatible with --filemap.");
 		return 0;
 	}
 
@@ -6041,7 +6041,7 @@ static int _stats_update_file(CMD_ARGS)
 
 
 	if (names) {
-		log_error("Device names are not compatibile with update_filemap.");
+		log_error("Device names are not compatible with update_filemap.");
 		return 0;
 	}
 

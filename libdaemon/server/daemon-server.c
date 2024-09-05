@@ -323,7 +323,7 @@ static void _remove_lockfile(const char *file)
 		perror("unlink failed");
 }
 
-static void _daemonise(daemon_state s)
+static void _daemonize(daemon_state s)
 {
 	int child_status;
 	int fd;
@@ -582,7 +582,7 @@ void daemon_start(daemon_state s)
 #endif
 
 	if (!s.foreground)
-		_daemonise(s);
+		_daemonize(s);
 
 	s.log = &_log;
 	s.log->name = s.name;
@@ -682,7 +682,7 @@ void daemon_start(daemon_state s)
 
 		/* s.idle == NULL equals no shutdown on timeout */
 		if (_is_idle(s)) {
-			DEBUGLOG(&s, "timeout occured");
+			DEBUGLOG(&s, "timeout occurred");
 			if (++timeout_count >= _get_max_timeouts(s)) {
 				INFO(&s, "Inactive for %d seconds. Exiting.", timeout_count);
 				break;

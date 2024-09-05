@@ -642,7 +642,7 @@ static int _vg_write_raw(struct format_instance *fid, struct volume_group *vg,
 		fidtc->write_buf_size = write_buf_size;
 		fidtc->new_metadata_size = new_size;
 
-		/* Immediatelly reuse existing buffer for parsing metadata back.
+		/* Immediately reuse existing buffer for parsing metadata back.
 		 * Such VG is then used for as precommitted VG and later committed VG.
 		 *
 		 * 'Lazy' creation of such VG might improve performance, but we
@@ -2483,7 +2483,7 @@ static int _remove_metadata_area_from_pv(struct physical_volume *pv,
 	if (mda_index >= FMT_TEXT_MAX_MDAS_PER_PV) {
 		log_error(INTERNAL_ERROR "can't remove metadata area with "
 					 "index %u from PV %s. Metadata "
-					 "layou not supported by %s format.",
+					 "layout not supported by %s format.",
 					  mda_index, dev_name(pv->dev),
 					  pv->fmt->name);
 		return 0;

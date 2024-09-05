@@ -226,7 +226,7 @@ bad:
 #define _lockd_send(req_name, args...)	\
 	_lockd_send_with_pvs(req_name, NULL, ##args)
 
-static int _lockd_retrive_vg_pv_num(struct volume_group *vg)
+static int _lockd_retrieve_vg_pv_num(struct volume_group *vg)
 {
 	struct pv_list *pvl;
 	int num = 0;
@@ -249,7 +249,7 @@ static void _lockd_free_pv_list(struct lvmlockd_pvs *lock_pvs)
 	lock_pvs->num = 0;
 }
 
-static void _lockd_retrive_vg_pv_list(struct volume_group *vg,
+static void _lockd_retrieve_vg_pv_list(struct volume_group *vg,
 				      struct lvmlockd_pvs *lock_pvs)
 {
 	struct pv_list *pvl;
@@ -257,7 +257,7 @@ static void _lockd_retrive_vg_pv_list(struct volume_group *vg,
 
 	memset(lock_pvs, 0x0, sizeof(*lock_pvs));
 
-	pv_num = _lockd_retrive_vg_pv_num(vg);
+	pv_num = _lockd_retrieve_vg_pv_num(vg);
 	if (!pv_num) {
 		log_error("Fail to any PVs for VG %s", vg->name);
 		return;
@@ -286,7 +286,7 @@ static void _lockd_retrive_vg_pv_list(struct volume_group *vg,
 	}
 }
 
-static int _lockd_retrive_lv_pv_num(struct volume_group *vg,
+static int _lockd_retrieve_lv_pv_num(struct volume_group *vg,
 				    const char *lv_name)
 {
 	struct logical_volume *lv = find_lv(vg, lv_name);
@@ -305,7 +305,7 @@ static int _lockd_retrive_lv_pv_num(struct volume_group *vg,
 	return num;
 }
 
-static void _lockd_retrive_lv_pv_list(struct volume_group *vg,
+static void _lockd_retrieve_lv_pv_list(struct volume_group *vg,
 				      const char *lv_name,
 				      struct lvmlockd_pvs *lock_pvs)
 {
@@ -319,7 +319,7 @@ static void _lockd_retrive_lv_pv_list(struct volume_group *vg,
 	if (!lv)
 		return;
 
-	pv_num = _lockd_retrive_lv_pv_num(vg, lv_name);
+	pv_num = _lockd_retrieve_lv_pv_num(vg, lv_name);
 	if (!pv_num) {
 		/*
 		 * Fixup for 'lvcreate --type error -L1 -n $lv1 $vg', in this
@@ -330,7 +330,7 @@ static void _lockd_retrive_lv_pv_list(struct volume_group *vg,
 		 */
 		log_error("Fail to find any PVs for %s/%s, try to find PVs from VG instead",
 			  vg->name, lv_name);
-		_lockd_retrive_vg_pv_list(vg, lock_pvs);
+		_lockd_retrieve_vg_pv_list(vg, lock_pvs);
 		return;
 	}
 
@@ -1368,7 +1368,7 @@ int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int *exists
 	 * to send SCSI commands for idm locking scheme.
 	 */
 	if (!strcmp(vg->lock_type, "idm")) {
-		_lockd_retrive_vg_pv_list(vg, &lock_pvs);
+		_lockd_retrieve_vg_pv_list(vg, &lock_pvs);
 		reply = _lockd_send_with_pvs("start_vg",
 				&lock_pvs,
 				"pid = " FMTd64, (int64_t) getpid(),
@@ -1563,7 +1563,7 @@ int lockd_start_wait(struct cmd_context *cmd)
  * 4. dlm:
  *    If the lock_type from vgcreate is dlm, lvmlockd creates the
  *    dlm global lockspace, and queues the global lock request
- *    for vgcreate.  lockd_gl_create returns sucess with the gl held.
+ *    for vgcreate.  lockd_gl_create returns success with the gl held.
  *
  *    sanlock:
  *    If the lock_type from vgcreate is sanlock, lvmlockd returns -ENOLS
@@ -1647,7 +1647,7 @@ int lockd_global_create(struct cmd_context *cmd, const char *def_mode, const cha
 			return 1;
 
 		/*
-		 * This is the sanlock bootstrap condition for proceding
+		 * This is the sanlock bootstrap condition for proceeding
 		 * without the global lock: a chicken/egg case for the first
 		 * sanlock VG that is created.  When creating the first
 		 * sanlock VG, there is no global lock to acquire because
@@ -2579,7 +2579,7 @@ int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
 
 	/* Pass PV list for IDM lock type */
 	if (!strcmp(vg->lock_type, "idm")) {
-		_lockd_retrive_lv_pv_list(vg, lv_name, &lock_pvs);
+		_lockd_retrieve_lv_pv_list(vg, lv_name, &lock_pvs);
 		if (!_lockd_request(cmd, "lock_lv",
 				       vg->name, vg->lock_type, vg->lock_args,
 				       lv_name, lv_uuid, lock_args, mode, opts,
@@ -2793,7 +2793,7 @@ static int _lockd_lv_vdo(struct cmd_context *cmd, struct logical_volume *lv,
  * acquired on the thin pool LV, and a thin LV does not have a lock
  * of its own.  A cache pool LV does not have a lock of its own.
  * When the cache pool LV is linked to an origin LV, the lock of
- * the orgin LV protects the combined origin + cache pool.
+ * the origin LV protects the combined origin + cache pool.
  */
 
 int lockd_lv(struct cmd_context *cmd, struct logical_volume *lv,
@@ -2950,7 +2950,7 @@ int lockd_lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
 	 * the LV on remote nodes through dlm/corosync at the end
 	 * of the command.
 	 *
-	 * If lockd_lv sucessfully acquired the LV lock ex (did not
+	 * If lockd_lv successfully acquired the LV lock ex (did not
 	 * need to make use of SH_EXISTS_OK), then we know the LV
 	 * is active here only (or not active anywhere) and we
 	 * don't need to do any remote refresh.

@@ -82,7 +82,7 @@ static void _cache_display(const struct lv_segment *seg)
 /*
  * When older metadata are loaded without newer settings,
  * set then to default settings (the one that could have been
- * used implicitely at that time).
+ * used implicitly at that time).
  *
  * Needs both segments cache and cache_pool to be loaded.
  */
@@ -144,8 +144,8 @@ static int _settings_text_import(struct lv_segment *seg,
 	 * Read in policy args:
 	 *   policy_settings {
 	 *	migration_threshold=2048
-	 *	sequention_threashold=100
-	 *	random_threashold=200
+	 *	sequential_threshold=100
+	 *	random_threshold=200
 	 *	read_promote_adjustment=10
 	 *	write_promote_adjustment=20
 	 *	discard_promote_adjustment=40
@@ -277,7 +277,7 @@ static int _cache_pool_text_export(const struct lv_segment *seg,
 		outf(f, "metadata_format = " FMTu32, seg->cache_metadata_format);
 		break;
 	default:
-		log_error(INTERNAL_ERROR "LV %s is using unknown cache metadada format %u.",
+		log_error(INTERNAL_ERROR "LV %s is using unknown cache metadata format %u.",
 			  display_lvname(seg->lv), seg->cache_metadata_format);
 		return 0;
 	}
@@ -634,7 +634,7 @@ static int _cache_add_target_line(struct dev_manager *dm,
 			return_0;
 
 		if (!(attr & CACHE_FEATURE_METADATA2)) {
-			log_error("LV %s has metadata format %u unsuported by kernel.",
+			log_error("LV %s has metadata format %u unsupported by kernel.",
 				  display_lvname(seg->lv), setting_seg->cache_metadata_format);
 			return 0;
 		}
@@ -706,7 +706,7 @@ static int _cache_add_target_line(struct dev_manager *dm,
 			}
 		};
 
-                /* Check if cache settings are acceptable to knownm policies */
+                /* Check if cache settings are acceptable to known policies */
 		for (i = 0; i < DM_ARRAY_SIZE(_accepted); i++) {
 			if (strcasecmp(cache_pool_seg->policy_name, _accepted[i].name))
 				continue;

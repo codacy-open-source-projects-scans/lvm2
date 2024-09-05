@@ -77,7 +77,7 @@ int swap_lv_identifiers(struct cmd_context *cmd,
 	dm_list_splice(&b->tags, &tlv.tags);
 
 	/* rename temporarily to 'unused' name */
-	if (!lv_rename_update(cmd, a, "pmove_tmeta", 0))
+	if (!lv_rename_update(cmd, a, "pvmove_tmeta", 0))
 		return_0;
 	/* name rename 'b' to unused name of 'a' */
 	if (!lv_rename_update(cmd, b, aname, 0))
@@ -89,7 +89,7 @@ int swap_lv_identifiers(struct cmd_context *cmd,
 	return 1;
 }
 
-/* Finalise merging of lv into merge_lv */
+/* Finalize merging of lv into merge_lv */
 int thin_merge_finish(struct cmd_context *cmd,
 		      struct logical_volume *merge_lv,
 		      struct logical_volume *lv)
@@ -204,5 +204,5 @@ progress_t poll_thin_merge_progress(struct cmd_context *cmd,
 		return PROGRESS_CHECK_FAILED;
 	}
 
-	return PROGRESS_FINISHED_ALL; /* Merging happend */
+	return PROGRESS_FINISHED_ALL; /* Merging happened */
 }

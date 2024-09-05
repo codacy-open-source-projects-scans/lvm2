@@ -109,7 +109,7 @@ static void _dmfilemapd_log_with_errno(int level,
 }
 
 /*
- * Only used for reporting errors before daemonise().
+ * Only used for reporting errors before daemonize().
  */
 __attribute__((format(printf, 1, 2)))
 static void _early_log(const char *fmt, ...)
@@ -624,7 +624,7 @@ check_unlinked:
 	return 1;
 }
 
-static int _daemonise(struct filemap_monitor *fm)
+static int _daemonize(struct filemap_monitor *fm)
 {
 	pid_t pid = 0;
 	int fd, ffd;
@@ -668,7 +668,7 @@ static int _daemonise(struct filemap_monitor *fm)
 		if (fd > STDERR_FILENO)
 			(void) close(fd);
 	}
-	/* TODO: Use libdaemon/server/daemon-server.c _daemonise() */
+	/* TODO: Use libdaemon/server/daemon-server.c _daemonize() */
 	for (ffd = (int) sysconf(_SC_OPEN_MAX) - 1; ffd > STDERR_FILENO; --ffd)
 		if (ffd != fm->fd)
 			(void) close(ffd);
@@ -772,7 +772,7 @@ static int _dmfilemapd(struct filemap_monitor *fm)
 wait:
 		_filemap_monitor_wait(FILEMAPD_WAIT_USECS);
 
-		/* mode=inode termination condions */
+		/* mode=inode termination conditions */
 		if (fm->mode == DM_FILEMAPD_FOLLOW_INODE) {
 			if (!_filemap_monitor_check_file_unlinked(fm))
 				goto bad;
@@ -825,7 +825,7 @@ int main(int argc, char **argv)
 		 "mode=%s, path=\"%s\"", fm.fd, fm.group_id,
 		 _mode_names[fm.mode], fm.path);
 
-	if (!_foreground && !_daemonise(&fm)) {
+	if (!_foreground && !_daemonize(&fm)) {
 		free(fm.path);
 		return 1;
 	}

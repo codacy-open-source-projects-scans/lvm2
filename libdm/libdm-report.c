@@ -458,7 +458,7 @@ static int _report_field_string_list(struct dm_report *rh,
 	 *
 	 * The very first item in the array of 'struct pos_len' is always
 	 * a pair denoting '[list_size,strlen(field->report_string)]'. The
-	 * rest of items denote start and lenght of each item in the list.
+	 * rest of items denote start and length of each item in the list.
          *
 	 *
 	 * For example, if we have a list with "abc", "xy", "defgh"
@@ -1395,7 +1395,7 @@ struct dm_report *dm_report_init(uint32_t *report_types,
 	}
 
 	/*
-	 * Return updated types value for further compatility check by caller.
+	 * Return updated types value for further compatibility check by caller.
 	 */
 	_dm_report_init_update_types(rh, report_types);
 
@@ -2428,7 +2428,7 @@ static const char *_reserved_name(struct dm_report *rh,
 					  (reserved->type & DM_REPORT_FIELD_TYPE_MASK) ? "type-specific" : "field-specific",
 					   rh->fields[field_num].id);
 			else
-				log_error("Error occured while processing %s reserved value handler for field %s",
+				log_error("Error occurred while processing %s reserved value handler for field %s",
 					  (reserved->type & DM_REPORT_FIELD_TYPE_MASK) ? "type-specific" : "field-specific",
 					   rh->fields[field_num].id);
 		}
@@ -3494,7 +3494,7 @@ static int _get_reserved_value(struct dm_report *rh, uint32_t field_num,
 					  (rvw->reserved->type) & DM_REPORT_FIELD_TYPE_MASK ? "type-specific" : "field-specific",
 					  rh->fields[field_num].id);
 			else
-				log_error("Error occured while processing %s reserved value handler for field %s",
+				log_error("Error occurred while processing %s reserved value handler for field %s",
 					  (rvw->reserved->type) & DM_REPORT_FIELD_TYPE_MASK ? "type-specific" : "field-specific",
 					  rh->fields[field_num].id);
 			return 0;
@@ -3725,7 +3725,7 @@ error_field_id:
 		  field_id);
 	goto error;
 bad:
-	log_error(INTERNAL_ERROR "Forbiden NULL custom detected.");
+	log_error(INTERNAL_ERROR "Forbidden NULL custom detected.");
 error:
 	dm_pool_free(rh->selection->mem, fs);
 
@@ -4023,7 +4023,7 @@ error:
 	return NULL;
 }
 
-/* AND_EXPRESSION := EX (AND_OP AND_EXPRSSION) */
+/* AND_EXPRESSION := EX (AND_OP AND_EXPRESSION) */
 static struct selection_node *_parse_and_ex(struct dm_report *rh,
 					    const char *s,
 					    const char **next,
@@ -5103,7 +5103,7 @@ struct dm_report_group *dm_report_group_create(dm_report_group_type_t type, void
 	dm_list_init(&group->items);
 
 	if (!(item = dm_pool_zalloc(mem, sizeof(*item)))) {
-		log_error("dm_report: faile to allocate root report group item");
+		log_error("dm_report: failed to allocate root report group item");
 		goto bad;
 	}
 

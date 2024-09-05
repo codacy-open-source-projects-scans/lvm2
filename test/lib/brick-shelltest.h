@@ -114,7 +114,7 @@ public:
     //IosFlagSaver& operator= (const IosFlagSaver& rhs) = delete;
 
 private:
-    IosFlagSaver(const IosFlagSaver &rhs); // disable copy contructore
+    IosFlagSaver(const IosFlagSaver &rhs); // disable copy constructor
     IosFlagSaver& operator= (const IosFlagSaver& rhs); // old way
 
     std::ostream& ios;
@@ -172,7 +172,7 @@ public:
 
         os << std::right << std::setw( 2 ) << std::setfill( ' ' ) << t.ts.tv_sec / 60 << ":"
             << std::setw( 2 ) << std::setfill( '0' ) << t.ts.tv_sec % 60 << "."
-            << std::setw( 3 ) << t.ts.tv_nsec / 1000000; // use miliseconds ATM
+            << std::setw( 3 ) << t.ts.tv_nsec / 1000000; // use milliseconds ATM
         return os;
     }
 };
@@ -620,7 +620,7 @@ struct Source {
          * On RHEL5 box this code busy-loops here, while
          * parent process no longer writes anything.
          *
-         * Unclear why 'select()' is anouncing available
+         * Unclear why 'select()' is announcing available
          * data, while we read 0 bytes with errno == 0.
          *
          * Temporarily resolved with usleep() instead of loop.
@@ -1443,7 +1443,7 @@ static int run( int argc, const char **argv, std::string fl_envvar = "TEST_FLAVO
             "Other:\n"
             "  --fatal-timeouts\n\t\t- exit after encountering 2 timeouts in a row.\n"
             "  --continue\t- If set append to journal. Otherwise it will be overwritten.\n"
-            "  --heartbeat HEARTBEAT\n\t\t- Name of file to update periodicaly while running.\n"
+            "  --heartbeat HEARTBEAT\n\t\t- Name of file to update periodically while running.\n"
             "  --watch WATCH\t- Comma separated list of files to watch and print.\n"
             "  --timeout TIMEOUT\n\t\t- Period of silence in seconds considered a timeout. Default: 180.\n"
             "  --nokmsg\t- Do not try to read kernel messages.\n"
