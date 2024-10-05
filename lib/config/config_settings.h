@@ -728,8 +728,8 @@ cfg(allocation_vdo_use_deduplication_CFG, "vdo_use_deduplication", allocation_CF
 	"Deduplication may be disabled in instances where data is not expected\n"
 	"to have good deduplication rates but compression is still desired.\n")
 
-cfg(allocation_vdo_use_metadata_hints_CFG, "vdo_use_metadata_hints", allocation_CFG_SECTION, CFG_PROFILABLE | CFG_PROFILABLE_METADATA | CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, DEFAULT_VDO_USE_METADATA_HINTS, VDO_1ST_VSN, NULL, 0, NULL,
-	"Enables or disables whether VDO volume should tag its latency-critical\n"
+cfg_runtime(allocation_vdo_use_metadata_hints_CFG, "vdo_use_metadata_hints", allocation_CFG_SECTION, CFG_PROFILABLE | CFG_PROFILABLE_METADATA | CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, VDO_1ST_VSN, vsn(2, 3, 27), NULL,
+	"Deprecated enablement whether VDO volume should tag its latency-critical\n"
 	"writes with the REQ_SYNC flag. Some device mapper targets such as dm-raid5\n"
 	"process writes with this flag at a higher priority.\n")
 
@@ -821,8 +821,8 @@ cfg(allocation_vdo_physical_threads_CFG, "vdo_physical_threads", allocation_CFG_
 	"vdo_hash_zone_threads, vdo_logical_threads and vdo_physical_threads must be\n"
 	"either all zero or all non-zero.\n")
 
-cfg(allocation_vdo_write_policy_CFG, "vdo_write_policy", allocation_CFG_SECTION, CFG_PROFILABLE | CFG_PROFILABLE_METADATA | CFG_DEFAULT_COMMENTED, CFG_TYPE_STRING, DEFAULT_VDO_WRITE_POLICY, VDO_1ST_VSN, NULL, 0, NULL,
-	"Specifies the write policy:\n"
+cfg(allocation_vdo_write_policy_CFG, "vdo_write_policy", allocation_CFG_SECTION, CFG_PROFILABLE | CFG_PROFILABLE_METADATA | CFG_DEFAULT_COMMENTED, CFG_TYPE_STRING, DEFAULT_VDO_WRITE_POLICY, VDO_1ST_VSN, NULL, vsn(2, 3, 27), NULL,
+	"Deprecated option to specify the write policy with these accepted values:\n"
 	"auto  - VDO will check the storage device and determine whether it supports flushes.\n"
 	"        If it does, VDO will run in async mode, otherwise it will run in sync mode.\n"
 	"sync  - Writes are acknowledged only after data is stably written.\n"
@@ -1189,6 +1189,14 @@ cfg(global_sanlock_lv_extend_CFG, "sanlock_lv_extend", global_CFG_SECTION, CFG_D
 	"and can cause lvcreate to fail. Applicable only if LVM is compiled\n"
 	"with lockd support\n")
 
+cfg(global_sanlock_align_size_CFG, "sanlock_align_size", global_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, DEFAULT_SANLOCK_ALIGN_SIZE, vsn(2, 3, 27), NULL, 0, NULL,
+	"The sanlock lease size in MiB to use on disks with a 4K sector size.\n"
+	"Possible values are 1,2,4,8.  The default is 8, which supports up to\n"
+	"2000 hosts (and max host_id 2000.)  Smaller values support smaller\n"
+	"numbers of max hosts (and max host_ids): 250, 500, 1000, 2000 for\n"
+	"lease sizes 1,2,4,8.  Disks with 512 byte sectors always use 1MiB\n"
+	"leases and support 2000 hosts, and are not affected by this setting.\n")
+
 cfg(global_lvmlockctl_kill_command_CFG, "lvmlockctl_kill_command", global_CFG_SECTION, CFG_ALLOW_EMPTY | CFG_DEFAULT_COMMENTED, CFG_TYPE_STRING, "", vsn(2, 3, 12), NULL, 0, NULL,
 	"The command that lvmlockctl --kill should use to force LVs offline.\n"
 	"The lvmlockctl --kill command is run when a shared VG has lost\n"
@@ -1424,11 +1432,14 @@ cfg(activation_use_linear_target_CFG, "use_linear_target", activation_CFG_SECTIO
 
 cfg(activation_reserved_stack_CFG, "reserved_stack", activation_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, DEFAULT_RESERVED_STACK, vsn(1, 0, 0), NULL, 0, NULL,
 	"Stack size in KiB to reserve for use while devices are suspended.\n"
-	"Insufficient reserve risks I/O deadlock during device suspension.\n")
+	"Insufficient reserve risks I/O deadlock during device suspension.\n"
+	"Value 0 disables memory locking.\n")
 
 cfg(activation_reserved_memory_CFG, "reserved_memory", activation_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, DEFAULT_RESERVED_MEMORY, vsn(1, 0, 0), NULL, 0, NULL,
 	"Memory size in KiB to reserve for use while devices are suspended.\n"
-	"Insufficient reserve risks I/O deadlock during device suspension.\n")
+	"Insufficient reserve risks I/O deadlock during device suspension.\n"
+	"Value 0 disables memory locking.\n")
+
 
 cfg(activation_process_priority_CFG, "process_priority", activation_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, DEFAULT_PROCESS_PRIORITY, vsn(1, 0, 0), NULL, 0, NULL,
 	"Nice value used while devices are suspended.\n"
@@ -2264,8 +2275,9 @@ cfg_array(local_extra_system_ids_CFG, "extra_system_ids", local_CFG_SECTION, CFG
 	"correct usage and possible dangers.\n")
 
 cfg(local_host_id_CFG, "host_id", local_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, 0, vsn(2, 2, 124), NULL, 0, NULL,
-	"The lvmlockd sanlock host_id.\n"
-	"This must be unique among all hosts, and must be between 1 and 2000.\n"
-	"Applicable only if LVM is compiled with lockd support\n")
+	"The sanlock host_id used by lvmlockd. This must be unique among all the hosts\n"
+	"using shared VGs with sanlock. Accepted values are 1-2000, except when sanlock_align_size\n"
+	"is configured to 1, 2 or 4, which correspond to max host_id values of 250, 500, or 1000.\n"
+	"Applicable only if LVM is compiled with support for lvmlockd+sanlock.\n")
 
 cfg(CFG_COUNT, NULL, root_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, 0, vsn(0, 0, 0), NULL, 0, NULL, NULL)

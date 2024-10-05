@@ -258,7 +258,7 @@ static int _get_pid_starttime(int *pid, unsigned long long *starttime)
 
 /*
  * Support envvar LVM_LOG_FILE_EPOCH and allow to attach
- * extra keyword (consist of upto 32 alpha chars) to
+ * extra keyword (consist of up to 32 alpha chars) to
  * opened log file. After this 'epoch' word pid and starttime
  * (in kernel units, read from /proc/self/stat)
  * is automatically attached.
@@ -591,6 +591,7 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
 	    (_log_report.report && !log_bypass_report && (use_stderr || (level <=_LOG_WARN))) ||
 	    log_once) {
 		va_copy(ap, orig_ap);
+		/* coverity[format_string_injection] our code expectes this behavior. */
 		n = vsnprintf(message, sizeof(message), trformat, ap);
 		va_end(ap);
 
