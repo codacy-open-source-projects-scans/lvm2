@@ -1213,7 +1213,7 @@ static int _release_and_discard_lv_segment_area(struct lv_segment *seg, uint32_t
 		if (vg_is_shared(vg)) {
 			if (!lockd_lv_name(vg->cmd, vg, lv->name, &lv->lvid.id[1], lv->lock_args, "un", LDLV_PERSISTENT))
 				log_error("Failed to unlock vdo pool in lvmlockd.");
-			lockd_free_lv(vg->cmd, vg, lv->name, &lv->lvid.id[1], lv->lock_args);
+			lockd_free_lv_after_update(vg->cmd, vg, lv->name, &lv->lvid.id[1], lv->lock_args);
 		}
 		return 1;
 	}
@@ -7792,7 +7792,7 @@ int lv_remove_single(struct cmd_context *cmd, struct logical_volume *lv,
 		if (!lockd_lv(cmd, lv, "un", LDLV_PERSISTENT))
 			log_warn("WARNING: Failed to unlock %s.", display_lvname(lv));
 	}
-	lockd_free_lv(cmd, vg, lv->name, &lv->lvid.id[1], lv->lock_args);
+	lockd_free_lv_after_update(cmd, vg, lv->name, &lv->lvid.id[1], lv->lock_args);
 
 	if (!suppress_remove_message && (visible || historical)) {
 		(void) dm_snprintf(msg, sizeof(msg),
@@ -8829,16 +8829,17 @@ int wipe_lv(struct logical_volume *lv, struct wipe_params wp)
 					range[1] = end - range[0];
 
 				if (ioctl(dev->bcache_fd, BLKZEROOUT, &range)) {
-					if (errno == EINVAL)
-						goto retry_with_dev_set; /* Kernel without support for BLKZEROOUT */
-					log_sys_debug("ioctl", "BLKZEROOUT");
-					sigint_restore();
-					label_scan_invalidate(dev);
-					log_error("%s logical volume %s at position " FMTu64 " and size " FMTu64 ".",
-						  sigint_caught() ? "Interrupted initialization of" : "Failed to initialize",
-						  display_lvname(lv), range[0], range[1]);
-					return 0;
-				}
+					/*
+					 * If errno == EINVAL, then the kernel is without support for BLKZEROOUT.
+					 * Fall back to dev_set_bytes silently in that case. Otherwise, also log
+					 * the errno message.
+					 */
+					if (errno != EINVAL) {
+						log_sys_debug("ioctl", "BLKZEROOUT");
+						log_debug("Falling back to direct zeroing.");
+					}
+
+					goto retry_with_dev_set; 				}
 			}
 		} else
 retry_with_dev_set:
