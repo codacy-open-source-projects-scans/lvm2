@@ -16,9 +16,10 @@
 #define _LVM_DEV_TYPE_H
 
 #include "lib/device/device.h"
-#include "lib/display/display.h"
+#include "lib/metadata/metadata-exported.h"
 #include "lib/label/label.h"
-#include "lib/device/filesystem.h"
+
+struct fs_info;
 
 #define NUMBER_OF_MAJORS 4096
 
@@ -58,10 +59,10 @@ const char *dev_subsystem_name(struct dev_types *dt, struct device *dev);
 int major_is_scsi_device(struct dev_types *dt, int major);
 
 /* Signature/superblock recognition with position returned where found. */
-int dev_is_md_component(struct cmd_context *cmd, struct device *dev, uint64_t *sb, int full);
-int dev_is_mpath_component(struct cmd_context *cmd, struct device *dev, dev_t *mpath_devno);
-int dev_is_swap(struct cmd_context *cmd, struct device *dev, uint64_t *signature, int full);
-int dev_is_luks(struct cmd_context *cmd, struct device *dev, uint64_t *signature, int full);
+int dev_is_md_component(struct cmd_context *cmd, struct device *dev, uint64_t *offset_found, int full);
+int dev_is_mpath_component(struct cmd_context *cmd, struct device *dev, dev_t *holder_devno);
+int dev_is_swap(struct cmd_context *cmd, struct device *dev, uint64_t *offset_found, int full);
+int dev_is_luks(struct cmd_context *cmd, struct device *dev, uint64_t *offset_found, int full);
 int dasd_is_cdl_formatted(struct device *dev);
 
 const char *dev_mpath_component_wwid(struct cmd_context *cmd, struct device *dev);
@@ -94,12 +95,15 @@ unsigned long dev_optimal_io_size(struct dev_types *dt, struct device *dev);
 unsigned long dev_discard_max_bytes(struct dev_types *dt, struct device *dev);
 unsigned long dev_discard_granularity(struct dev_types *dt, struct device *dev);
 
+int dm_uuid_has_prefix(char *sysbuf, const char *prefix);
+
 int dev_is_rotational(struct dev_types *dt, struct device *dev);
 
 int dev_is_pmem(struct dev_types *dt, struct device *dev);
 
-int dev_is_nvme(struct dev_types *dt, struct device *dev);
-
+int dev_is_nvme(struct device *dev);
+int dev_is_scsi(struct cmd_context *cmd, struct device *dev);
+int dev_is_mpath(struct cmd_context *cmd, struct device *dev);
 int dev_is_lv(struct cmd_context *cmd, struct device *dev);
 
 #define FSTYPE_MAX 16

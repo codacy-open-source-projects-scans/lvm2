@@ -162,7 +162,8 @@ static void _rename_detached_cvol(struct cmd_context *cmd, struct logical_volume
 		return;
 	}
 
-	lv_fast->name = cvol_name_dup;
+	if (!lv_set_name(lv_fast, cvol_name_dup))
+		stack;
 }
 
 static int _lv_detach_writecache_cachevol_inactive(struct logical_volume *lv, int noflush)
@@ -205,12 +206,7 @@ static int _lv_detach_writecache_cachevol_inactive(struct logical_volume *lv, in
 		return 0;
 	}
 
-	if (!sync_local_dev_names(cmd)) {
-		log_error("Failed to sync local devices before detaching writecache.");
-		if (!deactivate_lv(cmd, lv))
-			log_error("Failed to deactivate %s.", display_lvname(lv));
-		return 0;
-	}
+	sync_local_dev_names(cmd);
 
 	if (!lv_writecache_message(lv, "flush")) {
 		log_error("Failed to flush writecache for %s.", display_lvname(lv));

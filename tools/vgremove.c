@@ -15,6 +15,7 @@
 
 #include "tools.h"
 #include "lib/device/online.h"
+#include "lib/device/persist.h"
 
 static int _vgremove_single(struct cmd_context *cmd, const char *vg_name,
 			    struct volume_group *vg,
@@ -41,6 +42,9 @@ static int _vgremove_single(struct cmd_context *cmd, const char *vg_name,
 	force_t force = (force_t) arg_count(cmd, force_ARG)
 		? : (arg_is_set(cmd, yes_ARG) ? DONT_PROMPT : PROMPT);
 	unsigned lv_count, missing;
+	DM_LIST_INIT(pr_devs);
+	char *pr_key = NULL;
+	int pr_stop = (vg->pr & (VG_PR_REQUIRE|VG_PR_AUTOSTART)) ? 1 : 0;
 	int ret;
 
 	lv_count = vg_visible_lvs(vg);
@@ -70,7 +74,10 @@ static int _vgremove_single(struct cmd_context *cmd, const char *vg_name,
 	    !lvremove_single(cmd, vg->pool_metadata_spare_lv, &void_handle))
 		return_ECMD_FAILED;
 
-	if (!lockd_free_vg_before(cmd, vg, 0, arg_is_set(cmd, yes_ARG)))
+	if (pr_stop && !persist_finish_before(cmd, vg, &pr_devs, &pr_key))
+		return_ECMD_FAILED;
+
+	if (!lockd_free_vg_before(cmd, vg, 0, arg_count(cmd, yes_ARG)))
 		return_ECMD_FAILED;
 
 	if (!force && !vg_remove_check(vg))
@@ -84,6 +91,9 @@ static int _vgremove_single(struct cmd_context *cmd, const char *vg_name,
 		return_ECMD_FAILED;
 
 	lockd_free_vg_final(cmd, vg);
+
+	if (pr_stop)
+		persist_finish_after(cmd, vg, &pr_devs, pr_key);
 
 	return ECMD_PROCESSED;
 }

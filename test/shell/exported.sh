@@ -10,9 +10,8 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 # Check what is and is not permitted on an exported VG/PV
 
@@ -77,10 +76,10 @@ not grep $vg1 out
 lvscan 2>&1|tee out
 not grep $vg1 out
 
-not pvchange --addtag cc "$dev1"
+not pvchange --addtag cc12345678 "$dev1"
 pvs -o+tags "$dev1" 2>&1|tee out
 grep "$dev1" out
-not grep cc out
+not grep cc12345678 out
 
 pvs -osize "$dev1" > before
 not pvresize --setphysicalvolumesize 100M "$dev1"

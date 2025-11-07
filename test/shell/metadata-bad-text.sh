@@ -10,7 +10,6 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMPOLLD=1
 
 RUNDIR="/run"
 test -d "$RUNDIR" || RUNDIR="/var/run"
@@ -24,7 +23,7 @@ _clear_online_files() {
         rm -f "$VGS_ONLINE_DIR"/*
 }
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 aux prepare_devs 3
 get_devs
@@ -216,7 +215,7 @@ aux enable_dev "$dev2"
 
 # Both old and bad metadata are reported.
 pvs 2>&1 | tee out
-grep "ignoring metadata seqno" out
+grep -i "Ignoring metadata seqno" out
 grep "Checksum error" out
 pvs "$dev1"
 pvs "$dev2"
@@ -230,7 +229,7 @@ not lvs $vg/$lv2
 vgck --updatemetadata $vg
 
 pvs 2>&1 | tee out
-not grep "ignoring metadata seqno" out
+not grep -i "Ignoring metadata seqno" out
 not grep "Checksum error" out
 pvs "$dev1"
 pvs "$dev2"

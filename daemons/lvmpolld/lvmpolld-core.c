@@ -15,8 +15,8 @@
 #include "lvmpolld-common.h"
 
 #include "lvm-version.h"
-#include "daemon-server.h"
-#include "daemon-log.h"
+#include "libdaemon/server/daemon-server.h"
+#include "libdaemon/server/daemon-log.h"
 
 #include <getopt.h>
 #include <poll.h>
@@ -387,6 +387,11 @@ static void *fork_and_poll(void *args)
 
 	if (!data) {
 		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "Failed to initialize per-thread data");
+		goto err;
+	}
+
+	if (!pdlv->cmdargv || !*(pdlv->cmdargv)) {
+		ERROR(ls, "%s: %s", PD_LOG_PREFIX, "Missing command");
 		goto err;
 	}
 

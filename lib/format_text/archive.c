@@ -146,8 +146,11 @@ static struct dm_list *_scan_archive(struct dm_pool *mem,
 		if (strcmp(vgname, vgname_found))
 			continue;
 
-		if (!(name = dm_pool_strdup(mem, dirent[i]->d_name)))
-			goto_out;
+		if (!(name = dm_pool_strdup(mem, dirent[i]->d_name))) {
+			log_error("Couldn't copy archive name.");
+			results = NULL;
+			goto out;
+		}
 
 		/*
 		 * Create a new archive_file.
@@ -219,7 +222,7 @@ static void _remove_expired(const char *dir, const char *vgname,
 
 	sum /= 1024 * 1024;
 	if (sum > 128 || archives_size > 8192)
-		log_print_unless_silent("Consider pruning %s VG archive with more then %u MiB in %u files (see archiving settings in lvm.conf).",
+		log_print_unless_silent("Consider pruning %s VG archive with more than %u MiB in %u files (see archiving settings in lvm.conf).",
 					vgname, (unsigned)sum, archives_size);
 }
 

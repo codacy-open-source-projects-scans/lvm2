@@ -26,6 +26,7 @@
 #include "lib/metadata/vg.h"
 #include "lib/metadata/lv.h"
 #include "lib/misc/lvm-percent.h"
+#include "lib/locking/lvmlockd.h"
 #include <stdbool.h>
 
 #define MAX_STRIPES 128U
@@ -193,6 +194,7 @@
 #define PROCESS_SKIP_SCAN	0x00200000U /* skip lvmcache_label_scan in process_each_pv */
 #define READ_FOR_ACTIVATE	0x00400000U /* command tells vg_read it plans to activate the vg */
 #define READ_WITHOUT_LOCK	0x00800000U /* caller responsible for vg lock */
+#define READ_FOR_PERSIST	0x01000000U /* command intends to perform PR operation on disks */
 
 /* vg_read returns these in error_flags */
 #define FAILED_NOT_ENABLED	0x00000001U
@@ -208,7 +210,8 @@
 #define FAILED_SYSTEMID		0x00000400U
 #define FAILED_LOCK_TYPE	0x00000800U
 #define FAILED_LOCK_MODE	0x00001000U
-#define FAILED_INTERNAL_ERROR	0x00002000U
+#define FAILED_PR_REQUIRED	0x00002000U
+#define FAILED_INTERNAL_ERROR	0x00004000U
 #define SUCCESS			0x00000000U
 
 #define VGMETADATACOPIES_ALL UINT32_MAX
@@ -300,8 +303,8 @@
 int lv_layout_and_role(struct dm_pool *mem, const struct logical_volume *lv,
 		       struct dm_list **layout, struct dm_list **role);
 
-int lv_is_linear(struct logical_volume *lv);
-int lv_is_striped(struct logical_volume *lv);
+int lv_is_linear(const struct logical_volume *lv);
+int lv_is_striped(const struct logical_volume *lv);
 
 /* Ordered list - see lv_manip.c */
 typedef enum {
@@ -573,11 +576,6 @@ struct pv_list {
 	struct dm_list *pe_ranges;	/* Ranges of PEs e.g. for allocation */
 };
 
-struct lv_list {
-	struct dm_list list;
-	struct logical_volume *lv;
-};
-
 struct glv_list {
 	struct dm_list list;
 	struct generic_logical_volume *glv;
@@ -631,6 +629,8 @@ struct pvcreate_params {
 	int zero;
 	force_t force;
 	unsigned yes;
+	uint32_t setpersist_flags;
+	char *vg_name;
 
 	/*
 	 * From recovery-specific command line args.
@@ -659,6 +659,7 @@ struct pvcreate_params {
 	unsigned preserve_existing : 1;
 	unsigned check_failed : 1;
 	unsigned check_consistent_block_size : 1;
+	unsigned start_pr : 1;
 };
 
 struct lvresize_params {
@@ -731,10 +732,11 @@ void lv_set_hidden(struct logical_volume *lv);
 
 int pv_write(struct cmd_context *cmd, struct physical_volume *pv, int allow_non_orphan);
 int move_pv(struct volume_group *vg_from, struct volume_group *vg_to,
-	    const char *pv_name);
+	    const char *pv_name, struct device **dev_moved);
 int move_pvs_used_by_lv(struct volume_group *vg_from,
 			struct volume_group *vg_to,
-			const char *lv_name);
+			const char *lv_name,
+			struct dm_list *dev_list_moved);
 int is_orphan_vg(const char *vg_name);
 int is_real_vg(const char *vg_name);
 int vg_missing_pv_count(const struct volume_group *vg);
@@ -749,10 +751,10 @@ int lv_extend_policy_calculate_percent(struct logical_volume *lv,
                                        uint32_t *amount, uint32_t *meta_amount);
 
 struct volume_group *vg_read(struct cmd_context *cmd, const char *vg_name, const char *vgid,
-			     uint32_t read_flags, uint32_t lockd_state,
+			     uint32_t read_flags, struct lockd_state *lks,
 			     uint32_t *error_flags, struct volume_group **error_vg);
 struct volume_group *vg_read_for_update(struct cmd_context *cmd, const char *vg_name,
-			 const char *vgid, uint32_t read_flags, uint32_t lockd_state);
+			 const char *vgid, uint32_t read_flags);
 struct volume_group *vg_read_orphans(struct cmd_context *cmd, const char *orphan_vgname);
 
 /* pe_start and pe_end relate to any existing data so that new metadata
@@ -819,13 +821,18 @@ struct wipe_params {
 };
 
 /* Zero out LV and/or wipe signatures */
-int wipe_lv(struct logical_volume *lv, struct wipe_params params);
+int wipe_lv(struct logical_volume *lv, struct wipe_params wp);
+
+/* Wipe mode for activate_and_wipe_lv* functions */
+#define WIPE_MODE_METADATA          0  /* Metadata wiping (.is_metadata = 1) */
+#define WIPE_MODE_DO_ZERO           1  /* Zero only first 4KB (.do_zero = 1) */
+#define WIPE_MODE_DO_ZERO_AND_WIPE  2  /* Zero + wipe signatures (.do_zero = 1, .do_wipe_signatures = 1) */
 
 /* Wipe any signatures and zero first sector on @lv */
-int activate_and_wipe_lv(struct logical_volume *lv, int commit);
+int activate_and_wipe_lv(struct logical_volume *lv, int wipe_mode, int yes, force_t force);
 
 /* Wipe any signatures and zero first sector of LVs listed on @lv_list */
-int activate_and_wipe_lvlist(struct dm_list *lv_list, int commit);
+int activate_and_wipe_lvlist(struct dm_list *lv_list, int wipe_mode, int yes, force_t force);
 
 int lv_change_tag(struct logical_volume *lv, const char *tag, int add_tag);
 
@@ -891,14 +898,14 @@ int update_thin_pool_lv(struct logical_volume *lv, int activate);
 
 int recalculate_pool_chunk_size_with_dev_hints(struct logical_volume *pool_lv,
 					       struct logical_volume *pool_data_lv,
-					       int chunk_size_calc_policy);
+					       unsigned chunk_size_calc_policy);
 int validate_cache_chunk_size(struct cmd_context *cmd, uint32_t chunk_size);
 int validate_thin_pool_chunk_size(struct cmd_context *cmd, uint32_t chunk_size);
 int validate_pool_chunk_size(struct cmd_context *cmd, const struct segment_type *segtype, uint32_t chunk_size);
 int validate_thin_external_origin(const struct logical_volume *lv,
 				  const struct logical_volume *pool_lv);
 int get_default_allocation_thin_pool_chunk_size(struct cmd_context *cmd, struct profile *profile,
-						uint32_t *chunk_size, int *chunk_size_calc_method);
+						uint32_t *chunk_size, unsigned *chunk_size_calc_policy);
 int update_thin_pool_params(struct cmd_context *cmd,
 			    struct profile *profile,
 			    uint32_t extent_size,
@@ -908,12 +915,12 @@ int update_thin_pool_params(struct cmd_context *cmd,
 			    uint32_t *pool_metadata_extents,
 			    struct logical_volume *metadata_lv,
 			    thin_crop_metadata_t *crop_metadata,
-			    int *chunk_size_calc_method, uint32_t *chunk_size,
+			    unsigned *chunk_size_calc_policy, uint32_t *chunk_size,
 			    thin_discards_t *discards, thin_zero_t *zero_new_blocks);
 int thin_pool_set_params(struct lv_segment *seg,
 			 int error_when_full,
 			 thin_crop_metadata_t crop_metadata,
-			 int thin_chunk_size_calc_policy,
+			 unsigned chunk_size_calc_policy,
 			 uint32_t chunk_size,
 			 thin_discards_t discards,
 			 thin_zero_t zero_new_blocks);
@@ -1011,9 +1018,10 @@ struct lvcreate_params {
 	activation_change_t activate; /* non-snapshot, non-mirror */
 	thin_discards_t discards;     /* thin */
 	thin_zero_t zero_new_blocks;
-#define THIN_CHUNK_SIZE_CALC_METHOD_GENERIC 0x01
-#define THIN_CHUNK_SIZE_CALC_METHOD_PERFORMANCE 0x02
-	int thin_chunk_size_calc_policy;
+#define CHUNK_SIZE_CALC_POLICY_UNSELECTED 0x00
+#define CHUNK_SIZE_CALC_POLICY_GENERIC 0x01
+#define CHUNK_SIZE_CALC_POLICY_PERFORMANCE 0x02
+	unsigned chunk_size_calc_policy;
 	unsigned suppress_zero_warn : 1;
 	unsigned needs_lockd_init : 1;
 	unsigned ignore_type : 1;
@@ -1023,8 +1031,7 @@ struct lvcreate_params {
 	const char *lv_name; /* all */
 	const char *origin_name; /* snap */
 	const char *pool_name;   /* thin */
-
-	const char *lock_args;
+	const char *lockd_name;
 
 	uint32_t stripes; /* striped/RAID */
 	uint32_t stripe_size; /* striped/RAID */
@@ -1168,6 +1175,7 @@ int lv_writecache_set_cleaner(struct logical_volume *lv);
 bool lv_writecache_is_clean(struct cmd_context *cmd, struct logical_volume *lv, uint64_t *dirty_blocks);
 bool writecache_cleaner_supported(struct cmd_context *cmd);
 
+struct logical_volume *lv_integrity_from_origin(const struct logical_volume *lv);
 int lv_is_integrity_origin(const struct logical_volume *lv);
 int integrity_settings_to_str_list(struct integrity_settings *settings, struct dm_list *result, struct dm_pool *mem);
 
@@ -1226,7 +1234,7 @@ int lv_add_mirrors(struct cmd_context *cmd, struct logical_volume *lv,
 		   uint32_t mirrors, uint32_t stripes, uint32_t stripe_size,
 		   uint32_t region_size, uint32_t log_count,
 		   struct dm_list *pvs, alloc_policy_t alloc, uint32_t flags);
-int lv_split_mirror_images(struct logical_volume *lv, const char *split_lv_name,
+int lv_split_mirror_images(struct logical_volume *lv, const char *split_name,
 			   uint32_t split_count, struct dm_list *removable_pvs);
 int lv_remove_mirrors(struct cmd_context *cmd, struct logical_volume *lv,
 		      uint32_t mirrors, uint32_t log_count,
@@ -1365,7 +1373,7 @@ int update_cache_pool_params(struct cmd_context *cmd,
 			     uint32_t pool_data_extents,
 			     uint32_t *pool_metadata_extents,
 			     struct logical_volume *metadata_lv,
-			     int *chunk_size_calc_method, uint32_t *chunk_size);
+			     unsigned *chunk_size_calc_policy, uint32_t *chunk_size);
 int validate_lv_cache_chunk_size(struct logical_volume *pool_lv, uint32_t chunk_size);
 int validate_lv_cache_create_pool(const struct logical_volume *pool_lv);
 int validate_lv_cache_create_origin(const struct logical_volume *origin_lv);
@@ -1483,9 +1491,6 @@ int validate_vg_rename_params(struct cmd_context *cmd,
 			      const char *vg_name_old,
 			      const char *vg_name_new);
 
-int is_lockd_type(const char *lock_type);
-int vg_is_shared(const struct volume_group *vg);
-
 int is_system_id_allowed(struct cmd_context *cmd, const char *system_id);
 
 int vg_strip_outdated_historical_lvs(struct volume_group *vg);
@@ -1499,13 +1504,14 @@ void vg_write_commit_bad_mdas(struct cmd_context *cmd, struct volume_group *vg);
 struct dm_list *create_pv_list(struct dm_pool *mem, struct volume_group *vg, int argc,
 		                                            char **argv, int allocatable_only);
 struct dm_list *clone_pv_list(struct dm_pool *mem, struct dm_list *pvsl);
+int pv_list_to_dev_list(struct dm_pool *mem, struct dm_list *pvs, struct dm_list *devs);
 
 int lv_add_integrity_to_raid(struct logical_volume *lv, struct integrity_settings *settings, struct dm_list *pvh,
 			     struct logical_volume *lv_imeta_0);
-int lv_remove_integrity_from_raid(struct logical_volume *lv);
+int lv_remove_integrity_from_raid(struct logical_volume *lv, char **remove_images);
 void lv_clear_integrity_recalculate_metadata(struct logical_volume *lv);
 int lv_has_integrity_recalculate_metadata(struct logical_volume *lv);
-int lv_raid_has_integrity(struct logical_volume *lv);
+int lv_raid_has_integrity(const struct logical_volume *lv);
 int lv_extend_integrity_in_raid(struct logical_volume *lv, struct dm_list *pvh);
 int lv_get_raid_integrity_settings(struct logical_volume *lv, struct integrity_settings **isettings);
 int integrity_mode_set(const char *mode, struct integrity_settings *settings);

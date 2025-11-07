@@ -14,6 +14,33 @@ initskip() {
 	exit 200
 }
 
+# Parse command line options
+SKIP_ROOT_DM_CHECK=${SKIP_ROOT_DM_CHECK-}
+SKIP_WITH_DEVICES_FILE=${SKIP_WITH_DEVICES_FILE-}
+SKIP_WITH_LVMLOCKD=${SKIP_WITH_LVMLOCKD-}
+SKIP_WITH_LVMPOLLD=${SKIP_WITH_LVMPOLLD-}
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--skip-root-dm-check)
+			SKIP_ROOT_DM_CHECK=1
+			;;
+		--skip-with-devices-file)
+			SKIP_WITH_DEVICES_FILE=1
+			;;
+		--skip-with-lvmpolld)
+			SKIP_WITH_LVMPOLLD=1
+			;;
+		--skip-with-lvmlockd)
+			SKIP_WITH_LVMLOCKD=1
+			;;
+		*)
+			echo "Unknown option: $1"
+			exit 1
+			;;
+	esac
+	shift
+done
+
 # sanitize the environment
 LANG=C
 LC_ALL=C
@@ -47,9 +74,6 @@ LVM_TEST_LOCK_TYPE_IDM=${LVM_TEST_LOCK_TYPE_IDM-}
 SKIP_WITHOUT_CLVMD=${SKIP_WITHOUT_CLVMD-}
 SKIP_WITH_CLVMD=${SKIP_WITH_CLVMD-}
 
-SKIP_WITH_LVMPOLLD=${SKIP_WITH_LVMPOLLD-}
-SKIP_WITH_LVMLOCKD=${SKIP_WITH_LVMLOCKD-}
-SKIP_ROOT_DM_CHECK=${SKIP_ROOT_DM_CHECK-}
 SKIP_WITH_LOW_SPACE=${SKIP_WITH_LOW_SPACE-50}
 
 test -n "$LVM_TEST_FLAVOUR" || { echo "NOTE: Empty flavour">&2; initskip; }
@@ -152,7 +176,7 @@ fi
 echo "$TESTNAME" >TESTNAME
 # Require 50M of free space in testdir
 test "$(df -k -P . | awk '/\// {print $4}')" -gt $(( SKIP_WITH_LOW_SPACE * 1024 )) || \
-	skip "Testing requires more then ${SKIP_WITH_LOW_SPACE}M of free space in directory $TESTDIR!\\n$(df -H | sed -e 's,^,## DF:   ,')"
+	skip "Testing requires more than ${SKIP_WITH_LOW_SPACE}M of free space in directory $TESTDIR!\\n$(df -H | sed -e 's,^,## DF:   ,')"
 
 echo "Kernel is $(uname -a)"
 # Report SELinux mode
@@ -176,7 +200,9 @@ echo "@PREFIX=$PREFIX"
 echo "## DATE: $(date || true)"
 
 # Hostname IP address
-echo "## HOST: $(hostname -I 2>/dev/null || hostname 2>/dev/null || true)"
+HOSTNAME=$(hostname -I 2>/dev/null) || HOSTNAME=
+HOSTNAME="$(hostname 2>/dev/null) ${HOSTNAME}" || true
+echo "## HOST: $HOSTNAME"
 
 if test -z "$SKIP_ROOT_DM_CHECK" ; then
 	aux lvmconf

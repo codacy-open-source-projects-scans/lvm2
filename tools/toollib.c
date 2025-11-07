@@ -18,6 +18,7 @@
 #include "lib/label/hints.h"
 #include "lib/device/device_id.h"
 #include "lib/device/online.h"
+#include "lib/device/persist.h"
 #include "libdm/misc/dm-ioctl.h"
 
 #include <sys/stat.h>
@@ -62,10 +63,7 @@ int become_daemon(struct cmd_context *cmd, int skip_lvm)
 		log_warn("WARNING: Failed to set SIGCHLD action.");
 
 	if (!skip_lvm)
-		if (!sync_local_dev_names(cmd)) { /* Flush ops and reset dm cookie */
-			log_error("Failed to sync local devices before forking.");
-			return -1;
-		}
+		sync_local_dev_names(cmd); /* Flush ops and reset dm cookie */
 
 	if ((pid = fork()) == -1) {
 		log_error("fork failed: %s", strerror(errno));
@@ -77,6 +75,8 @@ int become_daemon(struct cmd_context *cmd, int skip_lvm)
 		return 0;
 
 	/* Child */
+	init_log_command(find_config_tree_bool(cmd, log_command_names_CFG, NULL), 0);
+
 	if (setsid() == -1)
 		log_error("Background process failed to setsid: %s",
 			  strerror(errno));
@@ -278,6 +278,17 @@ static int _ignore_vg(struct cmd_context *cmd,
 			read_error &= ~FAILED_LOCK_TYPE; /* Check for other errors */
 			read_error &= ~FAILED_LOCK_MODE;
 			log_verbose("Skipping volume group %s", vg_name);
+			*skip = 1;
+		}
+	}
+
+	if (read_error & FAILED_PR_REQUIRED) {
+		if (arg_vgnames && str_list_match_item(arg_vgnames, vg_name)) {
+			log_error("Cannot access VG %s without persistent reservation.", vg_name);
+			return 1;
+		} else {
+			read_error &= ~FAILED_PR_REQUIRED; /* Check for other errors */
+			log_verbose("Skipping volume group %s without pr", vg_name);
 			*skip = 1;
 		}
 	}
@@ -485,7 +496,7 @@ int vgcreate_params_set_defaults(struct cmd_context *cmd,
 		extent_size = find_config_tree_int64(cmd,
 				allocation_physical_extent_size_CFG, NULL) * 2;
 		if (extent_size < 0) {
-			log_error(_pe_size_may_not_be_negative_msg);
+			log_error("%s", _pe_size_may_not_be_negative_msg);
 			return 0;
 		}
 		vp_def->extent_size = (uint32_t) extent_size;
@@ -507,7 +518,8 @@ int vgcreate_params_set_defaults(struct cmd_context *cmd,
  */
 int vgcreate_params_set_from_args(struct cmd_context *cmd,
 				  struct vgcreate_params *vp_new,
-				  struct vgcreate_params *vp_def)
+				  struct vgcreate_params *vp_def,
+				  struct pvcreate_params *pp)
 {
 	const char *system_id_arg_str;
 	const char *lock_type = NULL;
@@ -531,7 +543,7 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 	    arg_uint_value(cmd, physicalextentsize_ARG, vp_def->extent_size);
 
 	if (arg_sign_value(cmd, physicalextentsize_ARG, SIGN_NONE) == SIGN_MINUS) {
-		log_error(_pe_size_may_not_be_negative_msg);
+		log_error("%s", _pe_size_may_not_be_negative_msg);
 		return 0;
 	}
 
@@ -722,6 +734,29 @@ int vgcreate_params_set_from_args(struct cmd_context *cmd,
 	vp_new->lock_type = lock_type;
 
 	log_debug("Setting lock_type to %s", vp_new->lock_type);
+
+	if (arg_is_set(cmd, setlockargs_ARG)) {
+		const char *set_args;
+		uint32_t lock_args_flags = 0;
+
+		if (!lock_type || strcmp(lock_type, "sanlock")) {
+			log_error("Using setlockargs requires sanlock lock type for shared VG.");
+			return 0;
+		}
+
+		if (!(set_args = arg_str_value(cmd, setlockargs_ARG, NULL)))
+			return_0;
+		if (!lockd_lockargs_get_user_flags(set_args, &lock_args_flags))
+			return_0;
+		if (!pp)
+			return_0;
+
+		if ((lock_args_flags & LOCKARGS_PERSIST) && !(pp->setpersist_flags & (SETPR_Y | SETPR_REQUIRE))) {
+			log_error("Using --setlockargs persist requires --setpersist y|require.");
+			return 0;
+		}
+	}
+
 	return 1;
 }
 
@@ -779,6 +814,19 @@ int lv_change_activate(struct cmd_context *cmd, struct logical_volume *lv,
 		}
 	}
 
+	if (lv_is_raid(lv) && lv_is_origin(lv) && lv_is_partial(lv)) {
+		struct lv_list *lvl;
+		dm_list_iterate_items(lvl, &lv->vg->lvs) {
+			if (lv_is_cow(lvl->lv) &&
+			    (lv_origin_lv(lvl->lv) == lv) &&
+			    lv_is_partial(lvl->lv)) {
+				log_error("Activating raid LV %s requires the removal of partial snapshot %s.",
+					  display_lvname(lv), display_lvname(lvl->lv));
+				return 0;
+			}
+		}
+	}
+
 	if (is_change_activating(activate) &&
 	    lvmcache_has_duplicate_devs() &&
 	    vg_has_duplicate_pvs(lv->vg) &&
@@ -797,8 +845,8 @@ int lv_change_activate(struct cmd_context *cmd, struct logical_volume *lv,
 		}
 
 		if (vg_is_shared(lv->vg)) {
-			uint32_t lockd_state = 0;
-			if (!lockd_vg(cmd, lv->vg->name, "ex", 0, &lockd_state)) {
+			struct lockd_state lks = {0};
+			if (!lockd_vg(cmd, lv->vg->name, "ex", 0, &lks)) {
 				log_error("Cannot activate uninitialized integrity LV %s without lock.",
 					  display_lvname(lv));
 				return 0;
@@ -905,8 +953,7 @@ void lv_spawn_background_polling(struct cmd_context *cmd,
 	const struct logical_volume *lv_mirr = NULL;
 
 	/* Ensure there is nothing waiting on cookie */
-	if (!sync_local_dev_names(cmd))
-		log_warn("WARNING: Failed to sync local dev names.");
+	sync_local_dev_names(cmd);
 
 	if (lv_is_pvmove(lv))
 		lv_mirr = lv;
@@ -1371,6 +1418,10 @@ int get_vdo_settings(struct cmd_context *cmd,
 		if (vtp->use_deduplication != use_deduplication)
 			u |= VDO_CHANGE_ONLINE;
 	}
+
+	/* store size in sector units */
+	if (vtp->minimum_io_size >= 512)
+		vtp->minimum_io_size >>= SECTOR_SHIFT;
 
 	// validation of updated VDO option
 	if (!dm_vdo_validate_target_params(vtp, 0 /* vdo_size */))
@@ -2194,16 +2245,9 @@ void destroy_processing_handle(struct cmd_context *cmd, struct processing_handle
 		 * the log report to cover the rest of the processing.
 		 *
 		 */
-		if (!cmd->is_interactive && !handle->parent) {
-			if (!dm_report_group_destroy(cmd->cmd_report.report_group))
-				stack;
-			cmd->cmd_report.report_group = NULL;
+		if (!cmd->is_interactive && !handle->parent)
+			report_format_destroy(cmd);
 
-			if (cmd->cmd_report.log_rh) {
-				dm_report_free(cmd->cmd_report.log_rh);
-				cmd->cmd_report.log_rh = NULL;
-			}
-		}
 		/*
 		 * TODO: think about better alternatives:
 		 * handle mempool, dm_alloc for handle memory...
@@ -2283,7 +2327,7 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t read_flags,
 	struct vgnameid_list *vgnl;
 	const char *vg_name;
 	const char *vg_uuid;
-	uint32_t lockd_state = 0;
+	struct lockd_state lks;
 	uint32_t error_flags = 0;
 	int whole_selected = 0;
 	int ret_max = ECMD_PROCESSED;
@@ -2306,6 +2350,11 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t read_flags,
 	 * FIXME If one_vgname, only proceed if exactly one VG matches tags or selection.
 	 */
 	dm_list_iterate_items(vgnl, vgnameids_to_process) {
+		if (sigint_caught()) {
+			ret_max = ECMD_FAILED;
+			goto_out;
+		}
+
 		vg_name = vgnl->vg_name;
 		vg_uuid = vgnl->vgid;
 		skip = 0;
@@ -2315,28 +2364,24 @@ static int _process_vgnameid_list(struct cmd_context *cmd, uint32_t read_flags,
 		uuid[0] = '\0';
 		if (is_orphan_vg(vg_name)) {
 			log_set_report_object_type(LOG_REPORT_OBJECT_TYPE_ORPHAN);
-			log_set_report_object_name_and_id(vg_name + sizeof(VG_ORPHANS), uuid);
+			log_set_report_object_name_and_id(vg_name + sizeof(VG_ORPHANS), NULL);
 		} else {
 			if (vg_uuid && !id_write_format((const struct id*)vg_uuid, uuid, sizeof(uuid)))
 				stack;
-			log_set_report_object_name_and_id(vg_name, uuid);
-		}
-
-		if (sigint_caught()) {
-			ret_max = ECMD_FAILED;
-			goto_out;
+			log_set_report_object_name_and_id(vg_name, (const struct id*)vg_uuid);
 		}
 
 		log_very_verbose("Processing VG %s %s", vg_name, uuid);
 do_lockd:
-		if (is_lockd && !lockd_vg(cmd, vg_name, NULL, 0, &lockd_state)) {
+		memset(&lks, 0, sizeof(lks));
+		if (is_lockd && !lockd_vg(cmd, vg_name, NULL, 0, &lks)) {
 			stack;
 			ret_max = ECMD_FAILED;
 			report_log_ret_code(ret_max);
 			continue;
 		}
 
-		vg = vg_read(cmd, vg_name, vg_uuid, read_flags, lockd_state, &error_flags, &error_vg);
+		vg = vg_read(cmd, vg_name, vg_uuid, read_flags, &lks, &error_flags, &error_vg);
 		if (_ignore_vg(cmd, error_flags, error_vg, vg_name, arg_vgnames, read_flags, &skip, &notfound)) {
 			stack;
 			ret_max = ECMD_FAILED;
@@ -2379,7 +2424,7 @@ do_lockd:
 		unlock_vg(cmd, vg, vg_name);
 endvg:
 		release_vg(vg);
-		if (is_lockd && !lockd_vg(cmd, vg_name, "un", 0, &lockd_state))
+		if (is_lockd && !lockd_vg(cmd, vg_name, "un", 0, &lks))
 			stack;
 
 		log_set_report_object_name_and_id(NULL, NULL);
@@ -2927,6 +2972,8 @@ static int _lv_is_type(struct cmd_context *cmd, struct logical_volume *lv, int l
 		return lv_is_thin_volume(lv);
 	case thinpool_LVT:
 		return lv_is_thin_pool(lv);
+	case thinpooldata_LVT:
+		return lv_is_thin_pool_data(lv);
 	case cache_LVT:
 		return lv_is_cache(lv);
 	case cachepool_LVT:
@@ -3034,7 +3081,6 @@ int get_lvt_enum(struct logical_volume *lv)
 static int _lv_types_match(struct cmd_context *cmd, struct logical_volume *lv, uint64_t lvt_bits,
 			   uint64_t *match_bits, uint64_t *unmatch_bits)
 {
-	const struct lv_type *type;
 	int lvt_enum;
 	int found_a_match = 0;
 	int match;
@@ -3046,9 +3092,6 @@ static int _lv_types_match(struct cmd_context *cmd, struct logical_volume *lv, u
 
 	for (lvt_enum = 1; lvt_enum < LVT_COUNT; lvt_enum++) {
 		if (!lvt_bit_is_set(lvt_bits, lvt_enum))
-			continue;
-
-		if (!(type = get_lv_type(lvt_enum)))
 			continue;
 
 		/*
@@ -3080,7 +3123,6 @@ static int _lv_types_match(struct cmd_context *cmd, struct logical_volume *lv, u
 static int _lv_props_match(struct cmd_context *cmd, struct logical_volume *lv, uint64_t lvp_bits,
 			   uint64_t *match_bits, uint64_t *unmatch_bits)
 {
-	const struct lv_prop *prop;
 	int lvp_enum;
 	int found_a_mismatch = 0;
 	int match;
@@ -3092,9 +3134,6 @@ static int _lv_props_match(struct cmd_context *cmd, struct logical_volume *lv, u
 
 	for (lvp_enum = 1; lvp_enum < LVP_COUNT; lvp_enum++) {
 		if (!lvp_bit_is_set(lvp_bits, lvp_enum))
-			continue;
-
-		if (!(prop = get_lv_prop(lvp_enum)))
 			continue;
 
 		match = _lv_is_prop(cmd, lv, lvp_enum);
@@ -3228,8 +3267,8 @@ static int _check_lv_rules(struct cmd_context *cmd, struct logical_volume *lv)
 					   &opts_match_count, &opts_unmatch_count);
 
 		if (rule->check_lvt_bits)
-			_lv_types_match(cmd, lv, rule->check_lvt_bits,
-					&lv_types_match_bits, &lv_types_unmatch_bits);
+			(void)_lv_types_match(cmd, lv, rule->check_lvt_bits,
+					      &lv_types_match_bits, &lv_types_unmatch_bits);
 
 		if (rule->check_lvp_bits)
 			_lv_props_match(cmd, lv, rule->check_lvp_bits,
@@ -3382,8 +3421,6 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 			  process_single_lv_fn_t process_single_lv)
 {
 	log_report_t saved_log_report_state = log_get_report_state();
-	char lv_uuid[64] __attribute__((aligned(8)));
-	char vg_uuid[64] __attribute__((aligned(8)));
 	int ret_max = ECMD_PROCESSED;
 	int ret = 0;
 	int whole_selected = 0;
@@ -3396,22 +3433,15 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 	int lv_arg_pos;
 	struct lv_list *lvl;
 	struct dm_str_list *sl;
-	struct dm_list final_lvs;
+	DM_LIST_INIT(final_lvs);
 	struct lv_list *final_lvl;
-	struct dm_list found_arg_lvnames;
+	DM_LIST_INIT(found_arg_lvnames);
 	struct glv_list *glvl, *tglvl;
 	int do_report_ret_code = 1;
 
 	cmd->online_vg_file_removed = 0;
 
 	log_set_report_object_type(LOG_REPORT_OBJECT_TYPE_LV);
-
-	vg_uuid[0] = '\0';
-	if (!id_write_format(&vg->id, vg_uuid, sizeof(vg_uuid)))
-		stack;
-
-	dm_list_init(&final_lvs);
-	dm_list_init(&found_arg_lvnames);
 
 	if (tags_in && !dm_list_empty(tags_in))
 		tags_supplied = 1;
@@ -3436,19 +3466,15 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 	    (tags_supplied && str_list_match_list(tags_in, &vg->tags, NULL)))
 		process_all = 1;
 
-	log_set_report_object_group_and_group_id(vg->name, vg_uuid);
+	log_set_report_object_group_and_group_id(vg->name, &vg->id);
 
 	dm_list_iterate_items(lvl, &vg->lvs) {
-		lv_uuid[0] = '\0';
-		if (!id_write_format(&lvl->lv->lvid.id[1], lv_uuid, sizeof(lv_uuid)))
-			stack;
-
-		log_set_report_object_name_and_id(lvl->lv->name, lv_uuid);
-
 		if (sigint_caught()) {
 			ret_max = ECMD_FAILED;
 			goto_out;
 		}
+
+		log_set_report_object_name_and_id(lvl->lv->name, &lvl->lv->lvid.id[1]);
 
 		if (lv_is_snapshot(lvl->lv))
 			continue;
@@ -3519,7 +3545,7 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 		if (!process_lv)
 			continue;
 
-		log_very_verbose("Adding %s to the list of LVs to be processed.", display_lvname(lvl->lv));
+		log_very_verbose("Adding %s to the list of LVs to be processed.", lvl->lv->name);
 
 		if (!(final_lvl = dm_pool_zalloc(cmd->mem, sizeof(struct lv_list)))) {
 			log_error("Failed to allocate final LV list item.");
@@ -3543,16 +3569,13 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 	label_scan_invalidate_lvs(cmd, &final_lvs);
 
 	dm_list_iterate_items(lvl, &final_lvs) {
-		lv_uuid[0] = '\0';
-		if (!id_write_format(&lvl->lv->lvid.id[1], lv_uuid, sizeof(lv_uuid)))
-			stack;
-
-		log_set_report_object_name_and_id(lvl->lv->name, lv_uuid);
-
 		if (sigint_caught()) {
 			ret_max = ECMD_FAILED;
 			goto_out;
 		}
+
+		log_set_report_object_name_and_id(lvl->lv->name, &lvl->lv->lvid.id[1]);
+
 		/*
 		 *  FIXME: Once we have index over vg->removed_lvs, check directly
 		 *         LV presence there and remove LV_REMOVE flag/lv_is_removed fn
@@ -3561,6 +3584,7 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 		if (lv_is_removed(lvl->lv))
 			continue;
 
+		/* coverity[check_return]  lv_is_named_arg is checked as needed */
 		lv_is_named_arg = str_list_match_item(&found_arg_lvnames, lvl->lv->name);
 
 		lv_arg_pos = _find_lv_arg_position(cmd, lvl->lv);
@@ -3618,16 +3642,13 @@ int process_each_lv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 		_historical_lv.vg = vg;
 
 		dm_list_iterate_items_safe(glvl, tglvl, &vg->historical_lvs) {
-			lv_uuid[0] = '\0';
-			if (!id_write_format(&glvl->glv->historical->lvid.id[1], lv_uuid, sizeof(lv_uuid)))
-				stack;
-
-			log_set_report_object_name_and_id(glvl->glv->historical->name, lv_uuid);
-
 			if (sigint_caught()) {
 				ret_max = ECMD_FAILED;
 				goto_out;
 			}
+
+			log_set_report_object_name_and_id(glvl->glv->historical->name,
+							  &glvl->glv->historical->lvid.id[1]);
 
 			if (glvl->glv->historical->fresh)
 				continue;
@@ -3991,7 +4012,7 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t read_flag
 	struct dm_str_list *sl;
 	struct dm_list *tags_arg;
 	struct dm_list lvnames;
-	uint32_t lockd_state = 0;
+	struct lockd_state lks;
 	uint32_t error_flags = 0;
 	const char *vg_name;
 	const char *vg_uuid;
@@ -4007,6 +4028,11 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t read_flag
 	log_set_report_object_type(LOG_REPORT_OBJECT_TYPE_VG);
 
 	dm_list_iterate_items(vgnl, vgnameids_to_process) {
+		if (sigint_caught()) {
+			ret_max = ECMD_FAILED;
+			goto_out;
+		}
+
 		vg_name = vgnl->vg_name;
 		vg_uuid = vgnl->vgid;
 		skip = 0;
@@ -4017,12 +4043,7 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t read_flag
 		if (vg_uuid && !id_write_format((const struct id*)vg_uuid, uuid, sizeof(uuid)))
 			stack;
 
-		log_set_report_object_name_and_id(vg_name, uuid);
-
-		if (sigint_caught()) {
-			ret_max = ECMD_FAILED;
-			goto_out;
-		}
+		log_set_report_object_name_and_id(vg_name, (const struct id*)vg_uuid);
 
 		/*
 		 * arg_lvnames contains some elements that are just "vgname"
@@ -4058,13 +4079,14 @@ static int _process_lv_vgnameid_list(struct cmd_context *cmd, uint32_t read_flag
 		log_very_verbose("Processing VG %s %s", vg_name, vg_uuid ? uuid : "");
 
 do_lockd:
-		if (is_lockd && !lockd_vg(cmd, vg_name, NULL, 0, &lockd_state)) {
+		memset(&lks, 0, sizeof(lks));
+		if (is_lockd && !lockd_vg(cmd, vg_name, NULL, 0, &lks)) {
 			ret_max = ECMD_FAILED;
 			report_log_ret_code(ret_max);
 			continue;
 		}
 
-		vg = vg_read(cmd, vg_name, vg_uuid, read_flags, lockd_state, &error_flags, &error_vg);
+		vg = vg_read(cmd, vg_name, vg_uuid, read_flags, &lks, &error_flags, &error_vg);
 		if (_ignore_vg(cmd, error_flags, error_vg, vg_name, arg_vgnames, read_flags, &skip, &notfound)) {
 			stack;
 			ret_max = ECMD_FAILED;
@@ -4098,7 +4120,7 @@ do_lockd:
 		unlock_vg(cmd, vg, vg_name);
 endvg:
 		release_vg(vg);
-		if (is_lockd && !lockd_vg(cmd, vg_name, "un", 0, &lockd_state))
+		if (is_lockd && !lockd_vg(cmd, vg_name, "un", 0, &lks))
 			stack;
 		log_set_report_object_name_and_id(NULL, NULL);
 	}
@@ -4500,7 +4522,6 @@ static int _process_pvs_in_vg(struct cmd_context *cmd,
 			      process_single_pv_fn_t process_single_pv)
 {
 	log_report_t saved_log_report_state = log_get_report_state();
-	char pv_uuid[64] __attribute__((aligned(8)));
 	char vg_uuid[64] __attribute__((aligned(8)));
 	int handle_supplied = handle != NULL;
 	struct physical_volume *pv;
@@ -4530,21 +4551,35 @@ static int _process_pvs_in_vg(struct cmd_context *cmd,
 	}
 
 	if (!is_orphan_vg(vg->name))
-		log_set_report_object_group_and_group_id(vg->name, vg_uuid);
+		log_set_report_object_group_and_group_id(vg->name, &vg->id);
 
 	dm_list_iterate_items(pvl, &vg->pvs) {
-		pv = pvl->pv;
-		pv_name = pv_dev_name(pv);
-		pv_uuid[0]='\0';
-		if (!id_write_format(&pv->id, pv_uuid, sizeof(pv_uuid)))
-			stack;
-
-		log_set_report_object_name_and_id(pv_name, pv_uuid);
-
 		if (sigint_caught()) {
 			ret_max = ECMD_FAILED;
 			goto_out;
 		}
+
+		pv = pvl->pv;
+		pv_name = pv_dev_name(pv);
+
+		/*
+		 * The VG metadata being processed here believes that this PV
+		 * is part of the VG, but the headers/metadata on the PV may
+		 * say differently.  This can happen if the VG metadata being
+		 * processed here is outdated, e.g. from an old device that
+		 * has been reattached and has outdated metadata that no longer
+		 * reflects how other PVs are used.
+		 *
+		 * So, before processing PV as part of VG, check that the
+		 * metadata from PV shows the same.  Info about what's on
+		 * PV is kept in lvmcache info struct for PV.
+		 */
+		if (pv->wrong_vg) {
+			log_debug("ignoring claim of PV %s by VG %s.", pv_name, vg->name);
+			continue;
+		}
+
+		log_set_report_object_name_and_id(pv_name, &pv->id);
 
 		process_pv = process_all_pvs;
 		dil = NULL;
@@ -4640,13 +4675,12 @@ static int _process_pvs_in_vgs(struct cmd_context *cmd, uint32_t read_flags,
 			       process_single_pv_fn_t process_single_pv)
 {
 	log_report_t saved_log_report_state = log_get_report_state();
-	char uuid[64] __attribute__((aligned(8)));
 	struct volume_group *vg;
 	struct volume_group *error_vg;
 	struct vgnameid_list *vgnl;
 	const char *vg_name;
 	const char *vg_uuid;
-	uint32_t lockd_state = 0;
+	struct lockd_state lks;
 	uint32_t error_flags = 0;
 	int ret_max = ECMD_PROCESSED;
 	int ret;
@@ -4658,28 +4692,26 @@ static int _process_pvs_in_vgs(struct cmd_context *cmd, uint32_t read_flags,
 	log_set_report_object_type(LOG_REPORT_OBJECT_TYPE_VG);
 
 	dm_list_iterate_items(vgnl, all_vgnameids) {
+		if (sigint_caught()) {
+			ret_max = ECMD_FAILED;
+			goto_out;
+		}
+
 		vg_name = vgnl->vg_name;
 		vg_uuid = vgnl->vgid;
 		skip = 0;
 		notfound = 0;
 		is_lockd = lvmcache_vg_is_lockd_type(cmd, vg_name, vg_uuid);
 
-		uuid[0] = '\0';
 		if (is_orphan_vg(vg_name)) {
 			log_set_report_object_type(LOG_REPORT_OBJECT_TYPE_ORPHAN);
-			log_set_report_object_name_and_id(vg_name + sizeof(VG_ORPHANS), uuid);
+			log_set_report_object_name_and_id(vg_name + sizeof(VG_ORPHANS), NULL);
 		} else {
-			if (vg_uuid && !id_write_format((const struct id*)vg_uuid, uuid, sizeof(uuid)))
-				stack;
-			log_set_report_object_name_and_id(vg_name, uuid);
-		}
-
-		if (sigint_caught()) {
-			ret_max = ECMD_FAILED;
-			goto_out;
+			log_set_report_object_name_and_id(vg_name, (const struct id*)vg_uuid);
 		}
 do_lockd:
-		if (is_lockd && !lockd_vg(cmd, vg_name, NULL, 0, &lockd_state)) {
+		memset(&lks, 0, sizeof(lks));
+		if (is_lockd && !lockd_vg(cmd, vg_name, NULL, 0, &lks)) {
 			ret_max = ECMD_FAILED;
 			report_log_ret_code(ret_max);
 			continue;
@@ -4689,7 +4721,7 @@ do_lockd:
 
 		error_flags = 0;
 
-		vg = vg_read(cmd, vg_name, vg_uuid, read_flags, lockd_state, &error_flags, &error_vg);
+		vg = vg_read(cmd, vg_name, vg_uuid, read_flags, &lks, &error_flags, &error_vg);
 		if (_ignore_vg(cmd, error_flags, error_vg, vg_name, NULL, read_flags, &skip, &notfound) ||
 		    (!vg && !error_vg)) {
 			stack;
@@ -4732,7 +4764,7 @@ endvg:
 		if (error_vg)
 			unlock_and_release_vg(cmd, error_vg, vg_name);
 		release_vg(vg);
-		if (is_lockd && !lockd_vg(cmd, vg_name, "un", 0, &lockd_state))
+		if (is_lockd && !lockd_vg(cmd, vg_name, "un", 0, &lks))
 			stack;
 
 		/* Quit early when possible. */
@@ -4758,6 +4790,7 @@ int process_each_pv(struct cmd_context *cmd,
 		    process_single_pv_fn_t process_single_pv)
 {
 	log_report_t saved_log_report_state = log_get_report_state();
+	int handle_supplied = handle != NULL;
 	struct dm_list arg_tags;	/* str_list */
 	struct dm_list arg_pvnames;	/* str_list */
 	struct dm_list arg_devices;	/* device_id_list */
@@ -4805,9 +4838,21 @@ int process_each_pv(struct cmd_context *cmd,
 		goto_out;
 	}
 
+	if (!handle && !(handle = init_processing_handle(cmd, NULL))) {
+		ret_max = ECMD_FAILED;
+		goto_out;
+	}
+
+	if (handle->internal_report_for_select && !handle->selection_handle &&
+	    !init_selection_handle(cmd, handle, PVS)) {
+		ret_max = ECMD_FAILED;
+		goto_out;
+	}
+
 	if ((cmd->cname->flags & DISALLOW_TAG_ARGS) && !dm_list_empty(&arg_tags)) {
 		log_error("Tags cannot be used with this command.");
-		return ECMD_FAILED;
+		ret_max = ECMD_FAILED;
+		goto_out;
 	}
 
 	process_all_pvs = dm_list_empty(&arg_pvnames) && dm_list_empty(&arg_tags);
@@ -4873,6 +4918,9 @@ int process_each_pv(struct cmd_context *cmd,
 	}
 
 out:
+	if (!handle_supplied)
+		destroy_processing_handle(cmd, handle);
+
 	log_restore_report_state(saved_log_report_state);
 	return ret_max;
 }
@@ -4882,8 +4930,6 @@ int process_each_pv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 			  process_single_pv_fn_t process_single_pv)
 {
 	log_report_t saved_log_report_state = log_get_report_state();
-	char pv_uuid[64] __attribute__((aligned(8)));
-	char vg_uuid[64] __attribute__((aligned(8)));
 	int whole_selected = 0;
 	int ret_max = ECMD_PROCESSED;
 	int ret;
@@ -4892,24 +4938,16 @@ int process_each_pv_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 
 	log_set_report_object_type(LOG_REPORT_OBJECT_TYPE_PV);
 
-	vg_uuid[0] = '\0';
-	if (!id_write_format(&vg->id, vg_uuid, sizeof(vg_uuid)))
-		stack;
-
 	if (!is_orphan_vg(vg->name))
-		log_set_report_object_group_and_group_id(vg->name, vg_uuid);
+		log_set_report_object_group_and_group_id(vg->name, &vg->id);
 
 	dm_list_iterate_items(pvl, &vg->pvs) {
-		pv_uuid[0] = '\0';
-		if (!id_write_format(&pvl->pv->id, pv_uuid, sizeof(pv_uuid)))
-			stack;
-
-		log_set_report_object_name_and_id(pv_dev_name(pvl->pv), pv_uuid);
-
 		if (sigint_caught()) {
 			ret_max = ECMD_FAILED;
 			goto_out;
 		}
+
+		log_set_report_object_name_and_id(pv_dev_name(pvl->pv), &pvl->pv->id);
 
 		ret = process_single_pv(cmd, vg, pvl->pv, handle);
 		_update_selection_result(handle, &whole_selected);
@@ -5041,6 +5079,35 @@ int pvcreate_params_from_args(struct cmd_context *cmd, struct pvcreate_params *p
 		pp->pva.pvmetadatacopies = find_config_tree_int(cmd, metadata_pvmetadatacopies_CFG, NULL);
 
 	pp->pva.ba_size = arg_uint64_value(cmd, bootloaderareasize_ARG, pp->pva.ba_size);
+
+	if (!strcmp(cmd->name, "vgcreate")) {
+		int shared_vg = arg_is_set(cmd, shared_ARG);
+		int setpersist_on;
+
+		if (arg_is_set(cmd, setpersist_ARG) &&
+		    !setpersist_arg_flags(arg_str_value(cmd, setpersist_ARG, NULL), &pp->setpersist_flags))
+			return_0;
+
+		setpersist_on = (pp->setpersist_flags & (SETPR_Y | SETPR_REQUIRE | SETPR_AUTOSTART)) ? 1 : 0;
+
+		pp->start_pr = arg_is_set(cmd, persist_ARG); /* --persist start is the only permitted option */
+
+		if (!shared_vg && arg_is_set(cmd, locktype_ARG)) {
+			int lock_type_num = get_lock_type_from_string(arg_str_value(cmd, locktype_ARG, NULL));
+			if (lock_type_num == LOCK_TYPE_SANLOCK || lock_type_num == LOCK_TYPE_DLM)
+				shared_vg = 1;
+		}
+
+		if (!setpersist_on && shared_vg && pp->start_pr) {
+			log_error("A shared VG should include --setpersist y|require to use PR.");
+			return 0;
+		}
+
+		/* Automatic PR start for shared VGs because lockstart is automatic in vgcreate,
+		   and PR start happens before lockstart. */
+		if (setpersist_on && shared_vg)
+			pp->start_pr = 1;
+	}
 
 	return 1;
 }
@@ -5179,7 +5246,7 @@ static void _check_pvcreate_prompt(struct cmd_context *cmd,
 	}
 
 	if (answer_yes && answer_no) {
-		log_warn("WARNING: prompt answer yes is overridden by prompt answer no.");
+		log_warn("WARNING: Prompt answer yes is overridden by prompt answer no.");
 		answer_yes = 0;
 	}
 
@@ -5597,6 +5664,7 @@ int pvcreate_each_device(struct cmd_context *cmd,
 	unsigned int prev_pbs = 0, prev_lbs = 0;
 	int must_use_all = (cmd->cname->flags & MUST_USE_ALL_ARGS);
 	int unlocked_for_prompts = 0;
+	int setpersist_on;
 	int found;
 	unsigned i;
 
@@ -5973,6 +6041,87 @@ do_command:
 		dm_list_splice(&pp->arg_create, &pp->arg_process);
 
 	/*
+	 * It would be nice to not do PR stuff in this function, but
+	 * - it's not nice to do it before this function, because the
+	 *   needed list of devs is not available until this function.
+	 * - it's not nice to do it after this function, because if
+	 *   PR is unsupported, it's better to fail the command before
+	 *   writing the new PVs here.  Also, if we're going to use PR,
+	 *   it's nicer to get the reservation before writing anything.
+	 *
+	 * Usually, setpersist (writing PR settings in VG metadata)
+	 * is separate from persist start (starting PR on devices).
+	 * Both steps can be optionally combined in one command with:
+	 * --setpersist y --persist start.  So,
+	 *
+	 * . vgcreate --setpersist y                   does not start PR
+	 * . vgcreate --persist start                  does start PR
+	 * . vgcreate --setpersist y --persist start   does start PR
+	 *
+	 * A special case which does not follow this pattern is creating
+	 * a shared VG, where PR is started even without --persist start
+	 * when setpersist is enabled:
+	 *
+	 * . vgcreate --shared --setpersist y          does start PR
+	 *
+	 * This case is different because creating a shared VG includes
+	 * automatically starting the VG lockspace.  The proper sequence
+	 * of using a shared VG is first starting PR, then starting the
+	 * lockspace.  So, to maintain this proper sequence, the vgcreate
+	 * needs to include an automatic PR start prior to the automatic
+	 * lock start.
+	 *
+	 * Creating a shared VG without setpersist, but PR start is
+	 * currently disallowed, because it's not clear if this
+	 * combination would ever be useful.
+	 *
+	 * . vgcreate --shared --persist start         disallowed
+	 */
+
+	setpersist_on = (pp->setpersist_flags & (SETPR_Y | SETPR_REQUIRE | SETPR_AUTOSTART)) ? 1 : 0;
+
+	if (pp->start_pr || setpersist_on) {
+		DM_LIST_INIT(devs);
+		char *local_key = (char *)find_config_tree_str(cmd, local_pr_key_CFG, NULL);
+		int local_host_id = find_config_tree_int(cmd, local_host_id_CFG, NULL);
+		int key_count;
+
+		if (!local_key && !local_host_id) {
+			log_error("A local pr_key or host_id is required to use PR (see lvmlocal.conf).");
+			return 0;
+		}
+
+		dm_list_iterate_items(pd, &pp->arg_create) {
+			if (!dev_allow_pr(cmd, pd->dev)) {
+				log_error("persistent reservation not supported for device type %s", dev_name(pd->dev));
+				return 0;
+			}
+		}
+
+		dm_list_iterate_items(pd, &pp->arg_create) {
+			/* find_key is just being used here to test if the dev supports PR commands. */
+			if (!dev_find_key(cmd, pd->dev, 1, 0, NULL, 0, NULL, 1, &key_count, NULL)) {
+				log_error("Failed to access persistent reservation on %s.", dev_name(pd->dev));
+				return 0;
+			}
+		}
+
+		if (pp->start_pr) {
+			dm_list_iterate_items(pd, &pp->arg_create) {
+				if (!(devl = dm_pool_alloc(cmd->mem, sizeof(*devl))))
+					return_0;
+				devl->dev = pd->dev;
+				dm_list_add(&devs, &devl->list);
+			}
+
+			if (!persist_vgcreate_begin(cmd, pp->vg_name, local_key, local_host_id, pp->setpersist_flags, &devs)) {
+				log_error("Failed to start persistent reservation.");
+				return 0;
+			}
+		}
+	}
+
+	/*
 	 * Wipe signatures on devices being created.
 	 */
 	dm_list_iterate_items_safe(pd, pd2, &pp->arg_create) {
@@ -6202,3 +6351,104 @@ int get_rootvg_dev_uuid(struct cmd_context *cmd, char **dm_uuid_out)
 
 	return 1;
 }
+
+/*
+ * Starting persistent reservations
+ *
+ * Direct
+ * ------
+ * . vgchange --persist start
+ *
+ *   Calls persist start directly.
+ *   Does not use VG_PR_AUTOSTART or VG_PR_REQUIRE.
+ *
+ * Automatic
+ * ---------
+ * . vgchange --persist autostart
+ * . vgchange -aay
+ * . vgchange --lockstart --lockopt auto
+ *
+ *   Will do persist start if the "autostart" VG flag is set.
+ *   (from vgchange --setpersist y|autostart; VG_PR_AUTOSTART flag.)
+ *   Will first call persist start if the VG_PR_AUTOSTART flag is set.
+ *   Command stops/fails if persist start fails and VG_PR_REQUIRE is set,
+ *   i.e. any subsequent activation or lockstart requires persist start.
+ *
+ * Supplementary
+ * -------------
+ * . vgchange -ay --persist start
+ * . vgchange -aay --persist start
+ * . vgchange --lockstart --persist start
+ * . vgchange --setpersist y|require|autostart --persist start
+ * . vgimport --persist start
+ * . vgchange --systemid <to_self> --persist start [--removekey remkey]
+ *
+ *   Will first call persist start (VG_PR_AUTOSTART does not apply.)
+ *   Will stop/fail if persist start fails (VG_PR_REQUIRE does not apply.)
+ *
+ * Stopping persistent reservations
+ *
+ * Direct
+ * ------
+ * . vgchange --persist stop
+ *
+ *   Calls persist stop directly.
+ *   Does not use VG_PR_AUTOSTART or VG_PR_REQUIRE.
+ *
+ * Supplementary
+ * -------------
+ * . vgchange -an --persist stop
+ * . vgchange --lockstop --persist stop
+ * . vgexport --persist stop
+ * . vgchange --systemid <to_other> --persist stop
+ *
+ *   Will call persist stop at the end if
+ *   the prior action (deactivat/stop) was successful.
+ *
+ * Automatic
+ * ---------
+ * . vgremove, if either VG_PR flag is set.
+ */
+
+int persist_start_include(struct cmd_context *cmd, struct volume_group *vg,
+			  int autoactivate, int autolockstart, const char *remkey)
+{
+	const char *op = arg_str_value(cmd, persist_ARG, NULL);
+
+	/*
+	 * Supplementary start: --persist start was added to the command.
+	 */
+	if (op && !strcmp(op, "start")) {
+		if (!persist_start(cmd, vg, remkey, NULL)) {
+			log_error("Failed to start persistent reservation.");
+			return 0;
+		}
+		return 1;
+	}
+
+	/*
+	 * Automatic start: VG_PR_AUTOSTART was set (from vgchange --setpersist y|autostart).
+	 * VG_PR_AUTOSTART applies to vgchange -aay and vgchange --lockstart --lockopt auto.
+	 *
+	 * "vgchange -aay" and "vgchange --lockstart --lockopt auto" are the automatic
+	 * forms of "vgchange -ay" and "vgchange --lockstart".  The automatic
+	 * persist start goes with automatic activation/lockstart, and direct
+	 * persist start goes with the direct activation/lockstart.
+	 * i.e. we assume that "vgchange -ay" and "vgchange --lockstart" are
+	 * not automatically run, and therefore "--persist start" can be added
+	 * to those commands if it's wanted.
+	 */
+	if ((vg->pr & VG_PR_AUTOSTART) && (autoactivate || autolockstart)) {
+		if (!persist_start(cmd, vg, NULL, NULL)) {
+			if (vg->pr & VG_PR_REQUIRE) {
+				log_error("Failed to autostart persistent reservation.");
+				return 0;
+			} else {
+				log_warn("WARNING: Failed to autostart persistent reservation (not required.)");
+			}
+		}
+	}
+
+	return 1;
+}
+

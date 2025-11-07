@@ -191,8 +191,8 @@ static bool _insert_unset(struct radix_tree *rt, struct value *v, const uint8_t 
 		v->value = rv;
 		rt->nr_entries++;
 	} else {
-		// prefix -> value
-		struct prefix_chain *pc = zalloc(sizeof(*pc) + len);
+		// prefix -> value (all fields explicitly initialized)
+		struct prefix_chain *pc = malloc(sizeof(*pc) + len);
 		if (!pc)
 			return false;
 
@@ -267,7 +267,8 @@ static bool _insert_prefix_chain(struct radix_tree *rt, struct value *v, const u
 			if (kb[i] != pc->prefix[i])
 				break;
 
-		if (!(pc2 = zalloc(sizeof(*pc2) + pc->len - i)))
+		// All fields of pc2 are explicitly initialized
+		if (!(pc2 = malloc(sizeof(*pc2) + pc->len - i)))
 			return false;
 		pc2->len = pc->len - i;
 		memmove(pc2->prefix, pc->prefix + i, pc2->len);
@@ -279,7 +280,7 @@ static bool _insert_prefix_chain(struct radix_tree *rt, struct value *v, const u
 		pc->len = i;
 
 		if (!_insert(rt, &pc->child, kb + i, ke, rv)) {
-			free(pc2);
+			free(pc->child.value.ptr);
 			return false;
 		}
 
@@ -293,6 +294,7 @@ static bool _insert_prefix_chain(struct radix_tree *rt, struct value *v, const u
 		if (pc->len == 1) {
 			n4->values[0] = pc->child;
 			free(pc);
+			v->value.ptr = NULL;
 		} else {
 			memmove(pc->prefix, pc->prefix + 1, pc->len - 1);
 			pc->len--;
@@ -443,7 +445,8 @@ static bool _insert(struct radix_tree *rt, struct value *v, const uint8_t *kb, c
 			v->value = rv;
 
 		} else {
-			struct value_chain *vc = zalloc(sizeof(*vc));
+			// All fields explicitly initialized
+			struct value_chain *vc = malloc(sizeof(*vc));
 			if (!vc)
 				return false;
 
@@ -564,20 +567,11 @@ bool radix_tree_insert(struct radix_tree *rt, const void *key, size_t keylen, un
 	return _insert(rt, lr.v, lr.kb, ke, rv);
 }
 
-// Note the degrade functions also free the original node.
-static void _degrade_to_n4(struct node16 *n16, struct value *result)
+int radix_tree_uniq_insert(struct radix_tree *rt, const void *key, size_t keylen, union radix_value rv)
 {
-	struct node4 *n4 = zalloc(sizeof(*n4));
-
-	assert(n4 != NULL);
-
-	n4->nr_entries = n16->nr_entries;
-	memcpy(n4->keys, n16->keys, n16->nr_entries * sizeof(*n4->keys));
-	memcpy(n4->values, n16->values, n16->nr_entries * sizeof(*n4->values));
-	free(n16);
-
-	result->type = NODE4;
-	result->value.ptr = n4;
+	unsigned entries = rt->nr_entries;
+	return radix_tree_insert(rt, key, keylen, rv) ?
+		((entries != rt->nr_entries) ? 1 : -1) : 0;
 }
 
 static void _degrade_to_n16(struct node48 *n48, struct value *result)
@@ -660,9 +654,10 @@ static bool _remove(struct radix_tree *rt, struct value *root, const uint8_t *kb
 			return true;
 
 		} else if (root->type == VALUE_CHAIN) {
+			// Free value_chain after copying child out
 			vc = root->value.ptr;
 			_dtr(rt, vc->value);
-			memcpy(root, &vc->child, sizeof(*root));
+			*root = vc->child;
 			free(vc);
 			return true;
 
@@ -736,8 +731,9 @@ static bool _remove(struct radix_tree *rt, struct value *root, const uint8_t *kb
 					}
 
 					n16->nr_entries--;
-					if (n16->nr_entries <= 4) {
-						_degrade_to_n4(n16, root);
+					if (!n16->nr_entries) {
+						free(n16);
+						root->type = UNSET;
 					}
 				}
 				return r;
@@ -892,8 +888,10 @@ static bool _remove_subtree(struct radix_tree *rt, struct value *root, const uin
 					}
 
 					n16->nr_entries--;
-					if (n16->nr_entries <= 4)
-						_degrade_to_n4(n16, root);
+					if (!n16->nr_entries) {
+						free(n16);
+						root->type = UNSET;
+					}
 				}
 				return r;
 			}

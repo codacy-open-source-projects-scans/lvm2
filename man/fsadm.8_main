@@ -1,46 +1,58 @@
-.TH "FSADM" "8" "LVM TOOLS #VERSION#" "Red Hat, Inc" "\""
+.TH "FSADM" "8" "LVM TOOLS #VERSION#" "Red Hat, Inc." \" -*- nroff -*-
 .
-.SH "NAME"
+.de NSY
+.  ie t .SY \\$1
+.  el \{\
+.    ie \\n(.$>1 \{\
+.      PD 0
+.      TP \\w'\\$1\ 'u
+.    \}
+.    el .TP
+.    B \\$1
+.    nh
+.    na
+.  \}
+..
+.
+.SH NAME
 .
 fsadm \(em utility to resize or check filesystem on a device
 .
 .SH SYNOPSIS
 .
-.PD 0
-.ad l
-.TP 6
-.B fsadm
+.NSY fsadm 1
 .RI [ options ]
-.BR check
-.IR device
+.B  check
+.I  device
 .
-.TP
-.B fsadm
+.NSY fsadm
 .RI [ options ]
-.BR resize
-.IR device
+.B  resize
+.I  device
 .RI [ new_size ]
-.ad b
+.
 .PD
+.ad
+.hy
 .
 .SH DESCRIPTION
 .
-fsadm utility checks or resizes the filesystem on a device (can be
-also dm-crypt encrypted device).
+The fsadm utility checks or resizes the filesystem on a device
+(which can also be a dm-crypt encrypted device).
 It tries to use the same API for
 .BR ext2 ,
 .BR ext3 ,
 .BR ext4 ,
-.BR ReiserFS
+.B  ReiserFS
 and
-.BR XFS
-filesystem.
+.B  XFS
+filesystems.
 .
 .SH OPTIONS
 .
 .TP
 .BR -e | --ext-offline
-Unmount ext2/ext3/ext4 filesystem before doing resize.
+Unmount ext2/\:ext3/\:ext4 filesystem before doing resize.
 .
 .TP
 .BR -f | --force
@@ -52,7 +64,7 @@ Display the help text.
 .
 .TP
 .BR -l | --lvresize
-Resize also given lvm2 logical volume. More volume management
+Also resize the given lvm2 logical volume. More volume management
 functionality is provided with complementary \fBlvresize\fP(8) and the option
 .BR -r | --resizefs.
 .
@@ -70,10 +82,12 @@ Answer "yes" at any prompts.
 .
 .TP
 .BR -c | --cryptresize
-Resize dm-crypt mapping together with filesystem detected on the device. The dm-crypt device must be recognizable by cryptsetup(8).
+Resize dm-crypt mapping together with filesystem detected on the device.
+The dm-crypt device must be recognizable by cryptsetup(8).
 .
 .TP
-.BR \fInew_size [ B | K | M | G | T | P | E ]
+.IR new_size [\c
+.BR B | K | M | G | T | P | E ]
 Absolute number of filesystem blocks to be in the filesystem,
 or an absolute size using a suffix (in powers of 1024).
 If new_size is not supplied, the whole device is used.
@@ -82,19 +96,19 @@ If new_size is not supplied, the whole device is used.
 .
 On successful completion, the status code is 0.
 A status code of 2 indicates the operation was interrupted by the user.
-A status code of 3 indicates the requested check operation could not be performed
-because the filesystem is mounted and does not support an online
+A status code of 3 indicates the requested check operation
+could not be performed because the filesystem is mounted
+and does not support an online
 .BR fsck (8).
 A status code of 1 is used for other failures.
 .
 .SH EXAMPLES
 .
-Resize the filesystem on logical volume \fI/dev/vg/test\fP to 1000 megabytes.
+Resize the filesystem on logical volume \fI/dev/vg/test\fP to 1000\ MiB.
 If \fI/dev/vg/test\fP contains ext2/ext3/ext4
-filesystem it will be unmounted prior the resize.
+filesystem it will be unmounted prior to the resize.
 All [y/n] questions will be answered 'y'.
 .P
-#
 .B fsadm -e -y resize /dev/vg/test 1000M
 .
 .SH ENVIRONMENT VARIABLES
@@ -102,6 +116,7 @@ All [y/n] questions will be answered 'y'.
 .TP
 .B TMPDIR
 The temporary directory name for mount points. Defaults to "\fI/tmp\fP".
+.
 .TP
 .B DM_DEV_DIR
 The device directory name.
@@ -110,7 +125,7 @@ Defaults to "\fI/dev\fP" and must be an absolute path.
 .SH SEE ALSO
 .
 .nh
-.ad l
+.na
 .BR lvm (8),
 .BR lvresize (8),
 .BR lvm.conf (5),

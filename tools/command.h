@@ -16,6 +16,10 @@
 #ifndef _LVM_COMMAND_H
 #define _LVM_COMMAND_H
 
+#include "tools/command_enums.h"
+
+#include <stdint.h>
+
 struct cmd_context;
 struct logical_volume;
 
@@ -28,10 +32,10 @@ struct command_function {
 };
 
 struct command_name {
-	const char *name;
+	const char name[16];
 	const char *desc; /* general command description from commands.h */
-	unsigned int flags;
 	command_fn fn; /* old style */
+	unsigned int flags;
 	uint16_t lvm_command_enum; /* as declared in commands.h with _COMMAND */
 };
 
@@ -154,12 +158,12 @@ struct cmd_rule {
  * of which one is required after which the rest are
  * optional.
  */
-#define CMD_RO_ARGS 32          /* required opt args */
-#define CMD_OO_ARGS 56          /* optional opt args */
-#define CMD_RP_ARGS 8           /* required positional args */
-#define CMD_OP_ARGS 8           /* optional positional args */
-#define CMD_IO_ARGS 8           /* ignore opt args */
-#define CMD_MAX_RULES 12        /* max number of rules per command def */
+#define CMD_RO_ARGS 28		/* required opt args (max used 25) */
+#define CMD_OO_ARGS 56		/* optional opt args (max used 53) */
+#define CMD_RP_ARGS 4		/* required positional args (max used 3) */
+#define CMD_OP_ARGS 2		/* optional positional args (max used 1) */
+#define CMD_IO_ARGS 4		/* ignore opt args (max used 3) */
+#define CMD_MAX_RULES 12	/* max number of rules per command def (max used 12) */
 
 /*
  * one or more from required_opt_args is required,

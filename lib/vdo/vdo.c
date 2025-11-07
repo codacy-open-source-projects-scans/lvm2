@@ -38,7 +38,7 @@ static int _bad_field(const char *field)
 static int _import_bool(const struct dm_config_node *n,
 			const char *name, bool *b)
 {
-	uint32_t t;
+	uint32_t t = 0;
 
 	if (dm_config_has_node(n, name)) {
 		if (!dm_config_get_uint32(n, name, &t))
@@ -74,9 +74,7 @@ static void _vdo_display(const struct lv_segment *seg)
 }
 
 static int _vdo_text_import(struct lv_segment *seg,
-			    const struct dm_config_node *n,
-			    struct dm_hash_table *pv_hash __attribute__((unused)),
-			    struct dm_hash_table *lv_hash)
+			    const struct dm_config_node *n)
 {
 	struct logical_volume *vdo_pool_lv;
 	const char *str;
@@ -85,7 +83,7 @@ static int _vdo_text_import(struct lv_segment *seg,
 	if (!dm_config_has_node(n, "vdo_pool") ||
 	    !(str = dm_config_find_str(n, "vdo_pool", NULL)))
 		return _bad_field("vdo_pool");
-	if (!(vdo_pool_lv = dm_hash_lookup(lv_hash, str))) {
+	if (!(vdo_pool_lv = find_lv(seg->lv->vg, str))) {
 		log_error("Unknown VDO pool logical volume %s.", str);
 		return 0;
 	}
@@ -174,16 +172,16 @@ static void _vdo_pool_display(const struct lv_segment *seg)
 	log_print("  Minimum IO size\t%s",
 		  display_size(cmd, vtp->minimum_io_size));
 	log_print("  Block map cache sz\t%s",
-		  display_size(cmd, vtp->block_map_cache_size_mb * UINT64_C(2 * 1024)));
+		  display_mb_size(cmd, vtp->block_map_cache_size_mb));
 	log_print("  Block map era length %u", vtp->block_map_era_length);
 
 	_print_yes_no("Sparse index", vtp->use_sparse_index);
 
 	log_print("  Index memory size\t%s",
-		  display_size(cmd, vtp->index_memory_size_mb * UINT64_C(2 * 1024)));
+		  display_mb_size(cmd, vtp->index_memory_size_mb));
 
 	log_print("  Slab size\t\t%s",
-		  display_size(cmd, vtp->slab_size_mb * UINT64_C(2 * 1024)));
+		  display_mb_size(cmd, vtp->slab_size_mb));
 
 	log_print("  # Ack threads\t%u", (unsigned) vtp->ack_threads);
 	log_print("  # Bio threads\t%u", (unsigned) vtp->bio_threads);
@@ -207,9 +205,7 @@ static int _vdo_pool_text_import_area_count(const struct dm_config_node *sn __at
 }
 
 static int _vdo_pool_text_import(struct lv_segment *seg,
-				 const struct dm_config_node *n,
-				 struct dm_hash_table *pv_hash __attribute__((unused)),
-				 struct dm_hash_table *lv_hash)
+				 const struct dm_config_node *n)
 {
 	struct dm_vdo_target_params *vtp = &seg->vdo_params;
 	struct logical_volume *data_lv;
@@ -218,7 +214,7 @@ static int _vdo_pool_text_import(struct lv_segment *seg,
 	if (!dm_config_has_node(n, "data") ||
 	    !(str = dm_config_find_str(n, "data", NULL)))
 		return _bad_field("data");
-	if (!(data_lv = dm_hash_lookup(lv_hash, str))) {
+	if (!(data_lv = find_lv(seg->lv->vg, str))) {
 		log_error("Unknown logical volume %s.", str);
 		return 0;
 	}

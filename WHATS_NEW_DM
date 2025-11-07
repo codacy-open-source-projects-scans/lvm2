@@ -1,5 +1,45 @@
-Version 1.02.202 - 
+Version 1.02.211 - 
 ===================
+  Dmeventd starts to use mutex per thread.
+  Consolidate dmsetup stats display functions using helper macros.
+  Refactor dmsetup _process_tree_options to use bsearch.
+
+Version 1.02.210 - 24th October 2025
+====================================
+
+Version 1.02.209 - 09th September 2025
+======================================
+
+Version 1.02.208 - 30th July 2025
+=================================
+
+Version 1.02.207 - 27th June 2025
+=================================
+  Escape the escape character itself on JSON report format output.
+  Fail dm_report_group_create if radix char from locale unsuitable for JSON_STD.
+
+Version 1.02.206 - 05th May 2025
+================================
+  Add support for using regex in selection criteria for string lists.
+  Fix string list selection when using [<item> || <item> ...].
+
+Version 1.02.205 - 27th February 2025
+=====================================
+  Restore missing symbol dm_tree_node_size_changed@Base (1.02.175).
+  Restore missing symbol dm_bitset_parse_list@@DM_1_02_138 (1.02.175).
+
+Version 1.02.204 - 14th January 2025
+====================================
+  Create /dev/disk/by-diskseq/<DISKSEQ> symlink for public DM devices.
+
+Version 1.02.203 - 09th December 2024
+=====================================
+
+Version 1.02.202 - 04th November 2024
+=====================================
+  Introduce dm_config_parse_only_section to stop parsing after section.
+  For shorter string use on stack buffers when generating sections.
+  Enhance dm_config tokenizer.
 
 Version 1.02.201 - 02nd October 2024
 ====================================
@@ -260,7 +300,7 @@ Version 1.02.136 - 5th November 2016
   Still produce output when dmsetup dependency tree building finds dev missing.
   Check and report pthread_sigmask() failure in dmeventd.
   Check mem alloc fail in _canonicalize_field_ids().
-  Use unsigned math when checking more then 31 legs of raid.
+  Use unsigned math when checking more than 31 legs of raid.
   Fix 'dmstats delete' with dmsetup older than v1.02.129
   Fix stats walk segfault with dmsetup older than v1.02.129
 

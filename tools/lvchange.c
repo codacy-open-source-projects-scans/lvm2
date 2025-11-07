@@ -206,7 +206,7 @@ static int _lvchange_activate(struct cmd_context *cmd, struct logical_volume *lv
 		return 0;
 	}
 
-	if (lv_activation_skip(lv, activate, arg_is_set(cmd, ignoreactivationskip_ARG)))
+	if (lv_activation_skip(lv, activate, arg_count(cmd, ignoreactivationskip_ARG)))
 		return 1;
 
 	if (lv_is_cow(lv) && !lv_is_virtual_origin(origin_from_cow(lv)))
@@ -282,6 +282,7 @@ static int _attach_metadata_devices(struct lv_segment *seg, struct dm_list *list
 		return 1;
 	}
 
+	/* coverity[unreachable] intentional single iteration to get first item */
 	dm_list_iterate_items(lvl, list)
 		break;  /* get first item */
 
@@ -359,8 +360,7 @@ static int _lvchange_resync(struct cmd_context *cmd, struct logical_volume *lv)
 	if (monitored != DMEVENTD_MONITOR_IGNORE)
 		init_dmeventd_monitor(monitored);
 	init_mirror_in_sync(0);
-	if (!sync_local_dev_names(cmd))
-		log_warn("WARNING: Failed to sync local dev names.");
+	sync_local_dev_names(cmd);
 
 	log_very_verbose("Starting resync of %s%s%s%s %s.",
 			 (active) ? "active " : "",
@@ -414,7 +414,7 @@ static int _lvchange_resync(struct cmd_context *cmd, struct logical_volume *lv)
 	/* No backup for intermediate metadata, so just unlock memory */
 	memlock_unlock(lv->vg->cmd);
 
-	if (!activate_and_wipe_lvlist(&device_list, 0))
+	if (!activate_and_wipe_lvlist(&device_list, WIPE_MODE_DO_ZERO, 0, 0))
 		return 0;
 
 	/* Put metadata sub-LVs back in place */
@@ -689,7 +689,7 @@ static int _lvchange_writecache(struct cmd_context *cmd,
 		 * Empty settings can be used to clear all current settings,
 		 * lvchange --cachesettings "" vg/lv
 		 */
-		if (!arg_count(cmd, yes_ARG) &&
+		if (!arg_is_set(cmd, yes_ARG) &&
 		    yes_no_prompt("Clear all writecache settings? ") == 'n') {
 			log_print("No settings changed.");
 			return 1;
@@ -736,9 +736,9 @@ static int _lvchange_cache(struct cmd_context *cmd,
 		goto_out;
 
 	if (seg_is_cache(seg) && lv_is_cache_vol(seg->pool_lv) && (mode == CACHE_MODE_WRITEBACK)) {
-		log_warn("WARNING: repairing a damaged cachevol is not yet possible.");
-		log_warn("WARNING: cache mode writethrough is suggested for safe operation.");
-		if (!arg_count(cmd, yes_ARG) &&
+		log_warn("WARNING: Repairing a damaged cachevol is not yet possible.");
+		log_warn("WARNING: Cache mode writethrough is suggested for safe operation.");
+		if (!arg_is_set(cmd, yes_ARG) &&
 			yes_no_prompt("Continue using writeback without repair?") == 'n')
 			goto_out;
 	}
@@ -888,7 +888,7 @@ static int _lvchange_integrity(struct cmd_context *cmd,
 	if (set_count)
 		goto out;
 
-	if (!arg_count(cmd, yes_ARG) &&
+	if (!arg_is_set(cmd, yes_ARG) &&
 	    yes_no_prompt("Clear all integrity settings? ") == 'n') {
 		log_print("No settings changed.");
 		return 1;
@@ -1360,8 +1360,11 @@ static int _lvchange_properties_single(struct cmd_context *cmd,
 	for (i = 0; i < cmd->command->ro_count + cmd->command->any_ro_count; i++) {
 		opt_enum = cmd->command->required_opt_args[i].opt;
 
-		if (!arg_is_set(cmd, opt_enum))
-			continue;
+		if (!arg_is_set(cmd, opt_enum)) {
+			if ((opt_enum != metadataprofile_ARG) ||
+			    !arg_is_set(cmd, profile_ARG))
+				continue;
+		}
 
 		/*
 		 * Skip options requiring direct commit/reload
@@ -1715,6 +1718,10 @@ int lvchange_activate_cmd(struct cmd_context *cmd, int argc, char **argv)
 	if (do_activate)
 		cmd->lockd_vg_enforce_sh = 1;
 
+	/* Allow deactivating without PR started. */
+	if (!do_activate)
+		cmd->disable_pr_required = 1;
+
 	/* When activating, check if given LV is a component LV */
 	if (do_activate) {
 		if ((argc == 1) && is_component_lvname(argv[0])) {
@@ -1773,6 +1780,9 @@ static int _lvchange_refresh_check(struct cmd_context *cmd,
 				       struct processing_handle *handle,
 				       int lv_is_named_arg)
 {
+	if (lv_is_lockd_sanlock_lv(lv) && lv_is_named_arg)
+		return 1;
+
 	if (!lv_is_visible(lv)) {
 		if (lv_is_named_arg)
 			log_error("Operation not permitted on hidden LV %s.", display_lvname(lv));

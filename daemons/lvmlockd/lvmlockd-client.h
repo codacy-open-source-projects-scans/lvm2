@@ -57,5 +57,14 @@ static inline void lvmlockd_close(daemon_handle h)
 #define EORPHAN   222
 #define EADOPT_NONE  223
 #define EADOPT_RETRY 224
+#define EIOTIMEOUT   225
+#define ELOCKREPAIR  226
+
+#define LOCKARGS_VERSION	0x00000001 /* meta only */
+#define LOCKARGS_LVMLOCK	0x00000002 /* meta only */
+#define LOCKARGS_TIMEOUT        0x00000004 /* user only */
+#define LOCKARGS_NOTIMEOUT      0x00000008 /* meta or user */
+#define LOCKARGS_PERSIST        0x00000010 /* meta or user */
+#define LOCKARGS_NOPERSIST      0x00000020 /* user only */
 
 #endif	/* _LVM_LVMLOCKD_CLIENT_H */

@@ -177,15 +177,15 @@ static void _xlate_mdah(struct mda_header *mdah)
 {
 	struct raw_locn *rl;
 
-	mdah->version = xlate32(mdah->version);
-	mdah->start = xlate64(mdah->start);
-	mdah->size = xlate64(mdah->size);
+	mdah->version = htole32(mdah->version);
+	mdah->start = htole64(mdah->start);
+	mdah->size = htole64(mdah->size);
 
 	rl = &mdah->raw_locns[0];
 	while (rl->offset) {
-		rl->checksum = xlate32(rl->checksum);
-		rl->offset = xlate64(rl->offset);
-		rl->size = xlate64(rl->size);
+		rl->checksum = htole32(rl->checksum);
+		rl->offset = htole64(rl->offset);
+		rl->size = htole64(rl->size);
 		rl++;
 	}
 }
@@ -193,20 +193,20 @@ static void _xlate_mdah(struct mda_header *mdah)
 static int _raw_read_mda_header(struct mda_header *mdah, struct device_area *dev_area,
 				int primary_mda, uint32_t ignore_bad_fields, uint32_t *bad_fields)
 {
-	log_debug_metadata("Reading mda header sector from %s at %llu",
+	log_debug_metadata("Reading mda header sector from %s at %llu.",
 			   dev_name(dev_area->dev), (unsigned long long)dev_area->start);
 
 	if (!dev_read_bytes(dev_area->dev, dev_area->start, MDA_HEADER_SIZE, mdah)) {
-		log_error("Failed to read metadata area header on %s at %llu",
+		log_error("Failed to read metadata area header on %s at %llu.",
 			  dev_name(dev_area->dev), (unsigned long long)dev_area->start);
 		*bad_fields |= BAD_MDA_READ;
 		return 0;
 	}
 
-	if (mdah->checksum_xl != xlate32(calc_crc(INITIAL_CRC, (uint8_t *)mdah->magic,
+	if (mdah->checksum_xl != htole32(calc_crc(INITIAL_CRC, (uint8_t *)mdah->magic,
 						  MDA_HEADER_SIZE -
 						  sizeof(mdah->checksum_xl)))) {
-		log_warn("WARNING: wrong checksum %x in mda header on %s at %llu",
+		log_warn("WARNING: Wrong checksum %x in mda header on %s at %llu.",
 			  mdah->checksum_xl,
 			  dev_name(dev_area->dev), (unsigned long long)dev_area->start);
 		*bad_fields |= BAD_MDA_CHECKSUM;
@@ -215,20 +215,20 @@ static int _raw_read_mda_header(struct mda_header *mdah, struct device_area *dev
 	_xlate_mdah(mdah);
 
 	if (memcmp(mdah->magic, FMTT_MAGIC, sizeof(mdah->magic))) {
-		log_warn("WARNING: wrong magic number in mda header on %s at %llu",
+		log_warn("WARNING: Wrong magic number in mda header on %s at %llu.",
 			  dev_name(dev_area->dev), (unsigned long long)dev_area->start);
 		*bad_fields |= BAD_MDA_MAGIC;
 	}
 
 	if (mdah->version != FMTT_VERSION) {
-		log_warn("WARNING: wrong version %u in mda header on %s at %llu",
+		log_warn("WARNING: Wrong version %u in mda header on %s at %llu.",
 			  mdah->version,
 			  dev_name(dev_area->dev), (unsigned long long)dev_area->start);
 		*bad_fields |= BAD_MDA_VERSION;
 	}
 
 	if (mdah->start != dev_area->start) {
-		log_warn("WARNING: wrong start sector %llu in mda header on %s at %llu",
+		log_warn("WARNING: Wrong start sector %llu in mda header on %s at %llu.",
 			  (unsigned long long)mdah->start,
 			  dev_name(dev_area->dev), (unsigned long long)dev_area->start);
 		*bad_fields |= BAD_MDA_START;
@@ -271,7 +271,7 @@ static int _raw_write_mda_header(const struct format_type *fmt,
 	mdah->start = start_byte;
 
 	_xlate_mdah(mdah);
-	mdah->checksum_xl = xlate32(calc_crc(INITIAL_CRC, (uint8_t *)mdah->magic,
+	mdah->checksum_xl = htole32(calc_crc(INITIAL_CRC, (uint8_t *)mdah->magic,
 					     MDA_HEADER_SIZE -
 					     sizeof(mdah->checksum_xl)));
 
@@ -337,7 +337,7 @@ static uint64_t _next_rlocn_offset(struct volume_group *vg, struct raw_locn *rlo
 
 	/* This has only been designed to work with 512. */
 	if (alignment != 512)
-		log_warn("WARNING: metadata alignment should be 512 not %llu",
+		log_warn("WARNING: Metadata alignment should be 512 not %llu.",
 			 (unsigned long long)alignment);
 
 	/*
@@ -475,13 +475,13 @@ static struct volume_group *_vg_read_raw(struct cmd_context *cmd,
 		 */
 		struct device *dev = mdac->area.dev;
 		struct lvmcache_info *info = lvmcache_info_from_pvid(dev->pvid, dev, 0);
-		log_warn("WARNING: reading %s mda%d failed to read metadata.", dev_name(dev), mda_is_primary(mda)?1:2);
-		log_warn("WARNING: repair VG metadata on %s with vgck --updatemetadata.", dev_name(dev));
+		log_warn("WARNING: Reading %s mda%d failed to read metadata.", dev_name(dev), mda_is_primary(mda)?1:2);
+		log_warn("WARNING: Repair VG metadata on %s with vgck --updatemetadata.", dev_name(dev));
 		if (info)
 			/* remove mda from lvmcache, saving it in info->bad_mdas for possible repair with updatemetadata */
 			lvmcache_del_save_bad_mda(info, mda->mda_num, BAD_MDA_TEXT);
 		else
-			log_warn("WARNING: No cache info for %s", dev_name(dev));
+			log_warn("WARNING: No cache info for %s.", dev_name(dev));
 
 		/* remove mda from fid */
 		fid_remove_mda(fid, mda, NULL, 0, 0);
@@ -722,7 +722,7 @@ static int _vg_write_raw(struct format_instance *fid, struct volume_group *vg,
 
 	rlocn_old = &mdah->raw_locns[0];  /* slot0, committed metadata */
 
-	if (rlocn_is_ignored(rlocn_old))
+	if (_rlocn_is_ignored(rlocn_old))
 		rlocn_old = NULL;
 
 	else if (!rlocn_old->offset && !rlocn_old->size)
@@ -1047,7 +1047,7 @@ static int _vg_commit_raw_rlocn(struct format_instance *fid,
 	rlocn_slot0 = &mdab->raw_locns[0];
 	rlocn_slot1 = &mdab->raw_locns[1];
 
-	if (rlocn_is_ignored(rlocn_slot0) || (!rlocn_slot0->offset && !rlocn_slot0->size)) {
+	if (_rlocn_is_ignored(rlocn_slot0) || (!rlocn_slot0->offset && !rlocn_slot0->size)) {
 		rlocn_slot0->offset = 0;
 		rlocn_slot0->size = 0;
 		rlocn_slot0->checksum = 0;
@@ -1110,7 +1110,7 @@ static int _vg_commit_raw_rlocn(struct format_instance *fid,
 			   (!mdac->rlocn.size) ? "empty ": "",
 			   vg->seqno, dev_name(mdac->area.dev),
 			   (unsigned long long)mdac->area.start,
-			   mda_is_ignored(mda) ? "(ignored)" : "(used)");
+			   _mda_is_ignored(mda) ? "(ignored)" : "(used)");
 
 	log_debug_metadata("VG %s metadata %scommit %sslot0 offset %llu size %llu slot1 offset %llu size %llu.",
 			   vg->name,
@@ -1303,7 +1303,7 @@ static int _vg_write_file(struct format_instance *fid __attribute__((unused)),
 	slash = strrchr(tc->path_edit, '/');
 
 	if (slash == 0)
-		strcpy(temp_dir, ".");
+		dm_strncpy(temp_dir, ".", sizeof(temp_dir));
 	else if (slash - tc->path_edit < PATH_MAX) {
 		dm_strncpy(temp_dir, tc->path_edit,
 			   (size_t) (slash - tc->path_edit + 1));
@@ -1558,7 +1558,7 @@ int read_metadata_location_summary(const struct format_type *fmt,
 				(off_t) (dev_area->start + MDA_HEADER_SIZE),
 				wrap, calc_crc, vgsummary->vgname ? 1 : 0,
 				vgsummary)) {
-		log_warn("WARNING: metadata on %s at %llu has invalid summary for VG.",
+		log_warn("WARNING: Metadata on %s at %llu has invalid summary for VG.",
 			  dev_name(dev_area->dev),
 			  (unsigned long long)(dev_area->start + rlocn->offset));
 		return 0;
@@ -1566,7 +1566,7 @@ int read_metadata_location_summary(const struct format_type *fmt,
 
 	/* Ignore this entry if the characters aren't permissible */
 	if (!validate_name(vgsummary->vgname)) {
-		log_warn("WARNING: metadata on %s at %llu has invalid VG name.",
+		log_warn("WARNING: Metadata on %s at %llu has invalid VG name.",
 			  dev_name(dev_area->dev),
 			  (unsigned long long)(dev_area->start + rlocn->offset));
 		return 0;
@@ -2079,6 +2079,7 @@ static void *_create_text_context(struct dm_pool *mem, struct text_context *tc)
 	struct text_context *new_tc;
 	const char *path;
 	char *tmp;
+	size_t len;
 
 	if (!tc)
 		return NULL;
@@ -2099,9 +2100,10 @@ static void *_create_text_context(struct dm_pool *mem, struct text_context *tc)
 
 	/* If path_edit not defined, create one from path_live with .tmp suffix. */
 	if (!tc->path_edit) {
-		if (!(tmp = dm_pool_alloc(mem, strlen(path) + 5)))
+		len = strlen(path) + 5;
+		if (!(tmp = dm_pool_alloc(mem, len)))
 			goto_bad;
-		sprintf(tmp, "%s.tmp", path);
+		(void)dm_snprintf(tmp, len, "%s.tmp", path);
 		new_tc->path_edit = tmp;
 	}
 	else if (!(new_tc->path_edit = dm_pool_strdup(mem, tc->path_edit)))
@@ -2195,7 +2197,7 @@ static int _add_metadata_area_to_pv(struct physical_volume *pv,
 
 	if (!(mdac = dm_pool_zalloc(pv->fid->mem, sizeof(struct mda_context)))) {
 		log_error("struct mda_context allocation failed");
-		free(mda);
+		dm_pool_free(pv->fid->mem, mda);
 		return 0;
 	}
 

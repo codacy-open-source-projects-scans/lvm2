@@ -678,6 +678,7 @@ SILENT_RULES
 SHARED_LINK
 SELINUX_STATIC_LIBS
 SELINUX_PC
+SD_NOTIFY_SUPPORT
 SBINDIR
 RT_LIBS
 PYTHON3DIR
@@ -787,6 +788,8 @@ LIBSYSTEMD_LIBS
 LIBSYSTEMD_CFLAGS
 UDEV_LIBS
 UDEV_CFLAGS
+LIBNVME_LIBS
+LIBNVME_CFLAGS
 BLKID_LIBS
 BLKID_CFLAGS
 SYSTEMD_RUN_CMD
@@ -912,6 +915,7 @@ enable_silent_rules
 enable_static_link
 enable_shared
 with_blkid
+with_libnvme
 with_systemd
 with_udev
 with_user
@@ -971,8 +975,10 @@ enable_use_lvmpolld
 with_lvmpolld_pidfile
 enable_systemd_journal
 enable_app_machineid
+enable_sd_notify
 with_systemd_run
 enable_blkid_wiping
+enable_nvme_wwid
 enable_udev_sync
 enable_udev_rules
 enable_udev_rule_exec_detection
@@ -1045,6 +1051,8 @@ LIBSEAGATEILM_CFLAGS
 LIBSEAGATEILM_LIBS
 BLKID_CFLAGS
 BLKID_LIBS
+LIBNVME_CFLAGS
+LIBNVME_LIBS
 UDEV_CFLAGS
 UDEV_LIBS
 LIBSYSTEMD_CFLAGS
@@ -1713,8 +1721,10 @@ Optional Features:
   --disable-systemd-journal
                           disable LVM systemd journaling
   --disable-app-machineid disable LVM system ID using app-specific machine-id
+  --disable-sd-notify     disable LVM sd_notify
   --disable-blkid_wiping  disable libblkid detection of signatures when wiping
                           and use native code instead
+  --disable-nvme-wwid     do not use libnvme to detect alternate WWIDs
   --enable-udev_sync      enable synchronization with udev processing
   --enable-udev_rules     install rule files needed for udev synchronization
   --enable-udev-rule-exec-detection
@@ -1741,6 +1751,7 @@ Optional Packages:
   --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
   --without-PACKAGE       do not use PACKAGE (same as --with-PACKAGE=no)
   --without-blkid         do not build with blkid library
+  --without-libnvme       do not build with libnvme library
   --without-systemd       do not build with systemd library
   --without-udev          do not build with udev library
   --with-user=USER        set the owner of installed files [USER=]
@@ -1880,6 +1891,10 @@ Some influential environment variables:
   BLKID_CFLAGS
               C compiler flags for BLKID, overriding pkg-config
   BLKID_LIBS  linker flags for BLKID, overriding pkg-config
+  LIBNVME_CFLAGS
+              C compiler flags for LIBNVME, overriding pkg-config
+  LIBNVME_LIBS
+              linker flags for LIBNVME, overriding pkg-config
   UDEV_CFLAGS C compiler flags for UDEV, overriding pkg-config
   UDEV_LIBS   linker flags for UDEV, overriding pkg-config
   LIBSYSTEMD_CFLAGS
@@ -9128,6 +9143,16 @@ esac
 fi
 
 
+# Check whether --with-libnvme was given.
+if test ${with_libnvme+y}
+then :
+  withval=$with_libnvme;
+else case e in #(
+  e) with_libnvme="yes" ;;
+esac
+fi
+
+
 # Check whether --with-systemd was given.
 if test ${with_systemd+y}
 then :
@@ -12149,6 +12174,31 @@ printf "%s\n" "$BUILD_LOCKDSANLOCK" >&6; }
 if test "$BUILD_LOCKDSANLOCK" = "yes"
 then :
 
+	LOCKDSANLOCK_SUPPORT=370
+	if test -n "$PKG_CONFIG" && \
+    { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libsanlock_client >= 4.0.0\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libsanlock_client >= 4.0.0") 2>&5
+  ac_status=$?
+  printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  LOCKDSANLOCK_SUPPORT=400
+fi
+	if test -n "$PKG_CONFIG" && \
+    { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libsanlock_client >= 4.1.0\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libsanlock_client >= 4.1.0") 2>&5
+  ac_status=$?
+  printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  LOCKDSANLOCK_SUPPORT=410
+fi
+	if test -n "$PKG_CONFIG" && \
+    { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libsanlock_client >= 4.2.0\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libsanlock_client >= 4.2.0") 2>&5
+  ac_status=$?
+  printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  LOCKDSANLOCK_SUPPORT=420
+fi
 
 pkg_failed=no
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for libsanlock_client >= 3.7.0" >&5
@@ -12241,7 +12291,7 @@ printf "%s\n" "yes" >&6; }
         BUILD_LVMLOCKD="yes"
 fi
 
-printf "%s\n" "#define LOCKDSANLOCK_SUPPORT 1" >>confdefs.h
+printf "%s\n" "#define LOCKDSANLOCK_SUPPORT $LOCKDSANLOCK_SUPPORT" >>confdefs.h
 
 
 fi
@@ -12724,9 +12774,18 @@ SYSTEMD_MIN_VERSION=0
 NOTIFYDBUS_SUPPORT="no"
 SYSTEMD_JOURNAL_SUPPORT="no"
 APP_MACHINEID_SUPPORT="no"
+SD_NOTIFY_SUPPORT="no"
 if test "$with_systemd" = "yes"
 then :
   if test -n "$PKG_CONFIG" && \
+    { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"systemd >= 218\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "systemd >= 218") 2>&5
+  ac_status=$?
+  printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  SYSTEMD_MIN_VERSION=218 SD_NOTIFY_SUPPORT="maybe"
+fi
+      if test -n "$PKG_CONFIG" && \
     { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"systemd >= 221\""; } >&5
   ($PKG_CONFIG --exists --print-errors "systemd >= 221") 2>&5
   ac_status=$?
@@ -12811,6 +12870,41 @@ if test "$APP_MACHINEID_SUPPORT" = "yes"
 then :
 
 printf "%s\n" "#define APP_MACHINEID_SUPPORT 1" >>confdefs.h
+
+fi
+
+################################################################################
+if test "$SD_NOTIFY_SUPPORT" != "no"
+then :
+  ac_fn_c_check_header_compile "$LINENO" "systemd/sd-daemon.h" "ac_cv_header_systemd_sd_daemon_h" "$ac_includes_default"
+if test "x$ac_cv_header_systemd_sd_daemon_h" = xyes
+then :
+  SD_NOTIFY_SUPPORT="yes"
+else case e in #(
+  e) SD_NOTIFY_SUPPORT="no" ;;
+esac
+fi
+
+fi
+# Check whether --enable-sd-notify was given.
+if test ${enable_sd_notify+y}
+then :
+  enableval=$enable_sd_notify; if test "$enableval" = "yes" && test "$SD_NOTIFY_SUPPORT" = "no"
+then :
+  as_fn_error $? "--enable-sd-notify requires systemd/sd-daemon.h. (--with-systemd=$with_systemd)" "$LINENO" 5
+fi
+	      SD_NOTIFY_SUPPORT=$enableval
+fi
+
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking whether to enable to sd_notify" >&5
+printf %s "checking whether to enable to sd_notify... " >&6; }
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $SD_NOTIFY_SUPPORT" >&5
+printf "%s\n" "$SD_NOTIFY_SUPPORT" >&6; }
+
+if test "$SD_NOTIFY_SUPPORT" = "yes"
+then :
+
+printf "%s\n" "#define SD_NOTIFY_SUPPORT 1" >>confdefs.h
 
 fi
 
@@ -13130,6 +13224,181 @@ printf "%s\n" "#define DEFAULT_USE_BLKID_WIPING $DEFAULT_USE_BLKID_WIPING" >>con
 
 
 ################################################################################
+# Check whether --enable-nvme-wwid was given.
+if test ${enable_nvme_wwid+y}
+then :
+  enableval=$enable_nvme_wwid; NVME_WWID=$enableval
+else case e in #(
+  e) if test "$with_libnvme" = "yes"
+then :
+  NVME_WWID="maybe"
+else case e in #(
+  e) NVME_WWID="no" ;;
+esac
+fi ;;
+esac
+fi
+
+
+# ATM NVME_WWID is the only user of libnvme, so skip checking for libnvme when disabled
+if test "$NVME_WWID" = "no"
+then :
+  with_libnvme="no"
+fi
+
+if test "$with_libnvme" = "yes"
+then :
+
+
+pkg_failed=no
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for libnvme >= 1.4" >&5
+printf %s "checking for libnvme >= 1.4... " >&6; }
+
+if test -n "$LIBNVME_CFLAGS"; then
+    pkg_cv_LIBNVME_CFLAGS="$LIBNVME_CFLAGS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libnvme >= 1.4\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libnvme >= 1.4") 2>&5
+  ac_status=$?
+  printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_LIBNVME_CFLAGS=`$PKG_CONFIG --cflags "libnvme >= 1.4" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+if test -n "$LIBNVME_LIBS"; then
+    pkg_cv_LIBNVME_LIBS="$LIBNVME_LIBS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"libnvme >= 1.4\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "libnvme >= 1.4") 2>&5
+  ac_status=$?
+  printf "%s\n" "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_LIBNVME_LIBS=`$PKG_CONFIG --libs "libnvme >= 1.4" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+
+
+
+if test $pkg_failed = yes; then
+        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
+printf "%s\n" "no" >&6; }
+
+if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
+        _pkg_short_errors_supported=yes
+else
+        _pkg_short_errors_supported=no
+fi
+        if test $_pkg_short_errors_supported = yes; then
+                LIBNVME_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "libnvme >= 1.4" 2>&1`
+        else
+                LIBNVME_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "libnvme >= 1.4" 2>&1`
+        fi
+        # Put the nasty error message in config.log where it belongs
+        echo "$LIBNVME_PKG_ERRORS" >&5
+
+        if test "$NVME_WWID" = "yes"
+then :
+  NVME_WWID="error"
+else case e in #(
+  e) NVME_WWID="no" ;;
+esac
+fi
+elif test $pkg_failed = untried; then
+        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
+printf "%s\n" "no" >&6; }
+        if test "$NVME_WWID" = "yes"
+then :
+  NVME_WWID="error"
+else case e in #(
+  e) NVME_WWID="no" ;;
+esac
+fi
+else
+        LIBNVME_CFLAGS=$pkg_cv_LIBNVME_CFLAGS
+        LIBNVME_LIBS=$pkg_cv_LIBNVME_LIBS
+        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+printf "%s\n" "yes" >&6; }
+
+		{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for NVME_NIDT_CSI in libnvme.h" >&5
+printf %s "checking for NVME_NIDT_CSI in libnvme.h... " >&6; }
+if test ${ac_cv_have_libnvme_csi+y}
+then :
+  printf %s "(cached) " >&6
+else case e in #(
+  e) cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <libnvme.h>
+const int a = NVME_NIDT_CSI;
+
+int
+main (void)
+{
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"
+then :
+  ac_cv_have_libnvme_csi="yes"
+else case e in #(
+  e) ac_cv_have_libnvme_csi="no" ;;
+esac
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.beam conftest.$ac_ext ;;
+esac
+fi
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_have_libnvme_csi" >&5
+printf "%s\n" "$ac_cv_have_libnvme_csi" >&6; }
+
+		if test "$NVME_WWID" != "no"
+then :
+
+		      if test $ac_cv_have_libnvme_csi = yes
+then :
+  NVME_WWID="yes"
+
+printf "%s\n" "#define NVME_SUPPORT 1" >>confdefs.h
+
+else case e in #(
+  e) NVME_WWID="error" ;;
+esac
+fi
+fi
+
+fi
+
+else case e in #(
+  e) if test "$NVME_WWID" = "yes"
+then :
+  NVME_WWID="error"
+fi ;;
+esac
+fi
+
+if test "$NVME_WWID" = "error"
+then :
+  as_fn_error $? "--enable-nvme-wwid requires libnvme library >= 1.1. (--with-libnvme=$with_libnvme)" "$LINENO" 5
+fi
+
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking whether to use libnvme for alternate WWIDs" >&5
+printf %s "checking whether to use libnvme for alternate WWIDs... " >&6; }
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $NVME_WWID" >&5
+printf "%s\n" "$NVME_WWID" >&6; }
+
+################################################################################
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking whether to enable synchronization with udev processing" >&5
 printf %s "checking whether to enable synchronization with udev processing... " >&6; }
 # Check whether --enable-udev_sync was given.
@@ -13427,7 +13696,11 @@ printf "%s\n" "$BUILD_LVMDBUSD" >&6; }
 # Check whether --enable-notify-dbus was given.
 if test ${enable_notify_dbus+y}
 then :
-  enableval=$enable_notify_dbus; NOTIFYDBUS_SUPPORT=$enableval
+  enableval=$enable_notify_dbus; if test "enableval" = "yes" && test "$NOTIFYDBUS_SUPPORT" = "no"
+then :
+  as_fn_error $? "--enable-notify-dbus requires systemd >= 221. (--with-systemd=$with_systemd)" "$LINENO" 5
+fi
+	       NOTIFYDBUS_SUPPORT=$enableval
 fi
 
 
@@ -13444,10 +13717,6 @@ fi
 
 if test "$NOTIFYDBUS_SUPPORT" = "yes"
 then :
-  if test "$SYSTEMD_MIN_VERSION" -lt 221
-then :
-  as_fn_error $? "--enable-notify-dbus requires systemd >= 221. (--with-systemd=$with_systemd)" "$LINENO" 5
-fi
 
 printf "%s\n" "#define NOTIFYDBUS_SUPPORT 1" >>confdefs.h
 
@@ -13459,9 +13728,9 @@ printf %s "checking whether to build notifydbus... " >&6; }
 printf "%s\n" "$NOTIFYDBUS_SUPPORT" >&6; }
 
 ################################################################################
-if test "$NOTIFYDBUS_SUPPORT" = "yes" || test "$SYSTEMD_JOURNAL_SUPPORT" = "yes" || test "$APP_MACHINEID_SUPPORT" = "yes"
+if test "$NOTIFYDBUS_SUPPORT" = "yes" || test "$SYSTEMD_JOURNAL_SUPPORT" = "yes" ||
+       test "$APP_MACHINEID_SUPPORT" = "yes" || test "$SD_NOTIFY_SUPPORT" = "yes"
 then :
-
 
 pkg_failed=no
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for libsystemd" >&5
@@ -13553,7 +13822,6 @@ else
 printf "%s\n" "yes" >&6; }
 
 fi
-
 fi
 
 ################################################################################
@@ -13880,7 +14148,21 @@ try:
     if python_implementation() == 'CPython' and sys.version[:3] == '2.7':
         can_use_sysconfig = 0
 except ImportError:
-    pass"
+    pass" # end of am_python_setup_sysconfig
+
+  # More repeated code, for figuring out the installation scheme to use.
+  am_python_setup_scheme="if hasattr(sysconfig, 'get_default_scheme'):
+      scheme = sysconfig.get_default_scheme()
+    else:
+      scheme = sysconfig._get_default_scheme()
+    if scheme == 'posix_local':
+      if '$am_py_prefix' == '/usr':
+        scheme = 'deb_system' # should only happen during Debian package builds
+      else:
+        # Debian's default scheme installs to /usr/local/ but we want to
+        # follow the prefix, as we always have.
+        # See bugs#54412, #64837, et al.
+        scheme = 'posix_prefix'" # end of am_python_setup_scheme
 
 
               { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for $am_display_PYTHON script directory (pythondir)" >&5
@@ -13897,7 +14179,11 @@ else case e in #(
    am_cv_python_pythondir=`$PYTHON -c "
 $am_python_setup_sysconfig
 if can_use_sysconfig:
-  sitedir = sysconfig.get_path('purelib', vars={'base':'$am_py_prefix'})
+  try:
+    $am_python_setup_scheme
+    sitedir = sysconfig.get_path('purelib', scheme, vars={'base':'$am_py_prefix'})
+  except:
+    sitedir = sysconfig.get_path('purelib', vars={'base':'$am_py_prefix'})
 else:
   from distutils import sysconfig
   sitedir = sysconfig.get_python_lib(0, 0, prefix='$am_py_prefix')
@@ -13927,7 +14213,7 @@ printf "%s\n" "$am_cv_python_pythondir" >&6; }
           pkgpythondir=\${pythondir}/$PACKAGE
 
 
-          { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for $am_display_PYTHON extension module directory (pyexecdir)" >&5
+            { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for $am_display_PYTHON extension module directory (pyexecdir)" >&5
 printf %s "checking for $am_display_PYTHON extension module directory (pyexecdir)... " >&6; }
 if test ${am_cv_python_pyexecdir+y}
 then :
@@ -13941,7 +14227,11 @@ else case e in #(
    am_cv_python_pyexecdir=`$PYTHON -c "
 $am_python_setup_sysconfig
 if can_use_sysconfig:
-  sitedir = sysconfig.get_path('platlib', vars={'platbase':'$am_py_exec_prefix'})
+  try:
+    $am_python_setup_scheme
+    sitedir = sysconfig.get_path('platlib', scheme, vars={'platbase':'$am_py_exec_prefix'})
+  except:
+    sitedir = sysconfig.get_path('platlib', vars={'platbase':'$am_py_exec_prefix'})
 else:
   from distutils import sysconfig
   sitedir = sysconfig.get_python_lib(1, 0, prefix='$am_py_exec_prefix')
@@ -14290,7 +14580,7 @@ printf %s "checking whether to compile liblvm2cmd.so... " >&6; }
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $CMDLIB" >&5
 printf "%s\n" "$CMDLIB" >&6; }
 
-if test "$CMDLIB" == "yes" && test "$SHARED_LINK" = "no"
+if test "$CMDLIB" = "yes" && test "$SHARED_LINK" = "no"
 then :
   as_fn_error $? "--enable-cmdlib requires dynamic linking." "$LINENO" 5
 fi
@@ -16221,6 +16511,11 @@ LVRESIZE_FS_HELPER_PATH="$LIBEXECDIR/lvresize_fs_helper"
 printf "%s\n" "#define LVRESIZE_FS_HELPER_PATH \"$LVRESIZE_FS_HELPER_PATH\"" >>confdefs.h
 
 
+LVMPERSIST_PATH="$SBINDIR/lvmpersist"
+
+printf "%s\n" "#define LVMPERSIST_PATH \"$LVMPERSIST_PATH\"" >>confdefs.h
+
+
 ################################################################################
 
 # Check whether --with-dmeventd-pidfile was given.
@@ -16423,6 +16718,7 @@ AIO_LIBS=${AIO_LIBS:--laio}
 
 
 ################################################################################
+
 
 
 
@@ -17959,5 +18255,11 @@ if test "$BUILD_LVMDBUSD" = "yes" && test "$NOTIFYDBUS_SUPPORT" = "no"
 then :
   { printf "%s\n" "$as_me:${as_lineno-$LINENO}: WARNING: Building D-Bus support without D-Bus notifications!" >&5
 printf "%s\n" "$as_me: WARNING: Building D-Bus support without D-Bus notifications!" >&2;}
+fi
+
+if test "$BUILD_LVMLOCKD" = "yes" && test "$SD_NOTIFY_SUPPORT" = "no"
+then :
+  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: WARNING: Building lvmlockd without sd-notify support may block!" >&5
+printf "%s\n" "$as_me: WARNING: Building lvmlockd without sd-notify support may block!" >&2;}
 fi
 

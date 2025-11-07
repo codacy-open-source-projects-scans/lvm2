@@ -17,6 +17,9 @@
 
 #include "lib/report/report.h"
 
+#include <langinfo.h>
+#include <locale.h>
+
 typedef enum {
 	REPORT_IDX_NULL = -1,
 	REPORT_IDX_SINGLE,
@@ -1148,7 +1151,7 @@ static int _do_report(struct cmd_context *cmd, struct processing_handle *handle,
 			else {
 				if (single_args->args_are_pvs)
 					r = process_each_pv(cmd, args->argc, args->argv, NULL,
-							    arg_is_set(cmd, all_ARG), 0,
+							    arg_is_set(cmd, all_ARG) ? 1 : 0, 0,
 							    handle, &_pvs_single);
 				else
 					r = process_each_vg(cmd, args->argc, args->argv, NULL, NULL,
@@ -1495,6 +1498,7 @@ int report_format_init(struct cmd_context *cmd)
 	struct single_report_args *single_args;
 	struct dm_report_group *new_report_group;
 	struct dm_report *tmp_log_rh = NULL;
+	const char * radixchar;
 
 	args.log_only = arg_is_set(cmd, logonly_ARG);
 	report_command_log = args.log_only || find_config_tree_bool(cmd, log_report_command_log_CFG, NULL);
@@ -1502,12 +1506,31 @@ int report_format_init(struct cmd_context *cmd)
 	if (!format_str || !strcmp(format_str, REPORT_FORMAT_NAME_BASIC)) {
 		args.report_group_type = (report_command_log && !args.log_only) ? DM_REPORT_GROUP_BASIC
 										: DM_REPORT_GROUP_SINGLE;
+		cmd->report_strict_type_mode = 0;
 	} else if (!strcmp(format_str, REPORT_FORMAT_NAME_JSON)) {
 		args.report_group_type = DM_REPORT_GROUP_JSON;
 		if (!report_command_log_config_set)
 			report_command_log = 1;
+		cmd->report_strict_type_mode = 0;
 	} else if (!strcmp(format_str, REPORT_FORMAT_NAME_JSON_STD)) {
 		args.report_group_type = DM_REPORT_GROUP_JSON_STD;
+
+		/*
+		 * json_std requires strict type mode. That means all NUM and BIN
+		 * fields are always reported as numeric values and not strings which
+		 * are synonyms to these numeric values.
+		 */
+		cmd->report_strict_type_mode = 1;
+
+		/* For json_std, the radix character must be '.'. */
+		radixchar = nl_langinfo(RADIXCHAR);
+		if (radixchar && strcmp(radixchar, ".")) {
+			log_debug("Radix character for current locale is '%s', json_std requires '.', "
+				  "overriding LC_NUMERIC locale to 'C'", radixchar);
+			setlocale(LC_NUMERIC, "C");
+			cmd->cmd_report.lc_numeric_override = 1;
+		}
+
 		if (!report_command_log_config_set)
 			report_command_log = 1;
 	} else {
@@ -1526,16 +1549,6 @@ int report_format_init(struct cmd_context *cmd)
 		log_error("Failed to create report group.");
 		return 0;
 	}
-
-	/*
-	 * JSON_STD requires strict type mode. That means all NUM and BIN
-	 * fields are always reported as numeric values and not strings which
-	 * are synonyms to these numeric values.
-	 */
-	if (args.report_group_type == DM_REPORT_GROUP_JSON_STD)
-		cmd->report_strict_type_mode = 1;
-	else
-		cmd->report_strict_type_mode = 0;
 
 	if (report_command_log) {
 		single_args = &args.single_args[REPORT_IDX_LOG];
@@ -1575,6 +1588,24 @@ bad:
 	if (tmp_log_rh)
 		dm_report_free(tmp_log_rh);
 	return 0;
+}
+
+void report_format_destroy(struct cmd_context *cmd)
+{
+	if (!dm_report_group_destroy(cmd->cmd_report.report_group))
+		stack;
+	cmd->cmd_report.report_group = NULL;
+
+	if (cmd->cmd_report.log_rh) {
+		dm_report_free(cmd->cmd_report.log_rh);
+		cmd->cmd_report.log_rh = NULL;
+	}
+
+	if (cmd->cmd_report.lc_numeric_override) {
+		setlocale(LC_NUMERIC, "");
+		cmd->cmd_report.lc_numeric_override = 0;
+		log_debug("Setting LC_NUMERIC locale back after finished json_std report.");
+	}
 }
 
 int lastlog(struct cmd_context *cmd, int argc __attribute((unused)), char **argv __attribute__((unused)))

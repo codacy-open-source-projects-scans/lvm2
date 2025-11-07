@@ -200,7 +200,7 @@ int update_cache_pool_params(struct cmd_context *cmd,
 			     uint32_t pool_data_extents,
 			     uint32_t *pool_metadata_extents,
 			     struct logical_volume *metadata_lv,
-			     int *chunk_size_calc_method, uint32_t *chunk_size)
+			     unsigned *chunk_size_calc_policy, uint32_t *chunk_size)
 {
 	uint64_t min_meta_size;
 	uint64_t pool_metadata_size = (uint64_t) *pool_metadata_extents * extent_size;
@@ -212,6 +212,8 @@ int update_cache_pool_params(struct cmd_context *cmd,
 				    DM_CACHE_MIN_DATA_BLOCK_SIZE - 1) /
 				   DM_CACHE_MIN_DATA_BLOCK_SIZE) * DM_CACHE_MIN_DATA_BLOCK_SIZE;
 
+	*chunk_size_calc_policy = CHUNK_SIZE_CALC_POLICY_UNSELECTED;
+
 	if (!*chunk_size) {
 		if (!(*chunk_size = find_config_tree_int(cmd, allocation_cache_pool_chunk_size_CFG,
 							 profile) * 2)) {
@@ -222,7 +224,7 @@ int update_cache_pool_params(struct cmd_context *cmd,
 		}
 		if (*chunk_size < min_chunk_size) {
 			/*
-			 * When using more then 'standard' default,
+			 * When using more than 'standard' default,
 			 * keep user informed he might be using things in unintended direction
 			 */
 			log_print_unless_silent("Using %s chunk size instead of default %s, "
@@ -468,6 +470,7 @@ int lv_cache_wait_for_clean(struct logical_volume *cache_lv, int *is_clean)
 			if (cache_seg->cleaner_policy) {
 				cache_seg->cleaner_policy = 0;
 				/* Restore normal table */
+				sigint_clear();
 				if (!lv_update_and_reload_origin(cache_lv))
 					stack;
 			}
@@ -511,11 +514,7 @@ int lv_cache_wait_for_clean(struct logical_volume *cache_lv, int *is_clean)
 		if (!lv_update_and_reload_origin(cache_lv))
 			return_0;
 
-		if (!sync_local_dev_names(cache_lv->vg->cmd)) {
-			log_error("Failed to sync local devices when clearing cache volume %s.",
-				  display_lvname(cache_lv));
-			return 0;
-		}
+		sync_local_dev_names(cache_lv->vg->cmd);
 	}
 
 	/*
@@ -526,11 +525,7 @@ int lv_cache_wait_for_clean(struct logical_volume *cache_lv, int *is_clean)
 		if (!lv_refresh_suspend_resume(lock_lv))
 			return_0;
 
-		if (!sync_local_dev_names(cache_lv->vg->cmd)) {
-			log_error("Failed to sync local devices after final clearing of cache %s.",
-				  display_lvname(cache_lv));
-			return 0;
-		}
+		sync_local_dev_names(cache_lv->vg->cmd);
 	}
 
 	cache_seg->cleaner_policy = 0;
@@ -558,6 +553,7 @@ int lv_cache_remove(struct logical_volume *cache_lv)
 	struct id *data_id, *metadata_id;
 	uint64_t data_len, metadata_len;
 	cache_mode_t cache_mode;
+	int temp_activated = 0;
 	int is_clear;
 
 	if (!lv_is_cache(cache_lv)) {
@@ -572,11 +568,13 @@ int lv_cache_remove(struct logical_volume *cache_lv)
 		goto remove;  /* Already dropped */
 	}
 
-	/* Locally active volume is needed for writeback */
 	if (!lv_info(cache_lv->vg->cmd, cache_lv, 1, NULL, 0, 0)) {
-		/* Give up any remote locks */
-		if (!deactivate_lv_with_sub_lv(cache_lv))
-			return_0;
+
+		/*
+		 * LV is inactive.  When used in writeback, it will
+		 * need to be activated to write the cache content
+		 * back to the main LV before detaching it.
+		 */
 
 		cache_mode = (lv_is_cache_pool(cache_seg->pool_lv)) ?
 			first_seg(cache_seg->pool_lv)->cache_mode : cache_seg->cache_mode;
@@ -593,7 +591,6 @@ int lv_cache_remove(struct logical_volume *cache_lv)
 				return_0;
 			return 1;
 		default:
-			/* Otherwise locally activate volume to sync dirty blocks */
 			cache_lv->status |= LV_TEMPORARY;
 			if (!activate_lv(cache_lv->vg->cmd, cache_lv) ||
 			    !lv_is_active(cache_lv)) {
@@ -601,6 +598,7 @@ int lv_cache_remove(struct logical_volume *cache_lv)
 				return 0;
 			}
 			cache_lv->status &= ~LV_TEMPORARY;
+			temp_activated = 1;
 		}
 	}
 
@@ -619,8 +617,14 @@ int lv_cache_remove(struct logical_volume *cache_lv)
 	 * remove the cache_pool then without waiting for the flush to
 	 * complete.
 	 */
-	if (!lv_cache_wait_for_clean(cache_lv, &is_clear))
+	if (!lv_cache_wait_for_clean(cache_lv, &is_clear)) {
+		if (temp_activated && !deactivate_lv(cache_lv->vg->cmd, cache_lv))
+			stack;
 		return_0;
+	}
+
+	if (temp_activated && !deactivate_lv(cache_lv->vg->cmd, cache_lv))
+		log_warn("Failed to deactivate after cleaning cache.");
 
 	cache_pool_lv = cache_seg->pool_lv;
 	if (!detach_pool_lv(cache_seg))
@@ -1031,7 +1035,7 @@ int cache_vol_set_params(struct cmd_context *cmd,
 	 */
 
 	if (!(extent_size = pool_lv->vg->extent_size)) {
-		log_error(INTERNAL_ERROR "Extend size can't be 0.");
+		log_error(INTERNAL_ERROR "Extent size can't be 0.");
 		return 0;
 	}
 	min_meta_size = extent_size;
@@ -1165,8 +1169,8 @@ int cache_vol_set_params(struct cmd_context *cmd,
 		log_warn("WARNING: Data redundancy could be lost with writeback caching of raid logical volume!");
 
 	if (lv_is_thin_pool_data(cache_lv)) {
-		log_warn("WARNING: thin pool data will not be automatically extended when cached.");
-		log_warn("WARNING: manual splitcache is required before extending thin pool data.");
+		log_warn("WARNING: Thin pool data will not be automatically extended when cached.");
+		log_warn("WARNING: Manual splitcache is required before extending thin pool data.");
 	}
 
 	cache_seg->chunk_size = chunk_size;
@@ -1228,7 +1232,7 @@ int cache_set_params(struct lv_segment *seg,
 		    /* TODO: some calc_policy solution for cache ? */
 		    !recalculate_pool_chunk_size_with_dev_hints(pool_seg->lv,
 								seg_lv(pool_seg, 0),
-								THIN_CHUNK_SIZE_CALC_METHOD_GENERIC))
+								CHUNK_SIZE_CALC_POLICY_GENERIC))
 			return_0;
 	}
 
@@ -1246,7 +1250,6 @@ int cache_set_params(struct lv_segment *seg,
  */
 int wipe_cache_pool(struct logical_volume *cache_pool_lv)
 {
-	int r;
 	struct logical_volume *cache_data_lv;
 
 	/* Only unused cache-pool could be activated and wiped */
@@ -1266,25 +1269,11 @@ int wipe_cache_pool(struct logical_volume *cache_pool_lv)
 		return 1;
 	}
 
-	cache_pool_lv->status |= LV_TEMPORARY;
-	if (!activate_lv(cache_pool_lv->vg->cmd, cache_pool_lv)) {
-		log_error("Aborting. Failed to activate cache pool %s.",
+	if (!activate_and_wipe_lv(cache_pool_lv, WIPE_MODE_DO_ZERO, 0, 0)) {
+		log_error("Aborting. Failed to wipe cache pool %s.",
 			  display_lvname(cache_pool_lv));
 		return 0;
 	}
-	cache_pool_lv->status &= ~LV_TEMPORARY;
-	if (!(r = wipe_lv(cache_pool_lv, (struct wipe_params) { .do_zero = 1 }))) {
-		log_error("Aborting. Failed to wipe cache pool %s.",
-			  display_lvname(cache_pool_lv));
-		/* Delay return of error after deactivation */
-	}
 
-	/* Deactivate cleared cache-pool metadata */
-	if (!deactivate_lv(cache_pool_lv->vg->cmd, cache_pool_lv)) {
-		log_error("Aborting. Could not deactivate cache pool %s.",
-			  display_lvname(cache_pool_lv));
-		r = 0;
-	}
-
-	return r;
+	return 1;
 }

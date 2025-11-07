@@ -134,6 +134,7 @@ install_system_dirs:
 	$(INSTALL_ROOT_DIR) $(DESTDIR)$(DEFAULT_LOCK_DIR)
 	$(INSTALL_ROOT_DIR) $(DESTDIR)$(DEFAULT_RUN_DIR)
 	$(INSTALL_ROOT_DATA) /dev/null $(DESTDIR)$(DEFAULT_CACHE_DIR)/.cache
+	$(INSTALL_ROOT_DIR) $(DESTDIR)/var/lib/lvm
 
 install_initscripts:
 	$(MAKE) -C scripts install_initscripts
@@ -172,7 +173,7 @@ help:
 	@echo "  lcov-dated		Generate lcov with timedate suffix."
 	@echo "  lcov-reset		Reset lcov counters"
 	@echo "  man			Build man pages."
-	@echo "  print-VARIABLE		Resolve make variable."
+	@echo "  print-VARIABLE 	Resolve make variable."
 	@echo "  rpm			Build rpm."
 	@echo "  run-unit-test		Run unit tests."
 	@echo "  tags			Generate c/etags."
@@ -194,7 +195,8 @@ ifneq ("$(GENHTML)", "")
 lcov:
 	$(RM) -rf $(LCOV_REPORTS_DIR)
 	$(MKDIR_P) $(LCOV_REPORTS_DIR)
-	$(LCOV) --capture --directory $(top_builddir) --ignore-errors source \
+	-find . -name '*.gc[dn][ao]' ! -newer make.tmpl -delete
+	-$(LCOV) --capture --directory $(top_builddir) --ignore-errors source,negative,gcov \
 		--output-file $(LCOV_REPORTS_DIR)/out.info
 	-test ! -s $(LCOV_REPORTS_DIR)/out.info || \
 		$(GENHTML) -o $(LCOV_REPORTS_DIR) --ignore-errors source \

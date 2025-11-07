@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2005-2015 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2005-2025 Red Hat, Inc. All rights reserved.
  *
  * This file is part of the device-mapper userspace tools.
  *
@@ -35,6 +35,7 @@
 #include <fcntl.h>		/* for musl libc */
 #include <unistd.h>
 #include <syslog.h>
+#include <sys/utsname.h>
 
 #ifdef __linux__
 /*
@@ -64,6 +65,7 @@
 
 #define DM_SIGNALED_EXIT  1
 #define DM_SCHEDULED_EXIT 2
+#define DM_EXITING	  3
 static volatile sig_atomic_t _exit_now = 0;	/* set to '1' when signal is given to exit */
 
 /* List (un)link macros. */
@@ -91,6 +93,10 @@ static const size_t THREAD_STACK_SIZE = 300 * 1024;
 
 /* Default idle exit timeout 1 hour (in seconds) */
 static const time_t DMEVENTD_IDLE_EXIT_TIMEOUT = 60 * 60;
+
+/* Default grace period for thread cleanup 10 seconds */
+#define DMEVENTD_DEFAULT_GRACE_PERIOD 10
+static int _grace_period = DMEVENTD_DEFAULT_GRACE_PERIOD;
 
 static int _systemd_activation = 0;
 static int _foreground = 0;
@@ -201,7 +207,7 @@ struct message_data {
 	char *device_uuid;	/* Mapped device path. */
 	char *events_str;	/* Events string as fetched from message. */
 	unsigned events_field;	/* Events bitfield. */
-	uint32_t timeout_secs;
+	unsigned timeout_secs;
 	char *timeout_str;
 	struct dm_event_daemon_message *msg;	/* Pointer to message buffer. */
 };
@@ -209,7 +215,8 @@ struct message_data {
 /* There are three states a thread can attain. */
 enum {
 	DM_THREAD_REGISTERING,	/* Registering, transitions to RUNNING */
-	DM_THREAD_RUNNING,	/* Working on events, transitions to DONE */
+	DM_THREAD_RUNNING,	/* Working on events, transitions to GRACE or DONE */
+	DM_THREAD_GRACE_PERIOD,	/* Thread awaits reuse for a grace period */
 	DM_THREAD_DONE		/* Terminated and cleanup is pending */
 };
 
@@ -218,42 +225,79 @@ enum {
  *
  * One thread per mapped device which can block on it until an event
  * occurs and the event processing function of the DSO gets called.
+ *
+ * LOCKING PROTOCOL:
+ * - _global_mutex: Protects registry lists, prevents thread from being freed
+ * - thread->mutex: Protects mutable per-thread state fields
+ * - _timeout_mutex: Protects timeout registry linkage
+ * - Lock ordering: _global_mutex FIRST, then thread->mutex (never reversed)
+ *
+ * REGISTRIES:
+ * - _thread_registry: Active threads (REGISTERING, RUNNING, GRACE_PERIOD)
+ * - _thread_registry_unused: Terminated threads (DONE only)
  */
 struct thread_status {
-	struct dm_list list;
+	struct dm_list list;		/* Protected by _global_mutex */
 
-	pthread_t thread;
+	/* === Fields protected by _timeout_mutex === */
+	struct dm_list timeout_list;	/* Timeout registry linkage */
 
-	struct dso_data *dso_data;	/* DSO this thread accesses. */
-
-	struct {
+	/* === Fields NOT requiring locks (immutable or special purpose) === */
+	pthread_t thread;		/* Thread ID, set once at creation */
+	pthread_cond_t grace_cond;	/* Condition variable for grace period */
+	struct dso_data *dso_data;	/* DSO ref (immutable, ref counted) */
+	void *dso_private;		/* DSO private (DSO responsibility) */
+	struct {			/* Device info (immutable after init) */
 		char *uuid;
 		char *name;
 		int major, minor;
 	} device;
-	int processing;		/* Set when event is being processed */
+	struct dm_task *wait_task;	/* DM task (immutable after init) */
+	uint64_t inode;			/* Device inode (immutable after init) */
+	unsigned used;			/* Debug counter (no sync needed) */
 
-	int status;		/* See DM_THREAD_{REGISTERING,RUNNING,DONE} */
-
-	int events;		/* bitfield for event filter. */
-	int current_events;	/* bitfield for occurred events. */
-	struct dm_task *wait_task;
-	int pending;		/* Set when event filter change is pending */
-	time_t next_time;
-	uint32_t timeout;
-	struct dm_list timeout_list;
-	void *dso_private; /* dso per-thread status variable */
-	/* TODO per-thread mutex */
+	/* === Fields protected by thread->mutex === */
+	unsigned status;		/* DM_THREAD_{REGISTERING,RUNNING,GRACE_PERIOD,DONE} */
+	pthread_mutex_t mutex;		/* The lock protecting fields */
+	int current_events;		/* Occurred events bitfield */
+	int events;			/* Event filter bitfield */
+	int pending;			/* Event filter change pending */
+	int processing;			/* Event processing in progress flag */
+	time_t next_time;		/* Next timeout timestamp */
+	unsigned timeout;		/* Timeout interval in seconds */
 };
 
-static DM_LIST_INIT(_thread_registry);
-static DM_LIST_INIT(_thread_registry_unused);
+static DM_LIST_INIT(_thread_registry);		/* Active threads (REGISTERING, RUNNING, GRACE_PERIOD) */
+static DM_LIST_INIT(_thread_registry_unused);	/* Terminated threads (DONE only) */
 
-static int _timeout_running;
+static pthread_t _timeout_thread_id;
 static DM_LIST_INIT(_timeout_registry);
-static pthread_mutex_t _timeout_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t _timeout_cond = PTHREAD_COND_INITIALIZER;
+static pthread_mutex_t _timeout_mutex;
+static pthread_cond_t _timeout_cond;
 
+/*
+ * Get current time with single time() handling wrapper.
+ *
+ * Uses clock_gettime(CLOCK_REALTIME) when available for better precision,
+ * with a small forward adjustment (10ms) to handle sub-second timing edge cases.
+ * Falls back to time() if HAVE_REALTIME is not defined or clock_gettime() fails.
+ *
+ * All time() calls in dmeventd should use this wrapper for consistent time handling.
+ */
+static time_t _get_curr_time(void)
+{
+#ifdef HAVE_REALTIME
+	struct timespec real_time;
+
+	if (clock_gettime(CLOCK_REALTIME, &real_time) == 0)
+		/* 10ms back to the future */
+		return real_time.tv_sec + ((real_time.tv_nsec > (1000000000 - 10000000)) ? 1 : 0);
+
+	/* fallback to time() */
+	log_sys_debug("clock_gettime", "");
+#endif
+	return time(NULL);
+}
 
 /**********
  *   DSO
@@ -268,7 +312,7 @@ static void _free_dso_data(struct dso_data *data)
 
 static struct dso_data *_alloc_dso_data(struct message_data *data)
 {
-	struct dso_data *ret = (typeof(ret)) zalloc(sizeof(*ret));
+	struct dso_data *ret = (__typeof__(ret)) zalloc(sizeof(*ret));
 
 	if (!ret)
 		return_NULL;
@@ -299,7 +343,7 @@ static void _lib_put(struct dso_data *data)
 			DEBUGLOG("Unholding control device.");
 			dm_hold_control_dev(0);
 			dm_lib_release();
-			_idle_since = time(NULL);
+			_idle_since = _get_curr_time();
 		}
 	}
 }
@@ -330,11 +374,11 @@ static int _lookup_symbol(void *dl, void **symbol, const char *name)
 static int _lookup_symbols(void *dl, struct dso_data *data)
 {
 	return _lookup_symbol(dl, (void *) &data->process_event,
-			     "process_event") &&
-	    _lookup_symbol(dl, (void *) &data->register_device,
-			  "register_device") &&
-	    _lookup_symbol(dl, (void *) &data->unregister_device,
-			  "unregister_device");
+			      "process_event") &&
+		_lookup_symbol(dl, (void *) &data->register_device,
+			       "register_device") &&
+		_lookup_symbol(dl, (void *) &data->unregister_device,
+			       "unregister_device");
 }
 
 /* Load an application specific DSO. */
@@ -395,11 +439,20 @@ static void _free_thread_status(struct thread_status *thread)
 	_lib_put(thread->dso_data);
 	if (thread->wait_task)
 		dm_task_destroy(thread->wait_task);
+
+	/* Clean up grace period condition variable */
+	pthread_cond_destroy(&thread->grace_cond);
+
+	/* Clean up per-thread mutex */
+	pthread_mutex_destroy(&thread->mutex);
+
 	free(thread->device.uuid);
 	free(thread->device.name);
 	free(thread);
 }
 
+static int _lock_mutex(void);
+static int _unlock_mutex(void);
 /* Note: events_field must not be 0, ensured by caller */
 static struct thread_status *_alloc_thread_status(const struct message_data *data,
 						  struct dso_data *dso_data)
@@ -427,13 +480,24 @@ static struct thread_status *_alloc_thread_status(const struct message_data *dat
 	if (!(thread->device.name = strdup(data->device_uuid)))
 		goto_out;
 
+	/* Initialize per-thread mutex */
+	if (pthread_mutex_init(&thread->mutex, NULL)) {
+		log_error("Failed to initialize thread mutex.");
+		goto out;
+	}
+
+	/* Initialize grace period condition variable */
+	if (pthread_cond_init(&thread->grace_cond, NULL)) {
+		log_error("Failed to initialize grace period condition variable.");
+		goto out;
+	}
+
 	/* runs ioctl and may register lvm2 plugin */
 	thread->processing = 1;
 	thread->status = DM_THREAD_REGISTERING;
 
 	thread->events = data->events_field;
 	thread->pending = DM_EVENT_REGISTRATION_PENDING;
-	thread->timeout = data->timeout_secs;
 	dm_list_init(&thread->timeout_list);
 
 	return thread;
@@ -578,8 +642,13 @@ static int _parse_message(struct message_data *message_data)
 	return ret;
 }
 
-/* Global mutex to lock access to lists et al. See _global_mutex
-   above. */
+/*
+ * Global mutex locking.
+ * Protects:
+ * - Registry lists (_thread_registry, _thread_registry_unused)
+ * - Prevents threads from being freed during access
+ * Must be locked BEFORE any per-thread mutex to maintain lock ordering.
+ */
 static int _lock_mutex(void)
 {
 	return pthread_mutex_lock(&_global_mutex);
@@ -588,6 +657,21 @@ static int _lock_mutex(void)
 static int _unlock_mutex(void)
 {
 	return pthread_mutex_unlock(&_global_mutex);
+}
+
+/*
+ * Per-thread mutex locking.
+ * Protects thread fields: status, events, pending, processing, timeout, etc.
+ * Must be locked AFTER global mutex (if both needed) to maintain lock ordering.
+ */
+static int _lock_thread(struct thread_status *thread)
+{
+	return pthread_mutex_lock(&thread->mutex);
+}
+
+static int _unlock_thread(struct thread_status *thread)
+{
+	return pthread_mutex_unlock(&thread->mutex);
 }
 
 /* Check, if a device exists. */
@@ -606,11 +690,14 @@ static int _fill_device_data(struct thread_status *ts)
 	if (!dm_task_run(dmt))
 		goto fail;
 
-	free(ts->device.name);
-	if (!(ts->device.name = strdup(dm_task_get_name(dmt))))
+	if (!dm_task_get_info(dmt, &dmi))
 		goto fail;
 
-	if (!dm_task_get_info(dmt, &dmi))
+	if (!dmi.exists)
+		goto fail;
+
+	free(ts->device.name);
+	if (!(ts->device.name = strdup(dm_task_get_name(dmt))))
 		goto fail;
 
 	ts->device.major = dmi.major;
@@ -626,9 +713,9 @@ fail:
 
 static struct dm_task *_get_device_status(struct thread_status *ts)
 {
-	struct dm_task *dmt = dm_task_create(DM_DEVICE_STATUS);
+	struct dm_task *dmt;
 
-	if (!dmt)
+	if (!(dmt = dm_task_create(DM_DEVICE_STATUS)))
 		return_NULL;
 
 	if (!dm_task_set_uuid(dmt, ts->device.uuid)) {
@@ -648,18 +735,105 @@ static struct dm_task *_get_device_status(struct thread_status *ts)
 	return dmt;
 }
 
+static uint64_t _get_device_inode(struct thread_status *ts)
+{
+	static int _kernel_major = -1;
+	struct utsname uts;
+	struct stat buf;
+	char path[PATH_MAX];
+
+	/* Get kernel version to determine path format */
+	if (_kernel_major < 0) {
+		_kernel_major = 0;
+		if (uname(&uts))
+			log_sys_debug("uname", "");
+		else if (sscanf(uts.release, "%d", &_kernel_major) != 1)
+			log_debug("Cannot parse kernel version from %s.", uts.release);
+	}
+
+	if (_kernel_major >= 3) {
+		/* Use sysfs path with major:minor format for modern kernels */
+		if (dm_snprintf(path, sizeof(path), "%sdev/block/%d:%d",
+				dm_sysfs_dir(), ts->device.major, ts->device.minor) < 0)
+			return_0;
+	} else {
+		/* Use /dev/mapper/name device path for kernel version <3.
+		 * Older kernels do not change inode numbers for devices!
+		 * Relies on correct files in /dev/mapper directory.
+		 */
+		if (dm_snprintf(path, sizeof(path), "%s/%s",
+				dm_dir(), ts->device.name) < 0)
+			return_0;
+	}
+
+	if (stat(path, &buf) < 0) {
+		log_sys_debug("stat", path);
+		if (_kernel_major >= 3)
+			return 0;
+
+		/* Since monitoring is not synchronized with udev
+		 * symlink may not exists, so also try /dev/dm-X */
+		if (dm_snprintf(path, sizeof(path), "%s/../dm-%d",
+				dm_dir(), ts->device.minor) < 0)
+			return_0;
+
+		if (stat(path, &buf) < 0) {
+			log_sys_debug("stat", path);
+			return 0;
+		}
+	}
+
+	log_debug("Device %s with inode %" PRIu64 " (kernel %d).",
+		  path, (uint64_t) buf.st_ino, _kernel_major);
+
+	return (uint64_t) buf.st_ino;
+}
+
 /*
  * Find an existing thread for a device.
  *
- * Mutex must be held when calling this.
+ * _global_mutex must be held when calling this.
+ * Returns thread with BOTH _global_mutex and thread->mutex held.
+ * Caller must unlock thread->mutex first, then _global_mutex.
  */
 static struct thread_status *_lookup_thread_status(struct message_data *data)
 {
 	struct thread_status *thread;
 
-	dm_list_iterate_items(thread, &_thread_registry)
-		if (!strcmp(data->device_uuid, thread->device.uuid))
-			return thread;
+	/* Find active threads (not in grace period) */
+	dm_list_iterate_items(thread, &_thread_registry) {
+		_lock_thread(thread);
+		if ((thread->status != DM_THREAD_GRACE_PERIOD) &&
+		    !strcmp(data->device_uuid, thread->device.uuid))
+			return thread; /* Return with both mutexes held */
+		_unlock_thread(thread);
+	}
+
+	return NULL;
+}
+
+/* Find a thread in grace period that can be reused.
+ * Performs stricter validation (DSO name, inode) than _lookup_thread_status().
+ * _global_mutex must be held when calling this.
+ * Returns thread with BOTH _global_mutex and thread->mutex held.
+ * Caller must unlock thread->mutex first, then _global_mutex.
+ */
+static struct thread_status *_lookup_grace_thread_status(struct message_data *data)
+{
+	struct thread_status *thread;
+
+	/* Grace threads stay in active registry */
+	dm_list_iterate_items(thread, &_thread_registry) {
+		_lock_thread(thread);
+		if ((thread->status == DM_THREAD_GRACE_PERIOD) &&
+		    !strcmp(data->device_uuid, thread->device.uuid) &&
+		    !strcmp(data->dso_name, thread->dso_data->dso_name) &&
+		    (thread->inode == _get_device_inode(thread))) {
+			DEBUGLOG("Found reusable thread %x in grace period.",(int)thread->thread);
+			return thread; /* Return with both mutexes held */
+		}
+		_unlock_thread(thread);
+	}
 
 	return NULL;
 }
@@ -680,23 +854,33 @@ static int _get_status(struct message_data *message_data)
 		return -EINVAL;
 
 	_lock_mutex();
-	count = dm_list_size(&_thread_registry);
+	if (!(count = dm_list_size(&_thread_registry))) {
+		_unlock_mutex();
+		ret = 0;        /* no monitored devices */
+		goto out;
+	}
+
 	buffers = alloca(sizeof(char*) * count);
 	dm_list_iterate_items(thread, &_thread_registry) {
+		_lock_thread(thread);
+		/* coverity[overflow_sink] - only positive 'current' is used */
 		if ((current = dm_asprintf(buffers + i, "0:%d %s %s %u %" PRIu32 ";",
 					   i, thread->dso_data->dso_name,
 					   thread->device.uuid, thread->events,
-					   thread->timeout)) < 0) {
+					   thread->timeout)) < 1) {
+			_unlock_thread(thread);
 			_unlock_mutex();
 			goto out;
 		}
+		_unlock_thread(thread);
 		++i;
-		size += current; /* count with trailing '\0' */
+		/* coverity[overflow] - only positive 'current' is used */
+		size += current - 1; /* count without trailing '\0' */
 	}
 	_unlock_mutex();
 
 	len = strlen(message_data->id);
-	msg->size = size + len + 1;
+	msg->size = size + len + 1 + 1;
 	free(msg->data);
 	if (!(msg->data = malloc(msg->size)))
 		goto out;
@@ -709,6 +893,7 @@ static int _get_status(struct message_data *message_data)
 		memcpy(message, buffers[j], len);
 		message += len;
 	}
+	*message = 0;
 
 	ret = 0;
  out:
@@ -724,7 +909,7 @@ static int _get_parameters(struct message_data *message_data) {
 	char idle_buf[32] = "";
 
 	if (_idle_since)
-		(void)dm_snprintf(idle_buf, sizeof(idle_buf), " idle=%lu", (long unsigned) (time(NULL) - _idle_since));
+		(void)dm_snprintf(idle_buf, sizeof(idle_buf), " idle=%lu", (long unsigned) (_get_curr_time() - _idle_since));
 
 	free(msg->data);
 	if ((size = dm_asprintf(&msg->data, "%s pid=%d daemon=%s exec_method=%s exit_on=\"%s\"%s",
@@ -751,61 +936,65 @@ static void _exit_dm_lib(void)
 
 static void _exit_timeout(void *unused __attribute__((unused)))
 {
-	_timeout_running = 0;
 	pthread_mutex_unlock(&_timeout_mutex);
+}
+
+/*
+ * Send SIGALRM to wake up a monitor thread.
+ * Returns: 0 on success, ESRCH if thread gone, other errno on error.
+ */
+static int _thread_wakeup_signal(struct thread_status *thread)
+{
+	int ret = pthread_kill(thread->thread, SIGALRM);
+
+	if (ret && (ret != ESRCH))
+		log_error("Unable to wakeup Thr %x: %s.",
+			  (int)thread->thread, strerror(ret));
+
+	return ret;
 }
 
 /* Wake up monitor threads every so often. */
 static void *_timeout_thread(void *unused __attribute__((unused)))
 {
 	struct thread_status *thread;
-	struct timespec timeout, real_time;
+	struct timespec timeout;
 	time_t curr_time;
-	int ret;
 
 	DEBUGLOG("Timeout thread starting.");
 	pthread_cleanup_push(_exit_timeout, NULL);
 	pthread_mutex_lock(&_timeout_mutex);
 
-	while (!dm_list_empty(&_timeout_registry)) {
-		timeout.tv_sec = 0;
+	while (_exit_now != DM_EXITING) {
+		curr_time = _get_curr_time();
+		timeout.tv_sec = curr_time + (24 * 60 * 60);  /* Max 24 hour sleep */
 		timeout.tv_nsec = 0;
-#ifndef HAVE_REALTIME
-		curr_time = time(NULL);
-#else
-		if (clock_gettime(CLOCK_REALTIME, &real_time)) {
-			log_error("Failed to read clock_gettime().");
-			break;
-		}
-		/* 10ms back to the future */
-		curr_time = real_time.tv_sec + ((real_time.tv_nsec > (1000000000 - 10000000)) ? 1 : 0);
-#endif
 
 		dm_list_iterate_items_gen(thread, &_timeout_registry, timeout_list) {
+			/* coverity[lock_order] we always lock timeout mutex first */
+			_lock_thread(thread);
 			if (thread->next_time <= curr_time) {
 				thread->next_time = curr_time + thread->timeout;
-				_lock_mutex();
 				if (thread->processing) {
 					/* Cannot signal processing monitoring thread */
-					log_debug("Skipping SIGALRM to processing Thr %x for timeout.",
-						  (int) thread->thread);
+					DEBUGLOG("Skipping SIGALRM to processing Thr %x for timeout, "
+						 "extending next_time to %ld.",
+						 (int) thread->thread,
+						 (long)thread->next_time);
 				} else {
 					DEBUGLOG("Sending SIGALRM to Thr %x for timeout.",
 						 (int) thread->thread);
-					ret = pthread_kill(thread->thread, SIGALRM);
-					if (ret && (ret != ESRCH))
-						log_error("Unable to wakeup Thr %x for timeout: %s.",
-							  (int) thread->thread, strerror(ret));
+					(void) _thread_wakeup_signal(thread);
 				}
-				_unlock_mutex();
 			}
 
-			if (thread->next_time < timeout.tv_sec || !timeout.tv_sec)
+			if (thread->next_time < timeout.tv_sec)
 				timeout.tv_sec = thread->next_time;
+			_unlock_thread(thread);
 		}
 
-		pthread_cond_timedwait(&_timeout_cond, &_timeout_mutex,
-				       &timeout);
+		(void) pthread_cond_timedwait(&_timeout_cond, &_timeout_mutex,
+					      &timeout);
 	}
 
 	DEBUGLOG("Timeout thread finished.");
@@ -818,18 +1007,22 @@ static int _register_for_timeout(struct thread_status *thread)
 {
 	int ret = 0;
 
+	/*
+	 * Timeout (thread->timeout and thread->next_time) is already set
+	 * by _set_timeout_to_thread() called from _register_for_event().
+	 * This function just adds the thread to timeout_registry.
+	 */
+
 	pthread_mutex_lock(&_timeout_mutex);
 
 	if (dm_list_empty(&thread->timeout_list)) {
-		thread->next_time = time(NULL) + thread->timeout;
 		dm_list_add(&_timeout_registry, &thread->timeout_list);
-		if (_timeout_running)
+		if (_timeout_thread_id)
 			pthread_cond_signal(&_timeout_cond);
 	}
 
-	if (!_timeout_running &&
-	    !(ret = _pthread_create_smallstack(NULL, _timeout_thread, NULL)))
-		_timeout_running = 1;
+	if (!_timeout_thread_id)
+		ret = _pthread_create_smallstack(&_timeout_thread_id, _timeout_thread, NULL);
 
 	pthread_mutex_unlock(&_timeout_mutex);
 
@@ -843,7 +1036,7 @@ static void _unregister_for_timeout(struct thread_status *thread)
 		dm_list_del(&thread->timeout_list);
 		dm_list_init(&thread->timeout_list);
 		if (dm_list_empty(&_timeout_registry))
-			/* No more work -> wakeup to finish quickly */
+			/* No more timeouts -> wakeup to enter idle sleep */
 			pthread_cond_signal(&_timeout_cond);
 	}
 	pthread_mutex_unlock(&_timeout_mutex);
@@ -872,13 +1065,51 @@ enum {
 	DM_WAIT_FATAL
 };
 
+/* Reset pending signal for a task/thread */
+static int _reset_pending_signal(int signal)
+{
+	sigset_t prev_mask, mask;
+	struct sigaction prev_act, act = { .sa_handler = SIG_IGN };
+
+	sigemptyset(&act.sa_mask);
+	sigemptyset(&prev_mask);
+	sigemptyset(&mask);
+	sigaddset(&mask, signal);
+
+	if (pthread_sigmask(SIG_SETMASK, &mask, &prev_mask) != 0) {
+		log_sys_error("pthread_sigmask", "ignore signal");
+		return 0; /* What better */
+	}
+
+	if (sigaction(signal, &act, &prev_act) < 0) {
+		log_sys_error("sigaction", "ignore signal");
+		return 0;
+	}
+
+	if (sigaction(signal, &prev_act, NULL) < 0) {
+		log_sys_error("sigaction", "restore signal");
+		return 0;
+	}
+
+	/* And also restore the process's original sigmask */
+	if (pthread_sigmask(SIG_SETMASK, &prev_mask, NULL) < 0) {
+		log_sys_error("pthread_sigmask", "restore signal");
+		return 0;
+	}
+
+	return 1;
+}
+
 /* Wait on a device until an event occurs. */
+/* Called with thread->mutex LOCKED, returns with thread->mutex LOCKED */
 static int _event_wait(struct thread_status *thread)
 {
 	sigset_t set, old;
 	int ret = DM_WAIT_RETRY;
 	struct dm_info info;
+	int task_result;
 
+	_unlock_thread(thread);
 	/* TODO: audit libdm thread usage */
 
 	/*
@@ -890,10 +1121,21 @@ static int _event_wait(struct thread_status *thread)
 	sigaddset(&set, SIGALRM);
 	if (pthread_sigmask(SIG_UNBLOCK, &set, &old) != 0) {
 		log_sys_error("pthread_sigmask", "unblock alarm");
+		_lock_thread(thread);
 		return ret; /* What better */
 	}
 
-	if (dm_task_run(thread->wait_task)) {
+	task_result = dm_task_run(thread->wait_task);
+
+	if (pthread_sigmask(SIG_SETMASK, &old, NULL) != 0)
+		log_sys_error("pthread_sigmask", "block alarm");
+
+	_lock_thread(thread);
+
+	if (task_result) {
+		/* Recheck device info whether is still exists */
+		if (!_fill_device_data(thread))
+			goto disappeared; /* device is gone... */
 		thread->current_events |= DM_EVENT_DEVICE_ERROR;
 		ret = DM_WAIT_INTR;
 		/* Update event_nr */
@@ -902,6 +1144,7 @@ static int _event_wait(struct thread_status *thread)
 	} else {
 		switch (dm_task_get_errno(thread->wait_task)) {
 		case ENXIO:
+disappeared:
 			log_error("%s disappeared, detaching.",
 				  thread->device.name);
 			ret = DM_WAIT_FATAL;
@@ -915,8 +1158,6 @@ static int _event_wait(struct thread_status *thread)
 		}
 	}
 
-	if (pthread_sigmask(SIG_SETMASK, &old, NULL) != 0)
-		log_sys_error("pthread_sigmask", "block alarm");
 
 #ifdef DEBUG_SIGNALS
 	_print_sigset("dmeventd blocking ", &old);
@@ -947,23 +1188,35 @@ static int _do_unregister_device(struct thread_status *thread)
 }
 
 /* Process an event in the DSO. */
+/* Called with thread->mutex LOCKED, returns with thread->mutex LOCKED */
 static void _do_process_event(struct thread_status *thread)
 {
 	struct dm_task *task;
+	int current_events = thread->current_events;
+
+	thread->current_events = 0; /* Clear events before processing */
 
 	/* NOTE: timeout event gets status */
-	task = (thread->current_events & DM_EVENT_TIMEOUT)
+	task = (current_events & DM_EVENT_TIMEOUT)
 		? _get_device_status(thread) : thread->wait_task;
 
 	if (!task)
 		log_error("Lost event in Thr %x.", (int)thread->thread);
 	else {
-		thread->dso_data->process_event(task, thread->current_events, &(thread->dso_private));
+		_unlock_thread(thread);
+		thread->dso_data->process_event(task, (enum dm_event_mask) current_events,
+						&(thread->dso_private));
+		_lock_thread(thread);
 		if (task != thread->wait_task)
 			dm_task_destroy(task);
 	}
 }
 
+/*
+ * Move thread to unused registry.
+ * Should only be called for DONE threads (terminated).
+ * Caller must hold _global_mutex.
+ */
 static void _thread_unused(struct thread_status *thread)
 {
 	UNLINK_THREAD(thread);
@@ -973,64 +1226,45 @@ static void _thread_unused(struct thread_status *thread)
 /* Thread cleanup handler to unregister device. */
 static void _monitor_unregister(void *arg)
 {
-	struct thread_status *thread = arg, *thread_iter;
-
-	dm_list_iterate_items(thread_iter, &_thread_registry)
-		if (thread_iter == thread) {
-			/* Relink to _unused */
-			_thread_unused(thread);
-			break;
-		}
+	struct thread_status *thread = arg;
+	int status;
 
 	thread->events = 0;	/* Filter is now empty */
 	thread->pending = 0;	/* Event pending resolved */
 	thread->processing = 1;	/* Process unregistering */
+	status = thread->status;
+	_unlock_thread(thread);
 
+	/* Move to unused registry */
+	_lock_mutex();
+	_thread_unused(thread);
 	_unlock_mutex();
 
 	DEBUGLOG("Unregistering monitor for %s.", thread->device.name);
 	_unregister_for_timeout(thread);
 
-	/* coverity[missing_lock] no missing lock here */
-	if ((thread->status != DM_THREAD_REGISTERING) &&
+	if ((status != DM_THREAD_REGISTERING) &&
 	    !_do_unregister_device(thread))
 		log_error("%s: %s unregister failed.", __func__,
 			  thread->device.name);
 
-	DEBUGLOG("Marking Thr %x as DONE and unused.", (int)thread->thread);
+	DEBUGLOG("Marking Thr %x as DONE and moving to unused.", (int)thread->thread);
 
-	_lock_mutex();
+	_lock_thread(thread);
 	thread->status = DM_THREAD_DONE; /* Last access to thread memory! */
-	_unlock_mutex();
+	thread->processing = 0;	/* Process unregistering */
+	_unlock_thread(thread);
+
 	if (_exit_now)  /* Exit is already in-progress, wake-up sleeping select() */
 		kill(getpid(), SIGINT);
 }
 
-/* Device monitoring thread. */
-static void *_monitor_thread(void *arg)
+/* Monitor and process device events
+ * Called with thread->mutex LOCKED, returns with thread->mutex LOCKED */
+static int _monitor_events(struct thread_status *thread)
 {
-	struct thread_status *thread = arg;
-	int ret;
+	int ret = 0;
 	sigset_t pendmask;
-
-	pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
-	pthread_cleanup_push(_monitor_unregister, thread);
-
-	if (!_fill_device_data(thread)) {
-		log_error("Failed to fill device data for %s.", thread->device.uuid);
-		_lock_mutex();
-		goto out;
-	}
-
-	if (!_do_register_device(thread)) {
-		log_error("Failed to register device %s.", thread->device.name);
-		_lock_mutex();
-		goto out;
-	}
-
-	_lock_mutex();
-	thread->status = DM_THREAD_RUNNING;
-	thread->processing = 0;
 
 	/* Loop awaiting/analyzing device events. */
 	while (thread->events) {
@@ -1047,12 +1281,9 @@ static void *_monitor_thread(void *arg)
 		 */
 		if (thread->events & thread->current_events) {
 			thread->processing = 1;  /* Cannot be removed/signaled */
-			_unlock_mutex();
 
 			_do_process_event(thread);
 
-			_lock_mutex();
-			thread->current_events = 0; /* Current events processed */
 			thread->processing = 0;
 
 			/*
@@ -1066,23 +1297,134 @@ static void *_monitor_thread(void *arg)
 			else if (sigismember(&pendmask, SIGALRM))
 				break;
 		} else {
-			_unlock_mutex();
-
-			if ((ret = _event_wait(thread)) == DM_WAIT_RETRY)
-				usleep(100); /* Avoid busy loop, wait without mutex */
-
-			_lock_mutex();
-
-			if (ret == DM_WAIT_FATAL)
+			if ((ret = _event_wait(thread)) == DM_WAIT_FATAL)
 				break;
+
+			if (ret == DM_WAIT_RETRY) {
+				_unlock_thread(thread);
+				usleep(100); /* Avoid busy loop, wait without mutex */
+				_lock_thread(thread);
+			}
 		}
+	}
+
+	return ret;
+}
+
+/* Thread awaits condition wake up for a grace period
+ * Called with thread->mutex LOCKED, returns with thread->mutex LOCKED */
+static void _monitor_grace_period_wait(struct thread_status *thread)
+{
+	struct timespec grace_timeout = { .tv_sec = _get_curr_time() + _grace_period };
+
+	DEBUGLOG("Thread %x entering grace period for %d seconds.",
+		 (int)thread->thread, _grace_period);
+
+	/* Wait on per-thread condition variable with thread mutex
+	 * pthread_cond_timedwait atomically releases and reacquires the mutex */
+	while (!_exit_now && !thread->events &&
+	       (ETIMEDOUT != pthread_cond_timedwait(&thread->grace_cond,
+						    &thread->mutex, &grace_timeout)))
+		/* Waiting */;
+
+	DEBUGLOG("Thread %x wakeup grace period.", (int)thread->thread);
+}
+
+/*
+ * Device monitoring thread.
+ *
+ * Monitors a device for events and processes them via DSO callbacks.
+ * Supports grace period for thread reuse to avoid frequent creation/destruction.
+ *
+ * Thread lifecycle:
+ * 1. Register device with DSO
+ * 2. Monitor events (RUNNING state)
+ * 3. If events drop to 0, enter grace period (stays in active registry)
+ * 4. Either: reused for new registration, or timeout and terminate
+ * 5. On termination: cleanup handler moves to unused registry (DONE state)
+ */
+static void *_monitor_thread(void *arg)
+{
+	struct thread_status *thread = arg;
+	int ret;
+
+	/* Holds thread->mutex throughout the loop */
+	_lock_thread(thread);
+
+	pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
+	/* coverity[lock_order] thread mutex is released before grabbing global mutex */
+	pthread_cleanup_push(_monitor_unregister, thread);
+
+	if (!_fill_device_data(thread)) {
+		log_error("Failed to fill device data for %s.", thread->device.uuid);
+		goto out;
+	}
+
+	/* Now with resolved major:minor store also device inode */
+	thread->inode = _get_device_inode(thread);
+
+	if (!_do_register_device(thread)) {
+		log_error("Failed to register device %s.", thread->device.name);
+		goto out;
+	}
+
+	/* Main monitoring loop with grace period support */
+	while (thread->events) {
+		DEBUGLOG("Monitoring %s with Thr %x  (events: %x, used: %d).",
+			 thread->device.name, (int)thread->thread,
+			 thread->events, thread->used);
+
+		thread->status = DM_THREAD_RUNNING;
+		thread->processing = 0;
+		thread->used++;
+
+		ret = _monitor_events(thread);
+
+		thread->processing = 1; /* No signaling */
+
+		/* No grace period when set to 0
+		 * or there were left some processing events which is an error state
+		 * or there is on going exit
+		 * or there was fatal error while waiting for some event */
+		if (!_grace_period || thread->events || _exit_now || (ret == DM_WAIT_FATAL))
+			break;
+
+		/* Before restarting event loop reset any pending SIGALRM signal */
+		if (!_reset_pending_signal(SIGALRM)) {
+			stack;
+			break; /* Something is wrong... */
+		}
+
+		thread->current_events = 0;
+		thread->status = DM_THREAD_GRACE_PERIOD;	/* No events - enter grace period */
+
+		DEBUGLOG("Gracing %s with Thr %x  (events: %x, used: %d).",
+			 thread->device.name, (int)thread->thread,
+			 thread->events, thread->used);
+
+		/* Thread stays in active registry during grace period */
+
+		_monitor_grace_period_wait(thread);
+		/*
+		 * Grace period wait completed - two possible wake-up scenarios:
+		 *
+		 * 1) Woken by _update_events() (new registration reusing this thread):
+		 *    - thread->events is non-zero (set by _update_events)
+		 *    - thread->next_time is reset (by _set_timeout_to_thread after _update_events)
+		 *    - Loop continues for fresh monitoring cycle
+		 *
+		 * 2) Natural timeout (grace period expired with no new registration):
+		 *    - thread->events is still 0 and loop exits
+		 *    - Thread terminates via cleanup handler, status set to DONE
+		 *    - Cleanup handler moves thread to unused registry
+		 */
 	}
 out:
 	/* ';' fixes gcc compilation problem with older pthread macros
 	 * "label at end of compound statement" */
 	;
 
-	/* coverity[lock_order] _global_mutex is kept locked */
+	/* coverity[lock_order] thread->mutex is kept locked */
 	pthread_cleanup_pop(1);
 
 	return NULL;
@@ -1094,34 +1436,87 @@ static int _create_thread(struct thread_status *thread)
 	return _pthread_create_smallstack(&thread->thread, _monitor_thread, thread);
 }
 
-/* Update events - needs to be locked */
-static int _update_events(struct thread_status *thread, int events)
+/*
+ * Set timeout interval and next timeout timestamp for a thread.
+ * Should be called when enabling timeout events.
+ * Caller must hold thread->mutex when calling this (except for new thread creation).
+ */
+static void _set_timeout_to_thread(struct thread_status *thread, unsigned timeout)
+{
+	thread->timeout = timeout;
+	if (timeout && (thread->events & DM_EVENT_TIMEOUT))
+		thread->next_time = _get_curr_time() + timeout;
+	else
+		thread->next_time = 0;
+}
+
+/*
+ * Helper functions for event mask manipulation.
+ * Operate directly on thread->events to make bit operations more readable.
+ * Return 1 if events changed, 0 if no change.
+ * Caller must hold thread->mutex.
+ */
+static inline int _add_events_to_thread(struct thread_status *thread, int events)
+{
+	int old_events = thread->events;
+
+	thread->events |= events;
+	return (thread->events != old_events);
+}
+
+static inline int _remove_events_from_thread(struct thread_status *thread, int events)
+{
+	int old_events = thread->events;
+
+	thread->events &= ~events;
+	return (thread->events != old_events);
+}
+
+/*
+ * Handle event changes - wake up thread if needed.
+ * Called with thread->mutex LOCKED, returns with thread->mutex LOCKED.
+ * Caller must also hold _global_mutex.
+ * Should be called after _add_events_to_thread() or _remove_events_from_thread()
+ * returned 1 (indicating events changed).
+ */
+static int _update_events(struct thread_status *thread)
 {
 	int ret = 0;
 
-	if (thread->events == events)
-		return 0; /* Nothing has changed */
-
-	thread->events = events;
 	thread->pending = DM_EVENT_REGISTRATION_PENDING;
+
+	/* Wake up thread waiting in grace period for new registration or exit */
+	if ((thread->events || _exit_now) && (thread->status == DM_THREAD_GRACE_PERIOD)) {
+		DEBUGLOG("Waking up thread %x waiting in grace period (events=%x).",
+			 (int)thread->thread, thread->events);
+
+		/* Set status to RUNNING and processing to 1. */
+		thread->status = DM_THREAD_RUNNING;
+		thread->processing = 1; /* No signaling */
+
+		/*
+		 * Signal the per-thread condition variable while holding thread->mutex.
+		 * Thread will wake from _monitor_grace_period_wait(), check events != 0,
+		 * and continue the monitoring loop.
+		 *
+		 * Thread stays in active registry (no list movement needed).
+		 * Client queries GET_REGISTERED_DEVICE - FOUND immediately
+		 */
+		pthread_cond_signal(&thread->grace_cond);
+
+		return 0;
+	}
 
 	/* Only non-processing threads can be notified */
 	if (!thread->processing) {
 		DEBUGLOG("Sending SIGALRM to wakeup Thr %x.", (int)thread->thread);
 
 		/* Notify thread waiting in ioctl (to speed-up) */
-		if ((ret = pthread_kill(thread->thread, SIGALRM))) {
-			if (ret == ESRCH)
-				thread->events = 0;  /* thread is gone */
-			else
-				log_error("Unable to wakeup thread: %s",
-					  strerror(ret));
-		}
+		if ((ret = _thread_wakeup_signal(thread)) == ESRCH)
+			thread->events = 0;  /* thread is gone */
 	}
 
-	/* Threads with no events has to be moved to unused */
-	if (!thread->events)
-		_thread_unused(thread);
+	/* Threads with no events will enter grace period in their main loop */
 
 	return -ret;
 }
@@ -1140,7 +1535,7 @@ static int _active(struct message_data *message_data)
 static int _unregister_for_event(struct message_data *message_data)
 {
 	struct thread_status *thread;
-	int ret;
+	int ret = 0;
 
 	/*
 	 * Clear event in bitfield and deactivate
@@ -1153,9 +1548,14 @@ static int _unregister_for_event(struct message_data *message_data)
 		return -ENODEV;
 	}
 
-	/* AND mask event ~# from events bitfield. */
-	ret = _update_events(thread, (thread->events & ~message_data->events_field));
+	/* _lookup_thread_status returns with both _global_mutex and thread->mutex held */
 
+	/* Remove events from the thread's event mask */
+	if (_remove_events_from_thread(thread, message_data->events_field))
+		ret = _update_events(thread);
+
+	/* Unlock in correct order: thread->mutex first, then _global_mutex */
+	_unlock_thread(thread);
 	_unlock_mutex();
 
 	/* If there are no events, thread is later garbage
@@ -1168,16 +1568,34 @@ static int _unregister_for_event(struct message_data *message_data)
 	return ret;
 }
 
-static void _unregister_all_threads(void)
+static void _unregister_threads(unsigned only_grace)
 {
 	struct thread_status *thread, *tmp;
 
 	_lock_mutex();
 
-	dm_list_iterate_items_safe(thread, tmp, &_thread_registry)
-		_update_events(thread, 0);
+	dm_list_iterate_items_safe(thread, tmp, &_thread_registry) {
+		_lock_thread(thread);
+		if (!only_grace && thread->events) {
+			thread->events = 0;
+			_update_events(thread);
+		}
+		if (thread->status == DM_THREAD_GRACE_PERIOD)
+			pthread_cond_signal(&thread->grace_cond);
+		_unlock_thread(thread);
+	}
 
 	_unlock_mutex();
+}
+
+static void _unregister_all_threads(void)
+{
+	_unregister_threads(0);
+}
+
+static void _unregister_all_grace_threads(void)
+{
+	_unregister_threads(1);
 }
 
 static void _wait_for_new_pid(void)
@@ -1218,14 +1636,25 @@ static int _register_for_event(struct message_data *message_data)
 #else
 		ret = ENODEV;
 #endif
-		return ret;
+		return -ret;
 	}
 
 	_lock_mutex();
 
-	if ((thread = _lookup_thread_status(message_data))) {
-		/* OR event # into events bitfield. */
-		ret = _update_events(thread, (thread->events | message_data->events_field));
+	if ((thread = _lookup_thread_status(message_data)) ||
+	    (thread = _lookup_grace_thread_status(message_data))) {
+		/* Lookup functions return with both _global_mutex and thread->mutex held */
+		/* Add events to the thread's event mask */
+		if (_add_events_to_thread(thread, message_data->events_field))
+			ret = _update_events(thread);
+		/* Update timeout from message and set next_time if needed */
+		_set_timeout_to_thread(thread, message_data->timeout_secs);
+		/* Unlock in correct order: thread->mutex first, then _global_mutex */
+		_unlock_thread(thread);
+
+		/* If new registration doesn't want timeout, unregister from timeout */
+		if (!(message_data->events_field & DM_EVENT_TIMEOUT))
+			_unregister_for_timeout(thread);
 	} else {
 		_unlock_mutex();
 
@@ -1235,6 +1664,9 @@ static int _register_for_event(struct message_data *message_data)
 			stack;
 			return -ENOMEM;
 		}
+
+		/* Set next timeout for new thread before it starts */
+		_set_timeout_to_thread(thread, message_data->timeout_secs);
 
 		if ((ret = _create_thread(thread))) {
 			stack;
@@ -1265,9 +1697,14 @@ static int _register_for_event(struct message_data *message_data)
 }
 
 /*
- * Get registered device.
+ * Build message response for registered device query.
  *
- * Only one caller at a time here as with register_for_event().
+ * Reads thread data and constructs response message with:
+ * - Device UUID
+ * - DSO name
+ * - Event mask (events | pending)
+ *
+ * Caller must hold both _global_mutex and thread->mutex.
  */
 static int _registered_device(struct message_data *message_data,
 			     struct thread_status *thread)
@@ -1309,64 +1746,68 @@ static int _want_registered_device(char *dso_name, char *device_uuid,
 	return 1;
 }
 
+/*
+ * Get registered device information.
+ *
+ * Searches active registry (_thread_registry) for matching device.
+ * Filters out GRACE_PERIOD threads (returns only active RUNNING/REGISTERING).
+ *
+ * @next: if false, return exact match for (dso_name, device_uuid)
+ *        if true, find (dso_name, device_uuid) then return next device with same dso_name
+ *
+ * Note: Grace period threads stay in active registry but are filtered out
+ * so clients only see actively monitored devices.
+ */
 static int _get_registered_dev(struct message_data *message_data, int next)
 {
 	struct thread_status *thread, *hit = NULL;
+	int found_start = !next;  /* If !next, we're ready to match immediately */
 	int ret = -ENOENT;
 
-	DEBUGLOG("Get%s dso:%s  uuid:%s.", next ? "" : "Next",
+	DEBUGLOG("Get%s dso:%s  uuid:%s.", next ? "Next" : "",
 		 message_data->dso_name,
 		 message_data->device_uuid);
+
 	_lock_mutex();
 
-	/* Iterate list of threads checking if we want a particular one. */
-	dm_list_iterate_items(thread, &_thread_registry)
-		if (_want_registered_device(message_data->dso_name,
-					    message_data->device_uuid,
-					    thread)) {
-			hit = thread;
-			break;
-		}
+	/* Single iteration to find the target thread.
+	 * - If next==false: find first match for (dso_name, device_uuid)
+	 * - If next==true: find match for (dso_name, device_uuid),
+	 *   then continue to find next match for (dso_name, any device)
+	 * Skip GRACE_PERIOD threads - only return actively monitored devices. */
+	dm_list_iterate_items(thread, &_thread_registry) {
+		_lock_thread(thread);
 
-	/*
-	 * If we got a registered device and want the next one ->
-	 * fetch next conforming element off the list.
-	 */
-	if (hit && !next)
-		goto reg;
-
-	/*
-	 * If we didn't get a match, try the threads waiting to be deleted.
-	 * FIXME Do something similar if 'next' is set.
-	 */
-	if (!hit && !next)
-		dm_list_iterate_items(thread, &_thread_registry_unused)
-			if (_want_registered_device(message_data->dso_name,
-						    message_data->device_uuid, thread)) {
-				hit = thread;
-				goto reg;
+		/* Skip threads in grace period */
+		if (thread->status != DM_THREAD_GRACE_PERIOD) {
+			if (found_start) {
+				/* Ready to accept a match */
+				if (_want_registered_device(message_data->dso_name,
+							    next ? NULL : message_data->device_uuid,
+							    thread)) {
+					hit = thread;
+					break; /* Keep thread locked */
+				}
+			} else {
+				/* Still looking for the starting point */
+				if (_want_registered_device(message_data->dso_name,
+							    message_data->device_uuid,
+							    thread)) {
+					/* Found starting position, now look for next */
+					found_start = 1;
+				}
 			}
-
-	if (!hit) {
-		DEBUGLOG("Get%s not registered", next ? "" : "Next");
-		goto out;
-	}
-
-	while (1) {
-		if (dm_list_end(&_thread_registry, &thread->list))
-			goto out;
-
-		thread = dm_list_item(thread->list.n, struct thread_status);
-		if (_want_registered_device(message_data->dso_name, NULL, thread)) {
-			hit = thread;
-			break;
 		}
+
+		_unlock_thread(thread);
 	}
 
-      reg:
-	ret = _registered_device(message_data, hit);
+	if (hit) {
+		/* hit is already locked from the search above */
+		ret = _registered_device(message_data, hit);
+		_unlock_thread(hit);
+	}
 
-      out:
 	_unlock_mutex();
 
 	return ret;
@@ -1385,39 +1826,61 @@ static int _get_next_registered_device(struct message_data *message_data)
 static int _set_timeout(struct message_data *message_data)
 {
 	struct thread_status *thread;
+	unsigned timeout = message_data->timeout_secs;
+	int ret = 0;
 
 	_lock_mutex();
-	thread = _lookup_thread_status(message_data);
+	if (!(thread = _lookup_thread_status(message_data))) {
+		_unlock_mutex();
+		return -ENODEV;
+	}
+
+	/* _lookup_thread_status returns with both _global_mutex and thread->mutex held */
+
+	/* Update timeout value and event mask */
+	_set_timeout_to_thread(thread, timeout);
+	if (timeout)
+		_add_events_to_thread(thread, DM_EVENT_TIMEOUT);
+	else
+		_remove_events_from_thread(thread, DM_EVENT_TIMEOUT);
+
+	/* Unlock in reverse order: thread mutex, then global mutex */
+	_unlock_thread(thread);
 	_unlock_mutex();
 
-	if (!thread)
-		return -ENODEV;
+	/* Register or unregister for timeout based on new setting */
+	if (timeout)
+		ret = _register_for_timeout(thread);
+	else
+		_unregister_for_timeout(thread);
 
-	/* Lets reprogram timer */
-	pthread_mutex_lock(&_timeout_mutex);
-	thread->timeout = message_data->timeout_secs;
-	thread->next_time = 0;
-	pthread_cond_signal(&_timeout_cond);
-	pthread_mutex_unlock(&_timeout_mutex);
-
-	return 0;
+	return ret;
 }
 
 static int _get_timeout(struct message_data *message_data)
 {
 	struct thread_status *thread;
 	struct dm_event_daemon_message *msg = message_data->msg;
+	unsigned timeout;
 
 	_lock_mutex();
-	thread = _lookup_thread_status(message_data);
+	if (!(thread = _lookup_thread_status(message_data))) {
+		_unlock_mutex();
+		return -ENODEV;
+	}
+
+	/* _lookup_thread_status returns with both _global_mutex and thread->mutex held */
+
+	/* Read timeout under thread mutex */
+	timeout = thread->timeout;
+
+	/* Unlock in reverse order: thread mutex, then global mutex */
+	_unlock_thread(thread);
 	_unlock_mutex();
 
-	if (!thread)
-		return -ENODEV;
-
 	free(msg->data);
-	msg->size = dm_asprintf(&(msg->data), "%s %" PRIu32,
-				message_data->id, thread->timeout);
+	msg->size = dm_asprintf(&(msg->data), "%s %u",
+				message_data->id, timeout);
 
 	return (msg->data && msg->size) ? 0 : -ENOMEM;
 }
@@ -1426,8 +1889,8 @@ static int _open_fifo(const char *path)
 {
 	struct stat st;
 	int fd = -1;
- 
- 	/*
+
+	/*
 	 * FIXME Explicitly verify the code's requirement that path is secure:
 	 * - All parent directories owned by root without group/other write access unless sticky.
 	 */
@@ -1496,19 +1959,16 @@ static int _open_fifos(struct dm_event_fifos *fifos)
 {
 	/* Create client fifo. */
 	if ((fifos->client = _open_fifo(fifos->client_path)) < 0)
-		goto fail;
+		return_0;
 
 	/* Create server fifo. */
-	if ((fifos->server = _open_fifo(fifos->server_path)) < 0)
-		goto fail;
+	if ((fifos->server = _open_fifo(fifos->server_path)) < 0) {
+		if (close(fifos->client))
+			log_sys_error("close", fifos->client_path);
+		return_0;
+	}
 
 	return 1;
-
-fail:
-	if (fifos->client >= 0 && close(fifos->client))
-		log_sys_error("close", fifos->client_path);
-
-	return 0;
 }
 
 /*
@@ -1716,8 +2176,8 @@ static void _process_request(struct dm_event_fifos *fifos)
 	free(msg.data);
 
 	if (cmd == DM_EVENT_CMD_DIE) {
+		_exit_now = DM_SCHEDULED_EXIT; /* No grace period */
 		_unregister_all_threads();
-		_exit_now = DM_SCHEDULED_EXIT;
 		log_info("dmeventd exiting for restart.");
 	}
 }
@@ -1737,6 +2197,13 @@ static void _process_initial_registrations(void)
 	}
 }
 
+/*
+ * Clean up terminated threads from unused registry.
+ *
+ * Processes threads in _thread_registry_unused (DONE state only).
+ * Joins terminated threads and frees their resources.
+ * Runs periodically from main event loop.
+ */
 static void _cleanup_unused_threads(void)
 {
 	struct dm_list *l;
@@ -1747,18 +2214,24 @@ static void _cleanup_unused_threads(void)
 
 	while ((l = dm_list_first(&_thread_registry_unused))) {
 		thread = dm_list_item(l, struct thread_status);
+		_lock_thread(thread);
+
 		if (thread->status != DM_THREAD_DONE) {
-			if (thread->processing)
+			if (thread->processing) {
+				_unlock_thread(thread);
 				break; /* cleanup on the next round */
+			}
 
 			/* Signal possibly sleeping thread */
-			ret = pthread_kill(thread->thread, SIGALRM);
-			if (!ret || (ret != ESRCH))
+			ret = _thread_wakeup_signal(thread);
+			if (!ret || (ret != ESRCH)) {
+				_unlock_thread(thread);
 				break; /* check again on the next round */
-
+			}
 			/* thread is likely gone */
 		}
 
+		_unlock_thread(thread);
 		dm_list_del(l);
 		_unlock_mutex();
 
@@ -1931,9 +2404,6 @@ out:
 
 static void _remove_files_on_exit(void)
 {
-	if (unlink(DMEVENTD_PIDFILE) && (errno != ENOENT))
-		log_sys_debug("unlink", DMEVENTD_PIDFILE);
-
 	if (!_systemd_activation) {
 		if (unlink(DM_EVENT_FIFO_CLIENT) && (errno != ENOENT))
 			log_sys_debug("unlink", DM_EVENT_FIFO_CLIENT);
@@ -1941,6 +2411,9 @@ static void _remove_files_on_exit(void)
 		if (unlink(DM_EVENT_FIFO_SERVER) && (errno != ENOENT))
 			log_sys_debug("unlink", DM_EVENT_FIFO_SERVER);
 	}
+
+	if (unlink(DMEVENTD_PIDFILE) && (errno != ENOENT))
+		log_sys_debug("unlink", DMEVENTD_PIDFILE);
 }
 
 static void _daemonize(void)
@@ -2250,16 +2723,18 @@ bad:
 static void _usage(char *prog, FILE *file)
 {
 	fprintf(file, "Usage:\n"
-		"%s [-d [-d [-d]]] [-e path] [-f] [-h] [i] [-l] [-R] [-V] [-?]\n\n"
+		"%s [-d [-d [-d]]] [-e path] [-g seconds] [-f] [-h] [i] [-l] [-R] [-V] [-?]\n\n"
 		"   -d       Log debug messages to syslog (-d, -dd, -ddd)\n"
 		"   -e       Select a file path checked on exit\n"
+		"   -g       Grace period for thread cleanup (0-300 seconds, default: %d)\n"
 		"   -f       Don't fork, run in the foreground\n"
 		"   -h       Show this help information\n"
 		"   -i       Query running instance of dmeventd for info\n"
 		"   -l       Log to stdout,stderr instead of syslog\n"
 		"   -?       Show this help information on stderr\n"
 		"   -R       Restart dmeventd\n"
-		"   -V       Show version of dmeventd\n\n", prog);
+		"   -V       Show version of dmeventd\n\n", prog,
+		_grace_period);
 }
 
 int main(int argc, char *argv[])
@@ -2279,7 +2754,7 @@ int main(int argc, char *argv[])
 
 	optopt = optind = opterr = 0;
 	optarg = (char*) "";
-	while ((opt = getopt(argc, argv, ":?e:fhiVdlR")) != EOF) {
+	while ((opt = getopt(argc, argv, ":?e:g:fhiVdlR")) != EOF) {
 		switch (opt) {
 		case 'h':
 			_usage(argv[0], stdout);
@@ -2299,6 +2774,13 @@ int main(int argc, char *argv[])
 				return EXIT_FAILURE;
 			}
 			_exit_on=optarg;
+			break;
+		case 'g':
+			_grace_period = atoi(optarg);
+			if (_grace_period < 0 || _grace_period > 300) {
+				fprintf(stderr, "dmeventd: grace period must be between 0 and 300 seconds.\n");
+				return EXIT_FAILURE;
+			}
 			break;
 		case 'f':
 			_foreground++;
@@ -2381,7 +2863,9 @@ int main(int argc, char *argv[])
 
 	_init_thread_signals();
 
-	if (pthread_mutex_init(&_global_mutex, NULL))
+	if (pthread_mutex_init(&_global_mutex, NULL) ||
+	    pthread_mutex_init(&_timeout_mutex, NULL) ||
+	    pthread_cond_init(&_timeout_cond, NULL))
 		exit(EXIT_FAILURE);
 
 	if (!_systemd_activation && !_open_fifos(&fifos))
@@ -2393,7 +2877,7 @@ int main(int argc, char *argv[])
 
 	log_notice("dmeventd ready for processing.");
 
-	_idle_since = time(NULL);
+	_idle_since = _get_curr_time();
 
 	if (_initial_registrations)
 		_process_initial_registrations();
@@ -2405,11 +2889,11 @@ int main(int argc, char *argv[])
 					break; /* Only prints shutdown message */
 				log_info("dmeventd detected break while being idle "
 					 "for %ld second(s), exiting.",
-					 (long) (time(NULL) - _idle_since));
+					 (long) (_get_curr_time() - _idle_since));
 				break;
 			}
 			if (idle_exit_timeout) {
-				now = time(NULL);
+				now = _get_curr_time();
 				if (now < _idle_since)
 					_idle_since = now; /* clock change? */
 				now -= _idle_since;
@@ -2428,6 +2912,7 @@ int main(int argc, char *argv[])
 				 * but can not simply exit unless all
 				 * threads are done processing.
 				 */
+				_unregister_all_grace_threads();
 				log_info("dmeventd received break, scheduling exit.");
 				/* fall through */
 			case DM_SCHEDULED_EXIT:
@@ -2445,6 +2930,18 @@ int main(int argc, char *argv[])
 		_cleanup_unused_threads();
 	}
 
+	/* Terminate timeout thread if it exists */
+	if (_timeout_thread_id) {
+		_exit_now = DM_EXITING;
+		pthread_mutex_lock(&_timeout_mutex);
+		pthread_cond_signal(&_timeout_cond);  /* Wake it up to check exit */
+		pthread_mutex_unlock(&_timeout_mutex);
+		if (pthread_join(_timeout_thread_id, NULL))
+			log_sys_debug("pthread_join", "timeout thread");
+	}
+
+	pthread_cond_destroy(&_timeout_cond);
+	pthread_mutex_destroy(&_timeout_mutex);
 	pthread_mutex_destroy(&_global_mutex);
 
 	log_notice("dmeventd shutting down.");

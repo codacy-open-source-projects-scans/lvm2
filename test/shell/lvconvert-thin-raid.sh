@@ -10,11 +10,10 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMPOLLD=1
 
 export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 aux have_thin 1 0 0 || skip
 aux have_raid 1 4 0 || skip
@@ -57,5 +56,11 @@ lvconvert --merge $vg/${lv1}_tmeta_rimage_1
 
 lvconvert -y -m +1 $vg/${lv1}_tdata "$dev2"
 lvconvert -y -m +1 $vg/${lv1}_tmeta "$dev1"
+
+lvremove -f $vg
+
+lvcreate -L10M -T $vg/pool
+lvconvert -y --type raid1 -m2 $vg/pool_tdata
+lvconvert -y --type raid1 -m2 $vg/pool_tmeta
 
 vgremove -ff $vg

@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
- * Copyright (C) 2004-2018 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2025 Red Hat, Inc. All rights reserved.
  * Copyright (C) 2005-2007 NEC Corporation
  *
  * This file is part of the device-mapper userspace tools.
@@ -20,6 +20,14 @@
 #include "libdm/misc/dm-logging.h"
 #include "libdm/dm-tools/util.h"
 
+#ifdef __linux__
+#  include "libdm/misc/kdev_t.h"
+#else
+#  define MAJOR(x) major((x))
+#  define MINOR(x) minor((x))
+#  define MKDEV(x,y) makedev((x),(y))
+#endif
+
 #include <ctype.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -31,7 +39,6 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
-#include <stdlib.h>
 
 #ifdef UDEV_SYNC_SUPPORT
 #  include <sys/types.h>
@@ -77,14 +84,6 @@ struct option {
        do __result = (long int) (expression);		\
        while (__result == -1L && errno == EINTR);	\
        __result; }))
-#endif
-
-#ifdef __linux__
-#  include "libdm/misc/kdev_t.h"
-#else
-#  define MAJOR(x) major((x))
-#  define MINOR(x) minor((x))
-#  define MKDEV(x,y) makedev((x),(y))
 #endif
 
 #define LINE_SIZE 4096
@@ -269,7 +268,7 @@ static struct dm_tree *_dtree;
 static struct dm_report *_report;
 static report_type_t _report_type;
 static dev_name_t _dev_name_type;
-static uint64_t _count = 1; /* count of repeating reports */
+static int64_t _count = 1; /* count of repeating reports */
 static struct dm_timestamp *_initial_timestamp = NULL;
 static uint64_t _disp_factor = 512; /* display sizes in sectors */
 static char _disp_units = 's';
@@ -329,7 +328,7 @@ struct command {
 static int _parse_line(struct dm_task *dmt, char *buffer, const char *file,
 		       int line)
 {
-	char ttype[LINE_SIZE], *ptr, *comment;
+	char ttype[LINE_SIZE + 1], *ptr, *comment;
 	unsigned long long start, size;
 	int n;
 
@@ -406,7 +405,7 @@ static int _parse_file(struct dm_task *dmt, const char *file)
 	buffer_size = LINE_SIZE;
 	if (!(buffer = malloc(buffer_size))) {
 		log_error("Failed to malloc line buffer.");
-		return 0;
+		goto out;
 	}
 
 	while (fgets(buffer, (int) buffer_size, fp))
@@ -419,12 +418,11 @@ static int _parse_file(struct dm_task *dmt, const char *file)
 	r = 1;
 
 out:
-	memset(buffer, 0, buffer_size);
-#ifndef HAVE_GETLINE
-	free(buffer);
-#else
-	free(buffer);
-#endif
+	if (buffer) {
+		memset(buffer, 0, buffer_size);
+		free(buffer);
+	}
+
 	if (file && fclose(fp))
 		log_sys_debug("fclose", file);
 
@@ -528,46 +526,53 @@ static char *_extract_uuid_prefix(const char *uuid, const int separator)
 	return uuid_prefix;
 }
 
+static void _destroy_split_name(struct dm_split_name *split_name)
+{
+	free(split_name->subsystem);
+	free(split_name);
+}
+
 static struct dm_split_name *_get_split_name(const char *uuid, const char *name,
 					     int separator)
 {
 	struct dm_split_name *split_name;
+	char *subsystem;
+	size_t len = 0;
 
-	if (!(split_name = malloc(sizeof(*split_name)))) {
+	if (!(subsystem = _extract_uuid_prefix(uuid, separator)))
+		return_NULL;
+
+	if (!strcmp(subsystem, "LVM"))
+		len = strlen(name);
+
+	/* struct size + name string */
+	if (!(split_name = malloc(sizeof(*split_name) + len + 1))) {
 		log_error("Failed to allocate memory to split device name "
 			  "into components.");
+		free(subsystem);
 		return NULL;
 	}
 
-	if (!(split_name->subsystem = _extract_uuid_prefix(uuid, separator))) {
-		free(split_name);
-		return_NULL;
+	split_name->subsystem = subsystem;
+	split_name->vg_name = split_name->lv_name =
+		split_name->lv_layer = (char *) "";
+
+	if (len) {
+		split_name->vg_name = (char*)(split_name + 1);
+		dm_strncpy(split_name->vg_name, name, len + 1);
+
+		if (!dm_split_lvm_name(NULL, NULL,
+				       &split_name->vg_name,
+				       &split_name->lv_name,
+				       &split_name->lv_layer)) {
+			log_error("Failed to allocate memory to split LVM name "
+				  "into components.");
+			_destroy_split_name(split_name);
+			return NULL;
+		}
 	}
 
-	split_name->vg_name = split_name->lv_name =
-	    split_name->lv_layer = (char *) "";
-
-	if (!strcmp(split_name->subsystem, "LVM") &&
-	    (!(split_name->vg_name = strdup(name)) ||
-	     !dm_split_lvm_name(NULL, NULL, &split_name->vg_name,
-				&split_name->lv_name, &split_name->lv_layer)))
-		log_error("Failed to allocate memory to split LVM name "
-			  "into components.");
-
 	return split_name;
-}
-
-static void _destroy_split_name(struct dm_split_name *split_name)
-{
-	/*
-	 * lv_name and lv_layer are allocated within the same block
-	 * of memory as vg_name so don't need to be freed separately.
-	 */
-	if (!strcmp(split_name->subsystem, "LVM"))
-		free(split_name->vg_name);
-
-	free(split_name->subsystem);
-	free(split_name);
 }
 
 /*
@@ -588,7 +593,7 @@ static void _destroy_split_name(struct dm_split_name *split_name)
 static uint64_t _interval_num(void)
 {
 	uint64_t count_arg = _int_args[COUNT_ARG];
-	return ((uint64_t) _int_args[COUNT_ARG] - _count) + !!count_arg;
+	return (uint64_t)(_int_args[COUNT_ARG] - _count) + !!count_arg;
 }
 
 #ifdef HAVE_SYS_TIMERFD_H
@@ -1236,6 +1241,7 @@ static char *_slurp_stdin(void)
 	pos = buf;
 	do  {
 		do
+			/* coverity[overflow_sink] - only positive 'n' is used */
 			n = read(STDIN_FILENO, pos, (size_t) bufsize - total - 1);
 		while ((n < 0) && ((errno == EINTR) || (errno == EAGAIN)));
 
@@ -1248,6 +1254,7 @@ static char *_slurp_stdin(void)
 		if (!n)
 			break;
 
+		/* coverity[overflow] - only positive 'n' is used */
 		total += n;
 		pos += n;
 		if (total == bufsize - 1) {
@@ -1261,6 +1268,7 @@ static char *_slurp_stdin(void)
 		}
 	} while (1);
 
+	/* coverity[deref_overflow] - only positive 'n' was used */
 	buf[total] = '\0';
 
 	return buf;
@@ -4080,416 +4088,123 @@ static int _dm_stats_hist_bins_disp(struct dm_report *rh,
 	return dm_report_field_int(rh, field, (const int *) &bins);
 }
 
-static int _dm_stats_rrqm_disp(struct dm_report *rh,
-			       struct dm_pool *mem __attribute__((unused)),
-			       struct dm_report_field *field, const void *data,
-			       void *private __attribute__((unused)))
+/*
+ * Helper for stats functions that return double values with optional scaling.
+ * Consolidates common pattern: get value, optionally scale (divide by scale factor),
+ * format as "%.2f", allocate and return.
+ */
+typedef int (*dm_stats_double_get_fn)(const struct dm_stats *, double *, uint64_t, uint64_t);
+
+static int _dm_stats_double_disp_helper(struct dm_report *rh,
+					 struct dm_pool *mem,
+					 struct dm_report_field *field,
+					 const void *data,
+					 uint64_t scale,
+					 dm_stats_double_get_fn get_fn)
 {
 	const struct dm_stats *dms = (const struct dm_stats *) data;
 	char buf[64];
 	char *repstr;
-	double *sortval, rrqm;
+	double *sortval, value;
 
-	if (!dm_stats_get_rd_merges_per_sec(dms, &rrqm,
-					    DM_STATS_REGION_CURRENT,
-					    DM_STATS_AREA_CURRENT))
+	if (!get_fn(dms, &value, DM_STATS_REGION_CURRENT, DM_STATS_AREA_CURRENT))
 		return_0;
 
-	if (dm_snprintf(buf, sizeof(buf), "%.2f", rrqm) < 0)
+	if (scale != 1)
+		value /= scale;
+
+	if (dm_snprintf(buf, sizeof(buf), "%.2f", value) < 0)
 		return_0;
 
 	if (!(repstr = dm_pool_strdup(mem, buf)))
 		return_0;
 
-	if (!(sortval = dm_pool_alloc(mem, sizeof(uint64_t))))
+	if (!(sortval = dm_pool_alloc(mem, sizeof(double))))
 		return_0;
 
-	*sortval = rrqm;
+	*sortval = value;
 
 	dm_report_field_set_value(field, repstr, sortval);
 	return 1;
-
 }
 
-static int _dm_stats_wrqm_disp(struct dm_report *rh,
-			       struct dm_pool *mem __attribute__((unused)),
-			       struct dm_report_field *field, const void *data,
-			       void *private __attribute__((unused)))
-{
-	const struct dm_stats *dms = (const struct dm_stats *) data;
-	char buf[64];
-	char *repstr;
-	double *sortval, wrqm;
-
-	if (!dm_stats_get_wr_merges_per_sec(dms, &wrqm,
-					    DM_STATS_REGION_CURRENT,
-					    DM_STATS_AREA_CURRENT))
-		return_0;
-
-	if (dm_snprintf(buf, sizeof(buf), "%.2f", wrqm) < 0)
-		return_0;
-
-	if (!(repstr = dm_pool_strdup(mem, buf)))
-		return_0;
-
-	if (!(sortval = dm_pool_alloc(mem, sizeof(uint64_t))))
-		return_0;
-
-	*sortval = wrqm;
-
-	dm_report_field_set_value(field, repstr, sortval);
-	return 1;
-
+/*
+ * Macro to generate stats display functions for double values with scaling.
+ * Creates a wrapper that calls the helper with the appropriate getter function and scale.
+ * The scale parameter allows division of the value (e.g., NSEC_PER_MSEC for time conversion,
+ * or 1 for no scaling).
+ */
+#define MK_STATS_TIME_DISP_FN(name, get_fn, scale) \
+static int _dm_stats_ ## name ## _disp(struct dm_report *rh, \
+					struct dm_pool *mem, \
+					struct dm_report_field *field, \
+					const void *data, \
+					void *private __attribute__((unused))) \
+{ \
+	return _dm_stats_double_disp_helper(rh, mem, field, data, scale, \
+					     (dm_stats_double_get_fn) dm_stats_get_ ## get_fn); \
 }
 
-static int _dm_stats_rs_disp(struct dm_report *rh,
-			       struct dm_pool *mem __attribute__((unused)),
-			       struct dm_report_field *field, const void *data,
-			       void *private __attribute__((unused)))
-{
-	const struct dm_stats *dms = (const struct dm_stats *) data;
-	char buf[64];
-	char *repstr;
-	double *sortval, rs;
+MK_STATS_TIME_DISP_FN(rrqm, rd_merges_per_sec, 1)
+MK_STATS_TIME_DISP_FN(wrqm, wr_merges_per_sec, 1)
+MK_STATS_TIME_DISP_FN(rs, reads_per_sec, 1)
+MK_STATS_TIME_DISP_FN(ws, writes_per_sec, 1)
+MK_STATS_TIME_DISP_FN(qusz, average_queue_size, 1)
+MK_STATS_TIME_DISP_FN(tput, throughput, 1)
 
-	if (!dm_stats_get_reads_per_sec(dms, &rs,
-					DM_STATS_REGION_CURRENT,
-					DM_STATS_AREA_CURRENT))
-		return_0;
+/* FIXME: make scale configurable - display in msecs */
+MK_STATS_TIME_DISP_FN(await, average_wait_time, NSEC_PER_MSEC)
+MK_STATS_TIME_DISP_FN(r_await, average_rd_wait_time, NSEC_PER_MSEC)
+MK_STATS_TIME_DISP_FN(w_await, average_wr_wait_time, NSEC_PER_MSEC)
+MK_STATS_TIME_DISP_FN(svctm, service_time, NSEC_PER_MSEC)
 
-	if (dm_snprintf(buf, sizeof(buf), "%.2f", rs) < 0)
-		return_0;
-
-	if (!(repstr = dm_pool_strdup(mem, buf)))
-		return_0;
-
-	if (!(sortval = dm_pool_alloc(mem, sizeof(uint64_t))))
-		return_0;
-
-	*sortval = rs;
-
-	dm_report_field_set_value(field, repstr, sortval);
-	return 1;
-
-}
-
-static int _dm_stats_ws_disp(struct dm_report *rh,
-			     struct dm_pool *mem __attribute__((unused)),
-			     struct dm_report_field *field, const void *data,
-			     void *private __attribute__((unused)))
-{
-	const struct dm_stats *dms = (const struct dm_stats *) data;
-	char buf[64];
-	char *repstr;
-	double *sortval, ws;
-
-	if (!dm_stats_get_writes_per_sec(dms, &ws,
-					 DM_STATS_REGION_CURRENT,
-					 DM_STATS_AREA_CURRENT))
-		return_0;
-
-	if (dm_snprintf(buf, sizeof(buf), "%.2f", ws) < 0)
-		return_0;
-
-	if (!(repstr = dm_pool_strdup(mem, buf)))
-		return_0;
-
-	if (!(sortval = dm_pool_alloc(mem, sizeof(uint64_t))))
-		return_0;
-
-	*sortval = ws;
-
-	dm_report_field_set_value(field, repstr, sortval);
-	return 1;
-
-}
-
-static int _dm_stats_read_secs_disp(struct dm_report *rh,
-				    struct dm_pool *mem __attribute__((unused)),
-				    struct dm_report_field *field, const void *data,
-				    void *private __attribute__((unused)))
+/*
+ * Helper for stats functions that format values as sizes.
+ * Uses dm_size_to_string with _disp_units and _disp_factor.
+ */
+static int _dm_stats_size_disp_helper(struct dm_report *rh,
+				       struct dm_pool *mem,
+				       struct dm_report_field *field,
+				       const void *data,
+				       dm_stats_double_get_fn get_fn)
 {
 	const struct dm_stats *dms = (const struct dm_stats *) data;
 	const char *repstr;
-	double *sortval, rsec;
-	char units = _disp_units;
-	uint64_t factor = _disp_factor;
+	double *sortval, value;
 
-	if (!dm_stats_get_read_sectors_per_sec(dms, &rsec,
-					       DM_STATS_REGION_CURRENT,
-					       DM_STATS_AREA_CURRENT))
+	if (!get_fn(dms, &value, DM_STATS_REGION_CURRENT, DM_STATS_AREA_CURRENT))
 		return_0;
 
-	if (!(repstr = dm_size_to_string(mem, (uint64_t) rsec, units, 1,
-					 factor, _show_units(), DM_SIZE_UNIT)))
-
+	if (!(repstr = dm_size_to_string(mem, (uint64_t) value, _disp_units, 1,
+					 _disp_factor, _show_units(), DM_SIZE_UNIT)))
 		return_0;
 
-	if (!(sortval = dm_pool_alloc(mem, sizeof(uint64_t))))
+	if (!(sortval = dm_pool_alloc(mem, sizeof(double))))
 		return_0;
 
-	*sortval = rsec;
+	*sortval = value;
 
 	dm_report_field_set_value(field, repstr, sortval);
 	return 1;
 }
 
-static int _dm_stats_write_secs_disp(struct dm_report *rh,
-				     struct dm_pool *mem __attribute__((unused)),
-				     struct dm_report_field *field, const void *data,
-				     void *private __attribute__((unused)))
-{
-	const struct dm_stats *dms = (const struct dm_stats *) data;
-	const char *repstr;
-	double *sortval, wsec;
-	char units = _disp_units;
-	uint64_t factor = _disp_factor;
-
-	if (!dm_stats_get_write_sectors_per_sec(dms, &wsec,
-						DM_STATS_REGION_CURRENT,
-						DM_STATS_AREA_CURRENT))
-		return_0;
-
-	if (!(repstr = dm_size_to_string(mem, (uint64_t) wsec, units, 1,
-					 factor, _show_units(), DM_SIZE_UNIT)))
-		return_0;
-
-	if (!(sortval = dm_pool_alloc(mem, sizeof(uint64_t))))
-		return_0;
-
-	*sortval = wsec;
-
-	dm_report_field_set_value(field, repstr, sortval);
-	return 1;
+/*
+ * Macro for stats display functions that format as sizes.
+ */
+#define MK_STATS_SIZE_DISP_FN(name, get_fn) \
+static int _dm_stats_ ## name ## _disp(struct dm_report *rh, \
+					struct dm_pool *mem, \
+					struct dm_report_field *field, \
+					const void *data, \
+					void *private __attribute__((unused))) \
+{ \
+	return _dm_stats_size_disp_helper(rh, mem, field, data, \
+					   (dm_stats_double_get_fn) dm_stats_get_ ## get_fn); \
 }
 
-static int _dm_stats_arqsz_disp(struct dm_report *rh,
-				struct dm_pool *mem __attribute__((unused)),
-				struct dm_report_field *field, const void *data,
-				void *private __attribute__((unused)))
-{
-	const struct dm_stats *dms = (const struct dm_stats *) data;
-	const char *repstr;
-	double *sortval, arqsz;
-	char units = _disp_units;
-	uint64_t factor = _disp_factor;
-
-	if (!dm_stats_get_average_request_size(dms, &arqsz,
-					       DM_STATS_REGION_CURRENT,
-					       DM_STATS_AREA_CURRENT))
-		return_0;
-
-
-	if (!(repstr = dm_size_to_string(mem, (uint64_t) arqsz, units, 1,
-					 factor, _show_units(), DM_SIZE_UNIT)))
-
-		return_0;
-
-	if (!(sortval = dm_pool_alloc(mem, sizeof(uint64_t))))
-		return_0;
-
-	*sortval = arqsz;
-
-	dm_report_field_set_value(field, repstr, sortval);
-	return 1;
-}
-
-static int _dm_stats_qusz_disp(struct dm_report *rh,
-			       struct dm_pool *mem __attribute__((unused)),
-			       struct dm_report_field *field, const void *data,
-			       void *private __attribute__((unused)))
-{
-	const struct dm_stats *dms = (const struct dm_stats *) data;
-	char buf[64];
-	char *repstr;
-	double *sortval, qusz;
-
-	if (!dm_stats_get_average_queue_size(dms, &qusz,
-					     DM_STATS_REGION_CURRENT,
-					     DM_STATS_AREA_CURRENT))
-		return_0;
-
-	if (dm_snprintf(buf, sizeof(buf), "%.2f", qusz) < 0)
-		return_0;
-
-	if (!(repstr = dm_pool_strdup(mem, buf)))
-		return_0;
-
-	if (!(sortval = dm_pool_alloc(mem, sizeof(uint64_t))))
-		return_0;
-
-	*sortval = qusz;
-
-	dm_report_field_set_value(field, repstr, sortval);
-	return 1;
-}
-
-static int _dm_stats_await_disp(struct dm_report *rh,
-				struct dm_pool *mem __attribute__((unused)),
-				struct dm_report_field *field, const void *data,
-				void *private __attribute__((unused)))
-{
-	const struct dm_stats *dms = (const struct dm_stats *) data;
-	char buf[64];
-	char *repstr;
-	double *sortval, await;
-
-	if (!dm_stats_get_average_wait_time(dms, &await,
-					    DM_STATS_REGION_CURRENT,
-					    DM_STATS_AREA_CURRENT))
-		return_0;
-
-	/* FIXME: make scale configurable */
-	/* display in msecs */
-	await /= NSEC_PER_MSEC;
-
-	if (dm_snprintf(buf, sizeof(buf), "%.2f", await) < 0)
-		return_0;
-
-	if (!(repstr = dm_pool_strdup(mem, buf)))
-		return_0;
-
-	if (!(sortval = dm_pool_alloc(mem, sizeof(uint64_t))))
-		return_0;
-
-	*sortval = await;
-
-	dm_report_field_set_value(field, repstr, sortval);
-	return 1;
-}
-
-static int _dm_stats_r_await_disp(struct dm_report *rh,
-				  struct dm_pool *mem __attribute__((unused)),
-				  struct dm_report_field *field, const void *data,
-				  void *private __attribute__((unused)))
-{
-	const struct dm_stats *dms = (const struct dm_stats *) data;
-	char buf[64];
-	char *repstr;
-	double *sortval, r_await;
-
-	if (!dm_stats_get_average_rd_wait_time(dms, &r_await,
-					       DM_STATS_REGION_CURRENT,
-					       DM_STATS_AREA_CURRENT))
-		return_0;
-
-	/* FIXME: make scale configurable */
-	/* display in msecs */
-	r_await /= NSEC_PER_MSEC;
-
-	if (dm_snprintf(buf, sizeof(buf), "%.2f", r_await) < 0)
-		return_0;
-
-	if (!(repstr = dm_pool_strdup(mem, buf)))
-		return_0;
-
-	if (!(sortval = dm_pool_alloc(mem, sizeof(uint64_t))))
-		return_0;
-
-	*sortval = r_await;
-
-	dm_report_field_set_value(field, repstr, sortval);
-	return 1;
-}
-
-static int _dm_stats_w_await_disp(struct dm_report *rh,
-				  struct dm_pool *mem __attribute__((unused)),
-				  struct dm_report_field *field, const void *data,
-				  void *private __attribute__((unused)))
-{
-	const struct dm_stats *dms = (const struct dm_stats *) data;
-	char buf[64];
-	char *repstr;
-	double *sortval, w_await;
-
-	if (!dm_stats_get_average_wr_wait_time(dms, &w_await,
-					       DM_STATS_REGION_CURRENT,
-					       DM_STATS_AREA_CURRENT))
-		return_0;
-
-	/* FIXME: make scale configurable */
-	/* display in msecs */
-	w_await /= NSEC_PER_MSEC;
-
-	if (dm_snprintf(buf, sizeof(buf), "%.2f", w_await) < 0)
-		return_0;
-
-	if (!(repstr = dm_pool_strdup(mem, buf)))
-		return_0;
-
-	if (!(sortval = dm_pool_alloc(mem, sizeof(uint64_t))))
-		return_0;
-
-	*sortval = w_await;
-
-	dm_report_field_set_value(field, repstr, sortval);
-	return 1;
-}
-
-static int _dm_stats_tput_disp(struct dm_report *rh,
-			       struct dm_pool *mem __attribute__((unused)),
-			       struct dm_report_field *field, const void *data,
-			       void *private __attribute__((unused)))
-{
-	const struct dm_stats *dms = (const struct dm_stats *) data;
-	char buf[64];
-	char *repstr;
-	double *sortval, tput;
-
-	if (!dm_stats_get_throughput(dms, &tput,
-				     DM_STATS_REGION_CURRENT,
-				     DM_STATS_AREA_CURRENT))
-		return_0;
-
-	if (dm_snprintf(buf, sizeof(buf), "%.2f", tput) < 0)
-		return_0;
-
-	if (!(repstr = dm_pool_strdup(mem, buf)))
-		return_0;
-
-	if (!(sortval = dm_pool_alloc(mem, sizeof(uint64_t))))
-		return_0;
-
-	*sortval = tput;
-
-	dm_report_field_set_value(field, repstr, sortval);
-	return 1;
-}
-
-static int _dm_stats_svctm_disp(struct dm_report *rh,
-				struct dm_pool *mem __attribute__((unused)),
-				struct dm_report_field *field, const void *data,
-				void *private __attribute__((unused)))
-{
-	const struct dm_stats *dms = (const struct dm_stats *) data;
-	char buf[64];
-	char *repstr;
-	double *sortval, svctm;
-
-	if (!dm_stats_get_service_time(dms, &svctm,
-				       DM_STATS_REGION_CURRENT,
-				       DM_STATS_AREA_CURRENT))
-		return_0;
-
-	/* FIXME: make scale configurable */
-	/* display in msecs */
-	svctm /= NSEC_PER_MSEC;
-
-	if (dm_snprintf(buf, sizeof(buf), "%.2f", svctm) < 0)
-		return_0;
-
-	if (!(repstr = dm_pool_strdup(mem, buf)))
-		return_0;
-
-	if (!(sortval = dm_pool_alloc(mem, sizeof(uint64_t))))
-		return_0;
-
-	*sortval = svctm;
-
-	dm_report_field_set_value(field, repstr, sortval);
-	return 1;
-
-}
+MK_STATS_SIZE_DISP_FN(read_secs, read_sectors_per_sec)
+MK_STATS_SIZE_DISP_FN(write_secs, write_sectors_per_sec)
+MK_STATS_SIZE_DISP_FN(arqsz, average_request_size)
 
 static int _dm_stats_util_disp(struct dm_report *rh,
 			       struct dm_pool *mem __attribute__((unused)),
@@ -6528,9 +6243,39 @@ static int _stats(CMD_ARGS)
 
 static int _process_tree_options(const char *options)
 {
+	/* Tree option lookup - must be sorted alphabetically by name for bsearch
+	 * char name must be the 1st. structure element
+	 * so we can use strcmp() directly without extra function elem->name */
+	struct tree_option {
+		char name[14];		/* option name (longest is "blkdevname" = 11 chars) */
+		int8_t switch_idx;	/* TR_* index, or -1 if setting symbol */
+		int8_t switch_value;	/* value to set (0 or 1) */
+		const void *tsym_value;	/* symbol pointer, or NULL if setting switch */
+	};
+
+	static const struct tree_option _tree_options[] = {
+		{ "active",      TR_ACTIVE,     1, NULL },
+		{ "ascii",       -1,            0, &_tsym_ascii },
+		{ "blkdevname",  TR_BLKDEVNAME, 1, NULL },
+		{ "compact",     TR_COMPACT,    1, NULL },
+		{ "device",      TR_DEVICE,     1, NULL },
+		{ "inverted",    TR_BOTTOMUP,   1, NULL },
+		{ "nodevice",    TR_DEVICE,     0, NULL },
+		{ "notrunc",     TR_TRUNCATE,   0, NULL },
+		{ "open",        TR_OPENCOUNT,  1, NULL },
+		{ "rw",          TR_RW,         1, NULL },
+		{ "status",      TR_STATUS,     1, NULL },
+		{ "table",       TR_TABLE,      1, NULL },
+		{ "utf",         -1,            0, &_tsym_utf },
+		{ "uuid",        TR_UUID,       1, NULL },
+		{ "vt100",       -1,            0, &_tsym_vt100 },
+	};
+
 	const char *s, *end;
 	struct winsize winsz = { 0 };
 	size_t len;
+	char opt_buf[sizeof(_tree_options[0].name)];
+	const struct tree_option *found;
 
 	/* Symbol set default */
 	if (!strcmp(nl_langinfo(CODESET), "UTF-8"))
@@ -6547,40 +6292,30 @@ static int _process_tree_options(const char *options)
 		len = 0;
 		for (end = s; *end && *end != ','; end++, len++)
 			;
-		if (!strncmp(s, "device", len))
-			_tree_switches[TR_DEVICE] = 1;
-		else if (!strncmp(s, "blkdevname", len))
-			_tree_switches[TR_BLKDEVNAME] = 1;
-		else if (!strncmp(s, "nodevice", len))
-			_tree_switches[TR_DEVICE] = 0;
-		else if (!strncmp(s, "status", len))
-			_tree_switches[TR_STATUS] = 1;
-		else if (!strncmp(s, "table", len))
-			_tree_switches[TR_TABLE] = 1;
-		else if (!strncmp(s, "active", len))
-			_tree_switches[TR_ACTIVE] = 1;
-		else if (!strncmp(s, "open", len))
-			_tree_switches[TR_OPENCOUNT] = 1;
-		else if (!strncmp(s, "uuid", len))
-			_tree_switches[TR_UUID] = 1;
-		else if (!strncmp(s, "rw", len))
-			_tree_switches[TR_RW] = 1;
-		else if (!strncmp(s, "utf", len))
-			_tsym = &_tsym_utf;
-		else if (!strncmp(s, "vt100", len))
-			_tsym = &_tsym_vt100;
-		else if (!strncmp(s, "ascii", len))
-			_tsym = &_tsym_ascii;
-		else if (!strncmp(s, "inverted", len))
-			_tree_switches[TR_BOTTOMUP] = 1;
-		else if (!strncmp(s, "compact", len))
-			_tree_switches[TR_COMPACT] = 1;
-		else if (!strncmp(s, "notrunc", len))
-			_tree_switches[TR_TRUNCATE] = 0;
+
+		/* Copy option to null-terminated buffer for bsearch */
+		if (len >= (sizeof(opt_buf) - 1))
+			found = NULL;
 		else {
-			log_error("Tree options not recognised: %s.", s);
+			dm_strncpy(opt_buf, s, len + 1);
+			/* Binary search for option */
+			found = bsearch(opt_buf, _tree_options,
+					sizeof(_tree_options) / sizeof(_tree_options[0]),
+					sizeof(_tree_options[0]),
+					(int (*)(const void*, const void*))strcmp);
+		}
+
+		if (!found) {
+			log_error("Tree option not recognised: %.*s.", (int)len, s);
 			return 0;
 		}
+
+		/* Apply option directly from table */
+		if (found->tsym_value)
+			_tsym = found->tsym_value;
+		else
+			_tree_switches[found->switch_idx] = found->switch_value;
+
 		if (!*end)
 			break;
 		s = end;
@@ -7337,9 +7072,9 @@ unknown:
 	}
 
 	if (_switches[COUNT_ARG] && _int_args[COUNT_ARG])
-		_count = (uint64_t)_int_args[COUNT_ARG];
+		_count = _int_args[COUNT_ARG];
 	else if (_switches[COUNT_ARG] || _switches[INTERVAL_ARG])
-		_count = UINT64_MAX;
+		_count = INT64_MAX;
 
 	if (_switches[UNITS_ARG]) {
 		_disp_factor = _factor_from_units(_string_args[UNITS_ARG],
@@ -7376,7 +7111,7 @@ doit:
 
 			if (_count > 1 && r) {
 				putchar('\n');
-				fflush(stdout);
+				(void) fflush(stdout);
 				/* wait for --interval and update timestamps */
 				if (!_do_report_wait()) {
 					ret = 1;

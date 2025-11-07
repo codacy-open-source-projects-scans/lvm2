@@ -24,6 +24,7 @@
 #include "lib/cache/lvmcache.h"
 #include "lib/device/device-types.h"
 #include "lib/device/device_id.h"
+#include "lib/device/persist.h"
 #include "lib/datastruct/str_list.h"
 #include "lib/locking/lvmlockd.h"
 
@@ -926,6 +927,7 @@ static int _translate_time_items(struct dm_report *rh, struct time_info *info,
 
 		if (_is_time_num(id)) {
 			errno = 0;
+			/* coverity[check_return]  num is used through the switch() */
 			num = strtol(ti->s, NULL, 10);
 			if (errno) {
 				log_error("_translate_time_items: invalid time.");
@@ -2622,13 +2624,12 @@ static struct logical_volume *_lv_for_raid_image_seg(const struct lv_segment *se
 				p = strchr(p + 5, '_');
 
 			if (p) {
-				struct lv_list *lvl;
+				struct logical_volume *lv;
 
 				*p = '\0';
-				if ((lvl = find_lv_in_vg(seg->lv->vg, lv_name)) &&
-				    seg_is_reshapable_raid(first_seg(lvl->lv)))
-					return lvl->lv;
-
+				if ((lv = find_lv(seg->lv->vg, lv_name)) &&
+				    seg_is_reshapable_raid(first_seg(lv)))
+					return lv;
 			}
 		}
 	}
@@ -2991,6 +2992,48 @@ static int _vglockargs_disp(struct dm_report *rh, struct dm_pool *mem,
 	const struct volume_group *vg = (const struct volume_group *) data;
 
 	return _field_string(rh, field, vg->lock_args ? : "");
+}
+
+static int _vgpersist_disp(struct dm_report *rh, struct dm_pool *mem,
+			    struct dm_report_field *field,
+			    const void *data, void *private)
+{
+	const struct volume_group *vg = (const struct volume_group *) data;
+
+	if (!vg->pr)
+		return _field_string(rh, field, "");
+	if ((vg->pr & VG_PR_REQUIRE) && (vg->pr & VG_PR_AUTOSTART) && (vg->pr & VG_PR_PTPL))
+		return _field_string(rh, field, "require,autostart,ptpl");
+	if ((vg->pr & VG_PR_REQUIRE) && (vg->pr & VG_PR_AUTOSTART))
+		return _field_string(rh, field, "require,autostart");
+	if ((vg->pr & VG_PR_REQUIRE) && (vg->pr & VG_PR_PTPL))
+		return _field_string(rh, field, "require,ptpl");
+	if ((vg->pr & VG_PR_AUTOSTART) && (vg->pr & VG_PR_PTPL))
+		return _field_string(rh, field, "autostart,ptpl");
+	if (vg->pr & VG_PR_REQUIRE)
+		return _field_string(rh, field, "require");
+	if (vg->pr & VG_PR_AUTOSTART)
+		return _field_string(rh, field, "autostart");
+	if (vg->pr & VG_PR_PTPL)
+		return _field_string(rh, field, "ptpl");
+	return _field_string(rh, field, "");
+}
+
+static int _vgprstatus_disp(struct dm_report *rh, struct dm_pool *mem,
+			    struct dm_report_field *field,
+			    const void *data, void *private)
+{
+	struct volume_group *vg = (struct volume_group *) data;
+	struct cmd_context *cmd = (struct cmd_context *) private;
+	int is_error = 0;
+
+	if (!vg->pr)
+		return _field_string(rh, field, "");
+
+	if (persist_is_started(cmd, vg, &is_error, 1))
+		return _field_string(rh, field, "started");
+	else
+		return _field_string(rh, field, is_error ? "error" : "stopped");
 }
 
 static int _lvuuid_disp(struct dm_report *rh __attribute__((unused)), struct dm_pool *mem,
@@ -4107,6 +4150,8 @@ GENERATE_CACHE_STATUS_DISP_FN(read_hits)
 GENERATE_CACHE_STATUS_DISP_FN(read_misses)
 GENERATE_CACHE_STATUS_DISP_FN(write_hits)
 GENERATE_CACHE_STATUS_DISP_FN(write_misses)
+GENERATE_CACHE_STATUS_DISP_FN(promotions)
+GENERATE_CACHE_STATUS_DISP_FN(demotions)
 
 /*
  * Macro to generate '_writecache_<cache_status_field_name>_disp' reporting function.
@@ -4637,14 +4682,25 @@ int report_devtypes(void *handle)
 
 int report_cmdlog(void *handle, const char *type, const char *context,
 		  const char *object_type_name, const char *object_name,
-		  const char *object_id, const char *object_group,
-		  const char *object_group_id, const char *msg,
+		  const struct id *object_id, const char *object_group,
+		  const struct id *object_group_id, const char *msg,
 		  int current_errno, int ret_code)
 {
+	char object_uuid[64] __attribute__((aligned(8))) = { 0 };
+	char object_group_uuid[64] __attribute__((aligned(8))) = { 0 };
+
 	struct cmd_log_item log_item = {_log_seqnum++, type, context, object_type_name,
-					object_name ? : "", object_id ? : "",
-					object_group ? : "", object_group_id ? : "",
+					object_name ? : "", object_uuid,
+					object_group ? : "", object_group_uuid,
 					msg ? : "", current_errno, ret_code};
+
+	if (object_id &&
+	    !id_write_format(object_id, object_uuid, sizeof(object_uuid)))
+		stack;
+
+	if (object_group_id &&
+	    !id_write_format(object_group_id, object_group_uuid, sizeof(object_group_uuid)))
+		stack;
 
 	if (handle)
 		return dm_report_object(handle, &log_item);

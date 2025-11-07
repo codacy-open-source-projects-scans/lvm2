@@ -11,9 +11,8 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 aux have_raid 1 3 0 || skip
 aux raid456_replace_works || skip
@@ -25,12 +24,15 @@ aux lvmconf 'allocation/maximise_cling = 0' \
 aux prepare_vg 8 80
 get_devs
 
-offset=$(get first_extent_sector "$dev1")
+offset=$(( $(get first_extent_sector "$dev1") + 128 ))
 
 function delay
 {
+	local rd=0
+	[ "$1" = "0" ] || rd=1
+
 	for d in "${DEVICES[@]}"; do
-		aux delay_dev "$d" 0 $1 "$offset"
+		aux delay_dev "$d" "$rd" "$1" "$offset"
 	done
 }
 
@@ -39,7 +41,6 @@ function delay
 RAID_SIZE=32
 
 # Fast sync and repair afterwards
-delay 0
 
 # RAID1 transient failure check
 lvcreate --type raid1 -m 1 -L $RAID_SIZE -n $lv1 $vg "$dev1" "$dev2"
@@ -143,7 +144,9 @@ delay 50
 lvcreate --type raid6 -i 3 -L $RAID_SIZE -n $lv1 $vg \
     "$dev1" "$dev2" "$dev3" "$dev4" "$dev5"
 aux disable_dev "$dev4"
+if [ "${LVM_VALGRIND:-0}" -eq 0 ]; then
 not lvconvert -y --repair $vg/$lv1
+fi
 delay 0 # Fast sync and repair afterwards
 aux disable_dev "$dev4" # Need to disable again after changing delay
 aux wait_for_sync $vg $lv1
@@ -161,7 +164,9 @@ delay 50
 lvcreate --type raid10 -m 1 -i 2 -L $RAID_SIZE -n $lv1 $vg \
     "$dev1" "$dev2" "$dev3" "$dev4"
 aux disable_dev "$dev4"
+if [ "${LVM_VALGRIND:-0}" -eq 0 ]; then
 not lvconvert -y --repair $vg/$lv1
+fi
 delay 0 # Fast sync and repair afterwards
 aux disable_dev "$dev4" # Need to disable again after changing delay
 aux disable_dev "$dev1"

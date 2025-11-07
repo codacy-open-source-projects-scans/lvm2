@@ -1,5 +1,5 @@
-// Copyright (C) 2018 Red Hat, Inc. All rights reserved.
-// 
+// Copyright (C) 2018-2025 Red Hat, Inc. All rights reserved.
+//
 // This file is part of LVM2.
 //
 // This copyrighted material is made available to anyone wishing to use,
@@ -9,7 +9,7 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with this program; if not, write to the Free Software Foundation,
 // Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
- 
+
 #include "units.h"
 #include "base/data-struct/radix-tree.h"
 #include "base/memory/container_of.h"
@@ -348,7 +348,7 @@ static void test_remove_prefix(void *fixture)
 
 	T_ASSERT(radix_tree_is_well_formed(rt));
 
-	// remove keys in a sub range 
+	// remove keys in a sub range
 	k[0] = 21;
 	T_ASSERT_EQUAL(radix_tree_remove_prefix(rt, k, 1), count);
 	T_ASSERT(radix_tree_is_well_formed(rt));
@@ -530,8 +530,8 @@ static void test_remove_calls_dtr(void *fixture)
 		for (i = 0; i < DTR_COUNT; i++) {
 			bool found = false;
 			do {
-				v.n = i;
 				uint8_t *k = keys + (i * 3);
+				v.n = i;
 				_gen_key(k, k + 3);
 				if (!radix_tree_lookup(rt, k, 3, &v)) {
 					T_ASSERT(radix_tree_insert(rt, k, 3, v));
@@ -542,7 +542,7 @@ static void test_remove_calls_dtr(void *fixture)
 		}
 
 		T_ASSERT(radix_tree_is_well_formed(rt));
-		
+
 		// double check
 		for (i = 0; i < DTR_COUNT; i++) {
 			uint8_t *k = keys + (i * 3);
@@ -584,8 +584,8 @@ static void test_destroy_calls_dtr(void *fixture)
 		for (i = 0; i < DTR_COUNT; i++) {
 			bool found = false;
 			do {
-				v.n = i;
 				uint8_t *k = keys + (i * 3);
+				v.n = i;
 				_gen_key(k, k + 3);
 				if (!radix_tree_lookup(rt, k, 3, &v)) {
 					T_ASSERT(radix_tree_insert(rt, k, 3, v));
@@ -597,7 +597,7 @@ static void test_destroy_calls_dtr(void *fixture)
 
 		T_ASSERT(radix_tree_is_well_formed(rt));
 	}
-		
+
 	radix_tree_destroy(rt);
 	T_ASSERT(c.c == DTR_COUNT);
 	for (i = 0; i < DTR_COUNT; i++)
@@ -803,11 +803,97 @@ static void __invalidate(struct radix_tree *rt, int fd)
 	T_ASSERT(radix_tree_is_well_formed(rt));
 }
 
+static void _generate_radix_test_sub_pattern(struct radix_tree *rt, int idx)
+{
+	int j;
+
+	for (j = 5; j < 8; ++j)  {
+		__lookup_fails(rt, idx, j);
+		__insert(rt, idx, j, j + 195);
+		__lookup_matches(rt, idx, j, j + 195);
+	}
+}
+
+/*
+ * Generate the similar test patterns as rt_case1.c but algorithmically.
+ */
+static void _generate_radix_test_pattern(struct radix_tree *rt)
+{
+	int fd;
+
+	for (fd = 6; fd <= 205; fd++) {
+		__lookup_fails(rt, fd, 0);
+		__insert(rt, fd, 0, fd - 6);
+		switch (fd) {
+		case 46:
+		case 65:
+			_generate_radix_test_sub_pattern(rt, fd);
+		}
+	}
+
+	for (fd = 6; fd <= 205; fd++) {
+		__lookup_matches(rt, fd, 0, fd - 6);
+		__invalidate(rt, fd);
+	}
+
+	for (fd = 6; fd <= 205; fd++) {
+		__lookup_fails(rt, fd, 0);
+		__insert(rt, fd, 0, fd + 202);
+	}
+
+	for (fd = 6; fd <= 205; fd++) {
+		__lookup_matches(rt, fd, 0, fd + 202);
+		__invalidate(rt, fd);
+	}
+
+	for (fd = 6; fd <= 23; fd++) {
+		__lookup_fails(rt, fd, 0);
+		__insert(rt, fd, 0, fd + 402);
+	}
+
+	for (fd = 6; fd <= 13; fd++) {
+		__lookup_matches(rt, fd, 0, fd + 402);
+		__invalidate(rt, fd);
+	}
+}
+
 static void test_bcache_scenario3(void *fixture)
 {
 	struct radix_tree *rt = fixture;
 
-	#include "test/unit/rt_case1.c"
+	/* Generate test patterns algorithmically instead of static inclusion */
+	_generate_radix_test_pattern(rt);
+}
+
+static bool _uniq_visit(struct radix_tree_iterator *it,
+			const void *key, size_t keylen, union radix_value v)
+{
+	struct visitor *vt = container_of(it, struct visitor, it);
+	T_ASSERT_EQUAL(v.n, 2); // always expecting value == 2
+	vt->count++;
+	return true;
+}
+
+static void test_uniq_insert(void *fixture)
+{
+	struct radix_tree *rt = fixture;
+	struct visitor vt = { .it.visit = _uniq_visit };
+	uint8_t k[6] = "test1";
+	uint8_t l[6] = "test2";
+	union radix_value v1 = { .n = 1 };
+	union radix_value v2 = { .n = 2 };
+
+	T_ASSERT(radix_tree_insert(rt, k, sizeof(k), v1));
+	T_ASSERT(radix_tree_insert(rt, k, sizeof(k), v1));
+	T_ASSERT_EQUAL(radix_tree_uniq_insert(rt, k, sizeof(k), v2), -1);
+
+	T_ASSERT(radix_tree_uniq_insert(rt, l, sizeof(l), v1));
+	T_ASSERT_EQUAL(radix_tree_uniq_insert(rt, l, sizeof(l), v2), -1);
+
+	T_ASSERT(radix_tree_is_well_formed(rt));
+
+	radix_tree_iterate(rt, NULL, 0, &vt.it);
+	T_ASSERT_EQUAL(radix_tree_size(rt), vt.count);
 }
 
 //----------------------------------------------------------------
@@ -846,6 +932,7 @@ void radix_tree_tests(struct dm_list *all_tests)
 	T("bcache-scenario", "A specific series of keys from a bcache scenario", test_bcache_scenario);
 	T("bcache-scenario-2", "A second series of keys from a bcache scenario", test_bcache_scenario2);
 	T("bcache-scenario-3", "A third series of keys from a bcache scenario", test_bcache_scenario3);
+	T("uniq-insert", "Test insert with test for uniq key", test_uniq_insert);
 
 	dm_list_add(all_tests, &ts->list);
 }

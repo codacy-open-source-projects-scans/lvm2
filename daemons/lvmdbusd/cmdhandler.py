@@ -160,6 +160,8 @@ def call_lvm(command, debug=False, line_cb=None,
 
 			# Check to see if process has terminated, None when running
 			if process.poll() is not None:
+				stdout_text += read_decoded(process.stdout)
+				stderr_text += read_decoded(process.stderr)
 				break
 		except IOError as ioe:
 			log_debug("call_lvm:" + str(ioe))
@@ -549,6 +551,14 @@ def lv_vdo_deduplication(lv_path, enable, dedup_options):
 		cmd.append('n')
 	cmd.extend(options_to_cli_args(dedup_options))
 	cmd.append(lv_path)
+	return call(cmd)
+
+
+def lv_raid_repair(lv_path, new_pvs, repair_options):
+	cmd = ['lvconvert', '-y', '--repair']
+	cmd.append(lv_path)
+	cmd.extend(new_pvs)
+	cmd.extend(options_to_cli_args(repair_options))
 	return call(cmd)
 
 

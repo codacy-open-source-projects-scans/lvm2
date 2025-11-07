@@ -32,6 +32,10 @@ typedef enum {
 	ALLOC_INHERIT
 } alloc_policy_t;
 
+#define VG_PR_REQUIRE	0x00000001
+#define VG_PR_AUTOSTART	0x00000002
+#define VG_PR_PTPL	0x00000004
+
 #define MAX_EXTENT_COUNT  (UINT32_MAX)
 
 struct volume_group {
@@ -46,6 +50,7 @@ struct volume_group {
 	unsigned needs_backup : 1;
 	unsigned needs_write_and_commit : 1;
 	unsigned needs_lockd_free_lvs : 1;
+	unsigned fixup_imported_mirrors : 1;
 	uint32_t write_count; /* count the number of vg_write calls */
 	uint32_t buffer_size_hint; /* hint with buffer size of parsed VG */
 
@@ -62,6 +67,10 @@ struct volume_group {
 	alloc_policy_t alloc;
 	struct profile *profile;
 	uint64_t status;
+
+	struct radix_tree *lv_names;    /* maintained tree for LV names within VG */
+	struct radix_tree *lv_uuids;    /* LV uuid (when searching committed metadata) */
+	struct radix_tree *pv_names;    /* PV names used for metadata import */
 
 	struct id id;
 	const char *name;
@@ -130,6 +139,8 @@ struct volume_group {
 
 	uint32_t mda_copies; /* target number of mdas for this VG */
 
+	uint32_t pr; /* VG_PR_ flags */
+
 	struct logical_volume *pool_metadata_spare_lv; /* one per VG */
 	struct logical_volume *sanlock_lv; /* one per VG */
 	struct dm_list msg_list;
@@ -172,6 +183,7 @@ uint32_t vg_mda_count(const struct volume_group *vg);
 uint32_t vg_mda_used_count(const struct volume_group *vg);
 uint32_t vg_mda_copies(const struct volume_group *vg);
 int vg_set_mda_copies(struct volume_group *vg, uint32_t mda_copies);
+int vg_set_persist(struct volume_group *vg, uint32_t set_flags);
 char *vg_profile_dup(const struct volume_group *vg);
 void vg_backup_if_needed(struct volume_group *vg);
 

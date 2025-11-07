@@ -539,7 +539,7 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
 {
 	va_list ap;
 	char buf[1024], message[4096];
-	char time_prefix[32] = "";
+	char time_prefix[32];
 	const char *command_prefix = NULL;
 	int n;
 	const char *trformat;		/* Translated format string */
@@ -591,7 +591,7 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
 	    (_log_report.report && !log_bypass_report && (use_stderr || (level <=_LOG_WARN))) ||
 	    log_once) {
 		va_copy(ap, orig_ap);
-		/* coverity[format_string_injection] our code expectes this behavior. */
+		/* coverity[format_string_injection] our code expects this behavior. */
 		n = vsnprintf(message, sizeof(message), trformat, ap);
 		va_end(ap);
 
@@ -690,15 +690,12 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
 	}
 #endif
 
+	time_prefix[0] = '\0';
 	if (!logged_via_report && ((verbose_level() >= level) && !_log_suppress)) {
 		if (verbose_level() > _LOG_DEBUG) {
-			memset(buf, 0, sizeof(buf));
-
 			if (!_debug_output_fields || (_debug_output_fields & LOG_DEBUG_FIELD_TIME)) {
 				if (!time_prefix[0])
 					_set_time_prefix(time_prefix, sizeof(time_prefix));
-				else
-					time_prefix[0] = '\0';
 			}
 
 			if (!_debug_output_fields || (_debug_output_fields & LOG_DEBUG_FIELD_COMMAND))
@@ -713,8 +710,6 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
 				(void) dm_snprintf(buf, sizeof(buf), "%s%s",
 					   	   time_prefix, command_prefix ?: "");
 		} else {
-			memset(buf, 0, sizeof(buf));
-
 			/* without -vvvv, command[pid] is controlled by config settings */
 
 			(void) dm_snprintf(buf, sizeof(buf), "%s", log_command_info());
@@ -743,7 +738,7 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
 			/* Typically only log_warn goes to out_stream */
 			stream = (use_stderr || (level != _LOG_WARN)) ? err_stream : out_stream;
 			if (stream == err_stream)
-				fflush(out_stream);
+				(void) fflush(out_stream);
 			fprintf(stream, "%s%s%s", buf, _msg_prefix, indent_spaces);
 			vfprintf(stream, trformat, ap);
 			fputc('\n', stream);
@@ -763,8 +758,6 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
 		if (!_debug_file_fields || (_debug_file_fields & LOG_DEBUG_FIELD_TIME)) {
 			if (!time_prefix[0])
 				_set_time_prefix(time_prefix, sizeof(time_prefix));
-			else
-				time_prefix[0] = '\0';
 		}
 
 		if (!_debug_file_fields || (_debug_file_fields & LOG_DEBUG_FIELD_COMMAND))
@@ -790,7 +783,7 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
 		}
 
 		fputc('\n', _log_file);
-		fflush(_log_file);
+		(void) fflush(_log_file);
 	}
 
 	if (_syslog && (_log_while_suspended || !critical_section())) {
@@ -862,13 +855,13 @@ void log_set_report_object_type(log_report_object_type_t object_type)
 	_log_report.object_type = object_type;
 }
 
-void log_set_report_object_group_and_group_id(const char *group, const char *id)
+void log_set_report_object_group_and_group_id(const char *group, const struct id *id)
 {
 	_log_report.object_group = group;
 	_log_report.object_group_id = id;
 }
 
-void log_set_report_object_name_and_id(const char *name, const char *id)
+void log_set_report_object_name_and_id(const char *name, const struct id *id)
 {
 	_log_report.object_name = name;
 	_log_report.object_id = id;

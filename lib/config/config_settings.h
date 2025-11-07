@@ -214,6 +214,16 @@ cfg(config_checks_CFG, "checks", config_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_
 	"without any warning (a message about the configuration key not being\n"
 	"found is issued in verbose mode only).\n")
 
+cfg(config_validate_metadata_CFG, "validate_metadata", config_CFG_SECTION, CFG_DEFAULT_COMMENTED | CFG_ADVANCED, CFG_TYPE_STRING, DEFAULT_VALIDATE_METADATA, vsn(2, 3, 28), NULL, 0, NULL,
+	"Allows selecting the level of validation after metadata transformation.\n"
+	"Validation takes extra CPU time to verify internal consistency.\n"
+	"Accepted values:\n"
+	"  full\n"
+	"    Do a full metadata validation before disk write.\n"
+	"  none\n"
+	"    Skip any checks (unrecommended, slightly faster).\n"
+	"#\n")
+
 cfg(config_abort_on_errors_CFG, "abort_on_errors", config_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_BOOL, 0, vsn(2,2,99), NULL, 0, NULL,
 	"Abort the LVM process if a configuration mismatch is found.\n")
 
@@ -225,7 +235,7 @@ cfg(devices_dir_CFG, "dir", devices_CFG_SECTION, CFG_DEFAULT_COMMENTED | CFG_ADV
 	"Commands also accept this as a prefix on volume group names.\n")
 
 cfg(devices_device_id_sysfs_dir_CFG, "device_id_sysfs_dir", devices_CFG_SECTION, CFG_DEFAULT_COMMENTED | CFG_UNSUPPORTED, CFG_TYPE_STRING, DEFAULT_DEVICE_ID_SYSFS_DIR, vsn(2, 3, 17), NULL, 0, NULL,
-	"Location of sysfs for finding device ids (for testing.)\n")
+	"Location of sysfs for finding device ids (for testing).\n")
 
 cfg_array(devices_scan_CFG, "scan", devices_CFG_SECTION, CFG_DEFAULT_COMMENTED | CFG_ADVANCED, CFG_TYPE_STRING, "#S/dev", vsn(1, 0, 0), NULL, 0, NULL,
 	"Directories containing device nodes to use with LVM.\n")
@@ -343,7 +353,7 @@ cfg_array(devices_filter_CFG, "filter", devices_CFG_SECTION, CFG_DEFAULT_COMMENT
 	"device is rejected. Unmatching path names do not affect the accept\n"
 	"or reject decision. If no path names for a device match a pattern,\n"
 	"then the device is accepted. Be careful mixing 'a' and 'r' patterns,\n"
-	"as the combination might produce unexpected results (test changes.)\n"
+	"as the combination might produce unexpected results (test changes).\n"
 	"Run vgscan after changing the filter to regenerate the cache.\n"
 	"#\n"
 	"Example\n"
@@ -391,7 +401,7 @@ cfg_array(devices_types_CFG, "types", devices_CFG_SECTION, CFG_DEFAULT_UNDEFINED
 cfg(devices_sysfs_scan_CFG, "sysfs_scan", devices_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_BOOL, DEFAULT_SYSFS_SCAN, vsn(1, 0, 8), NULL, 0, NULL,
 	"Restrict device scanning to block devices appearing in sysfs.\n"
 	"This is a quick way of filtering out block devices that are not\n"
-	"present on the system. sysfs must be part of the kernel and mounted.)\n")
+	"present on the system. sysfs must be part of the kernel and mounted.\n")
 
 cfg(devices_scan_lvs_CFG, "scan_lvs", devices_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_BOOL, DEFAULT_SCAN_LVS, vsn(2, 2, 182), NULL, 0, NULL,
 	"Allow LVM LVs to be used as PVs. When enabled, LVM commands will\n"
@@ -399,7 +409,7 @@ cfg(devices_scan_lvs_CFG, "scan_lvs", devices_CFG_SECTION, CFG_DEFAULT_COMMENTED
 	"avoid using PVs that belong to guest images stored on LVs.\n"
 	"When enabled, the LVs scanned should be restricted using the\n"
 	"devices file or the filter. This option does not enable autoactivation\n"
-	"of layered VGs, which requires editing LVM udev rules (see LVM_PVSCAN_ON_LVS.)\n")
+	"of layered VGs, which requires editing LVM udev rules (see LVM_PVSCAN_ON_LVS).\n")
 
 cfg(devices_multipath_component_detection_CFG, "multipath_component_detection", devices_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_BOOL, DEFAULT_MULTIPATH_COMPONENT_DETECTION, vsn(2, 2, 89), NULL, 0, NULL,
 	"Ignore devices that are components of DM multipath devices.\n")
@@ -461,7 +471,7 @@ cfg(devices_data_alignment_detection_CFG, "data_alignment_detection", devices_CF
 	"penalty, e.g. MD chunk size. optimal_io_size is the device's\n"
 	"preferred unit of receiving I/O, e.g. MD stripe width.\n"
 	"minimum_io_size is used if optimal_io_size is undefined (0).\n"
-	"If md_chunk_alignment is enabled, that detects the optimal_io_size.\n"
+	"If md_chunk_alignment is enabled, it will detect the optimal_io_size.\n"
 	"default_data_alignment and md_chunk_alignment will be overridden\n"
 	"if they are not aligned with the value detected for this setting.\n"
 	"This setting is overridden by data_alignment and the --dataalignment\n"
@@ -594,7 +604,7 @@ cfg(allocation_wipe_signatures_when_zeroing_new_lvs_CFG, "wipe_signatures_when_z
 	"is not claimed incorrectly by other tools because of old signatures\n"
 	"from previous use. The number of signatures that LVM can detect\n"
 	"depends on the detection code that is selected (see\n"
-	"use_blkid_wiping.) Wiping each detected signature must be confirmed.\n"
+	"use_blkid_wiping). Wiping each detected signature must be confirmed.\n"
 	"When this setting is disabled, signatures on new LVs are not detected\n"
 	"or erased unless the --wipesignatures option is used directly.\n")
 
@@ -622,7 +632,7 @@ cfg(allocation_cache_metadata_format_CFG, "cache_metadata_format", allocation_CF
 	"Accepted values:\n"
 	"  0  Automatically detected best available format\n"
 	"  1  Original format\n"
-	"  2  Improved 2nd. generation format\n"
+	"  2  Improved second-generation format\n"
 	"#\n")
 
 cfg(allocation_cache_mode_CFG, "cache_mode", allocation_CFG_SECTION, CFG_PROFILABLE | CFG_PROFILABLE_METADATA | CFG_DEFAULT_COMMENTED, CFG_TYPE_STRING, DEFAULT_CACHE_MODE, vsn(2, 2, 128), NULL, 0, NULL,
@@ -666,13 +676,22 @@ cfg(allocation_cache_pool_max_chunks_CFG, "cache_pool_max_chunks", allocation_CF
 	"For cache target v1.9 the recommended maximum is 1000000 chunks.\n"
 	"Using cache pool with more chunks may degrade cache performance.\n")
 
+cfg(allocation_pvmove_max_segment_size_mb_CFG, "pvmove_max_segment_size_mb", allocation_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, DEFAULT_PVMOVE_MAX_SEGMENT_SIZE_MB, vsn(2, 3, 36), NULL, 0, NULL,
+	"Maximum size in MiB of segments to mirror at once during pvmove.\n"
+	"When pvmove needs to move large segments, it will split them into\n"
+	"smaller chunks of this size, mirror each chunk, and update metadata\n"
+	"between chunks. This prevents mirroring excessively large amounts\n"
+	"of data at once. A value of 0 (default) means no limit - the entire\n"
+	"segment will be mirrored at once. Setting this to e.g. 10240 will\n"
+	"limit each mirroring operation to 10GiB chunks.\n")
+
 cfg(allocation_thin_pool_metadata_require_separate_pvs_CFG, "thin_pool_metadata_require_separate_pvs", allocation_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_BOOL, DEFAULT_THIN_POOL_METADATA_REQUIRE_SEPARATE_PVS, vsn(2, 2, 89), NULL, 0, NULL,
 	"Thin pool metadata and data will always use different PVs.\n")
 
 cfg(allocation_thin_pool_crop_metadata_CFG, "thin_pool_crop_metadata", allocation_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_BOOL, DEFAULT_THIN_POOL_CROP_METADATA, vsn(2, 3, 12), NULL, 0, NULL,
-	"Older version of lvm2 cropped pool's metadata size to 15.81 GiB.\n"
-	"This is slightly less then the actual maximum 15.88 GiB.\n"
-	"For compatibility with older version and use of cropped size set to 1.\n")
+	"Older versions of lvm2 cropped pool's metadata size to 15.81 GiB.\n"
+	"This is slightly less than the actual maximum 15.88 GiB.\n"
+	"For compatibility with older versions and to use the cropped size, set to 1.\n")
 
 cfg(allocation_thin_pool_zero_CFG, "thin_pool_zero", allocation_CFG_SECTION, CFG_PROFILABLE | CFG_PROFILABLE_METADATA | CFG_DEFAULT_COMMENTED, CFG_TYPE_BOOL, DEFAULT_THIN_POOL_ZERO, vsn(2, 2, 99), NULL, 0, NULL,
 	"Thin pool data chunks are zeroed before they are first used.\n"
@@ -938,7 +957,7 @@ cfg(log_prefix_CFG, "prefix", log_CFG_SECTION, CFG_DEFAULT_COMMENTED | CFG_ALLOW
 
 cfg(log_activation_CFG, "activation", log_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_BOOL, 0, vsn(1, 0, 0), NULL, 0, NULL,
 	"Log messages during activation.\n"
-	"Don't use this in low memory situations (can deadlock).\n")
+	"Do not use this in low memory situations (can deadlock).\n")
 
 cfg(log_activate_file_CFG, "activate_file", log_CFG_SECTION, CFG_DEFAULT_UNDEFINED | CFG_UNSUPPORTED, CFG_TYPE_STRING, NULL, vsn(1, 0, 0), NULL, 0, NULL, NULL)
 
@@ -1073,7 +1092,7 @@ cfg(global_metadata_read_only_CFG, "metadata_read_only", global_CFG_SECTION, CFG
 	"Additionally, read-only commands that encounter metadata in need of\n"
 	"repair will still be allowed to proceed exactly as if the repair had\n"
 	"been performed (except for the unchanged vg_seqno). Inappropriate\n"
-	"use could mess up your system, so seek advice first!\n")
+	"use could corrupt your system, so seek advice first!\n")
 
 cfg(global_mirror_segtype_default_CFG, "mirror_segtype_default", global_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_STRING, DEFAULT_MIRROR_SEGTYPE, vsn(2, 2, 87), "@DEFAULT_MIRROR_SEGTYPE@", 0, NULL,
 	"The segment type used by the short mirroring option -m.\n"
@@ -1103,7 +1122,7 @@ cfg(global_mirror_segtype_default_CFG, "mirror_segtype_default", global_CFG_SECT
 cfg(global_support_mirrored_mirror_log_CFG, "support_mirrored_mirror_log", global_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_BOOL, 0, vsn(2, 3, 2), NULL, 0, NULL,
 	"Enable mirrored 'mirror' log type for testing.\n"
 	"#\n"
-	"This type is deprecated to create or convert to but can\n"
+	"This type is deprecated for creation or conversion but can\n"
 	"be enabled to test that activation of existing mirrored\n"
 	"logs and conversion to disk/core works.\n"
 	"#\n"
@@ -1192,7 +1211,7 @@ cfg(global_sanlock_lv_extend_CFG, "sanlock_lv_extend", global_CFG_SECTION, CFG_D
 cfg(global_sanlock_align_size_CFG, "sanlock_align_size", global_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, DEFAULT_SANLOCK_ALIGN_SIZE, vsn(2, 3, 27), NULL, 0, NULL,
 	"The sanlock lease size in MiB to use on disks with a 4K sector size.\n"
 	"Possible values are 1,2,4,8.  The default is 8, which supports up to\n"
-	"2000 hosts (and max host_id 2000.)  Smaller values support smaller\n"
+	"2000 hosts (and max host_id 2000).  Smaller values support smaller\n"
 	"numbers of max hosts (and max host_ids): 250, 500, 1000, 2000 for\n"
 	"lease sizes 1,2,4,8.  Disks with 512 byte sectors always use 1MiB\n"
 	"leases and support 2000 hosts, and are not affected by this setting.\n")
@@ -1200,7 +1219,7 @@ cfg(global_sanlock_align_size_CFG, "sanlock_align_size", global_CFG_SECTION, CFG
 cfg(global_lvmlockctl_kill_command_CFG, "lvmlockctl_kill_command", global_CFG_SECTION, CFG_ALLOW_EMPTY | CFG_DEFAULT_COMMENTED, CFG_TYPE_STRING, "", vsn(2, 3, 12), NULL, 0, NULL,
 	"The command that lvmlockctl --kill should use to force LVs offline.\n"
 	"The lvmlockctl --kill command is run when a shared VG has lost\n"
-	"access to locks (e.g. when sanlock has lost access to storage.)\n"
+	"access to locks (e.g. when sanlock has lost access to storage).\n"
 	"An empty string means that there will be no automatic attempt by\n"
 	"lvmlockctl --kill to forcibly shut down LVs in the VG, and the user\n"
 	"can manually intervene as described in lvmlockd(8).\n"
@@ -1322,10 +1341,14 @@ cfg(global_fsadm_executable_CFG, "fsadm_executable", global_CFG_SECTION, CFG_DEF
 	"The full path to the fsadm command.\n"
 	"LVM uses this command to help with lvresize -r operations.\n")
 
+cfg(global_lvresize_fs_helper_executable_CFG, "lvresize_fs_helper_executable", global_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_STRING, DEFAULT_LVRESIZE_FS_HELPER_PATH, vsn(2, 3, 33), "@LVRESIZE_FS_HELPER_PATH@", 0, NULL,
+	"The full path to the lvresize_fs_helper command.\n"
+	"LVM uses this command to help with filesystem operations during lvresize.\n")
+
 cfg(global_system_id_source_CFG, "system_id_source", global_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_STRING, DEFAULT_SYSTEM_ID_SOURCE, vsn(2, 2, 117), NULL, 0, NULL,
 	"The method LVM uses to set the local system ID.\n"
 	"Volume Groups can also be given a system ID (by vgcreate, vgchange,\n"
-	"or vgimport.) A VG on shared storage devices is accessible only to\n"
+	"or vgimport). A VG on shared storage devices is accessible only to\n"
 	"the host with a matching system ID. See 'man lvmsystemid' for\n"
 	"information on limitations and correct usage.\n"
 	"#\n"
@@ -1629,7 +1652,7 @@ cfg(activation_mirror_device_fault_policy_CFG, "mirror_device_fault_policy", act
 cfg(activation_snapshot_autoextend_threshold_CFG, "snapshot_autoextend_threshold", activation_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, DEFAULT_SNAPSHOT_AUTOEXTEND_THRESHOLD, vsn(2, 2, 75), NULL, 0, NULL,
 	"Auto-extend a snapshot when its usage exceeds this percent.\n"
 	"Setting this to 100 disables automatic extension.\n"
-	"The minimum value is 50 (a smaller value is treated as 50.)\n"
+	"The minimum value is 50 (a smaller value is treated as 50).\n"
 	"Also see snapshot_autoextend_percent.\n"
 	"Automatic extension requires dmeventd to be monitoring the LV.\n"
 	"#\n"
@@ -1655,7 +1678,7 @@ cfg(activation_snapshot_autoextend_percent_CFG, "snapshot_autoextend_percent", a
 cfg(activation_thin_pool_autoextend_threshold_CFG, "thin_pool_autoextend_threshold", activation_CFG_SECTION, CFG_DEFAULT_COMMENTED | CFG_PROFILABLE | CFG_PROFILABLE_METADATA, CFG_TYPE_INT, DEFAULT_THIN_POOL_AUTOEXTEND_THRESHOLD, vsn(2, 2, 89), NULL, 0, NULL,
 	"Auto-extend a thin pool when its usage exceeds this percent.\n"
 	"Setting this to 100 disables automatic extension.\n"
-	"The minimum value is 50 (a smaller value is treated as 50.)\n"
+	"The minimum value is 50 (a smaller value is treated as 50).\n"
 	"Also see thin_pool_autoextend_percent.\n"
 	"Automatic extension requires dmeventd to be monitoring the LV.\n"
 	"#\n"
@@ -1681,7 +1704,7 @@ cfg(activation_thin_pool_autoextend_percent_CFG, "thin_pool_autoextend_percent",
 cfg(activation_vdo_pool_autoextend_threshold_CFG, "vdo_pool_autoextend_threshold", activation_CFG_SECTION, CFG_PROFILABLE | CFG_PROFILABLE_METADATA | CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, DEFAULT_VDO_POOL_AUTOEXTEND_THRESHOLD, VDO_1ST_VSN, NULL, 0, NULL,
 	"Auto-extend a VDO pool when its usage exceeds this percent.\n"
 	"Setting this to 100 disables automatic extension.\n"
-	"The minimum value is 50 (a smaller value is treated as 50.)\n"
+	"The minimum value is 50 (a smaller value is treated as 50).\n"
 	"Also see vdo_pool_autoextend_percent.\n"
 	"Automatic extension requires dmeventd to be monitoring the LV.\n"
 	"#\n"
@@ -1873,7 +1896,7 @@ cfg(report_output_format_CFG, "output_format", report_CFG_SECTION, CFG_PROFILABL
 
 cfg(report_compact_output_CFG, "compact_output", report_CFG_SECTION, CFG_PROFILABLE | CFG_DEFAULT_COMMENTED, CFG_TYPE_BOOL, DEFAULT_REP_COMPACT_OUTPUT, vsn(2, 2, 115), NULL, 0, NULL,
 	"Do not print empty values for all report fields.\n"
-	"If enabled, all fields that don't have a value set for any of the\n"
+	"If enabled, all fields that do not have a value set for any of the\n"
 	"rows reported are skipped and not printed. Compact output is\n"
 	"applicable only if report/buffered is enabled. If you need to\n"
 	"compact only specified fields, use compact_output=0 and define\n"
@@ -1881,7 +1904,7 @@ cfg(report_compact_output_CFG, "compact_output", report_CFG_SECTION, CFG_PROFILA
 
 cfg(report_compact_output_cols_CFG, "compact_output_cols", report_CFG_SECTION, CFG_ALLOW_EMPTY | CFG_PROFILABLE | CFG_DEFAULT_COMMENTED, CFG_TYPE_STRING, DEFAULT_COMPACT_OUTPUT_COLS, vsn(2, 2, 133), NULL, 0, NULL,
 	"Do not print empty values for specified report fields.\n"
-	"If defined, specified fields that don't have a value set for any\n"
+	"If defined, specified fields that do not have a value set for any\n"
 	"of the rows reported are skipped and not printed. Compact output\n"
 	"is applicable only if report/buffered is enabled. If you need to\n"
 	"compact all fields, use compact_output=1 instead in which case\n"
@@ -2265,6 +2288,12 @@ cfg(local_system_id_CFG, "system_id", local_CFG_SECTION, CFG_ALLOW_EMPTY | CFG_D
 	"system_id = \"host1\"\n"
 	"#\n")
 
+cfg(local_pr_key_CFG, "pr_key", local_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_STRING, 0, vsn(2, 3, 32), NULL, 0, NULL,
+	"The local persistent reservation key in hexadecimal.\n"
+	"The value must be unique among all hosts using the same VG.\n"
+	"The max length is 16 hex characters (8 bytes), plus an optional\n"
+	"0x prefix. If pr_key is not set, host_id will be used to create a key.\n")
+
 cfg_array(local_extra_system_ids_CFG, "extra_system_ids", local_CFG_SECTION, CFG_ALLOW_EMPTY | CFG_DEFAULT_UNDEFINED, CFG_TYPE_STRING, NULL, vsn(2, 2, 117), NULL, 0, NULL,
 	"A list of extra VG system IDs the local host can access.\n"
 	"VGs with the system IDs listed here (in addition to the host's own\n"
@@ -2278,6 +2307,8 @@ cfg(local_host_id_CFG, "host_id", local_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_
 	"The sanlock host_id used by lvmlockd. This must be unique among all the hosts\n"
 	"using shared VGs with sanlock. Accepted values are 1-2000, except when sanlock_align_size\n"
 	"is configured to 1, 2 or 4, which correspond to max host_id values of 250, 500, or 1000.\n"
-	"Applicable only if LVM is compiled with support for lvmlockd+sanlock.\n")
+	"When using persistent reservations, lvm will generate a PR key from the host_id\n"
+	"if pr_key is not defined. All hosts using a sanlock shared VG with PR must use\n"
+	"the same approach for configuring their PR key (pr_key or host_id.)\n")
 
 cfg(CFG_COUNT, NULL, root_CFG_SECTION, CFG_DEFAULT_COMMENTED, CFG_TYPE_INT, 0, vsn(0, 0, 0), NULL, 0, NULL, NULL)

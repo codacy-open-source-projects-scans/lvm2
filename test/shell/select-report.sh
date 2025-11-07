@@ -11,9 +11,8 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 aux prepare_pvs 6 16
 
@@ -97,14 +96,14 @@ sel lv "lv_name='vol1'" vol1
 # STRING LIST FIELD SELECTION #
 ###############################
 sel pv 'tags=["pv_tag1"]'
-# for one item, no need to use []
+# for one item, no need to use {}
 sel pv 'tags="pv_tag1"' "$dev1" "$dev6"
 # no match
 sel pv 'tags=["pv_tag1" && "pv_tag2"]'
 sel pv 'tags=["pv_tag1" && "pv_tag2" && "pv_tag3"]' "$dev1"
 # check the order has no effect on selection result
 sel pv 'tags=["pv_tag3" && "pv_tag2" && "pv_tag1"]' "$dev1"
-sel pv 'tags=["pv_tag4" || "pv_tag3"]' "$dev1" "$dev6"
+sel pv 'tags=["pv_tag4" || "pv_tag3" || "pv_tag1" || "pv_tag2"]' "$dev1" "$dev6"
 sel pv 'tags!=["pv_tag1"]' "$dev1" "$dev2" "$dev3" "$dev4" "$dev5" "$dev6"
 # check mixture of && and || - this is not allowed
 not sel pv 'tags=["pv_tag1" && "pv_tag2" || "pv_tag3"]'
@@ -115,6 +114,23 @@ sel lv 'tags=[]' xyz orig snap
 # check subset selection
 sel pv 'tags={"pv_tag1"}' "$dev1" "$dev6"
 sel pv 'tags={"pv_tag1" && "pv_tag2"}' "$dev1"
+# check regex selection
+sel pv 'tags=~["^pv_.*[123]$"]' "$dev1"
+sel pv 'tags=~["^pv_.*[14]$"]' "$dev6"
+sel pv 'tags=~["^pv_.*[1234]$"]' "$dev1" "$dev6"
+sel pv 'tags=~["^pv_.*[12]$" && "^pv_.*[34]$"]' "$dev1" "$dev6"
+sel pv 'tags=~["^pv_.*[12]$" && "^pv_.*[3]$"]' "$dev1"
+sel pv 'tags=~["^pv_.*[1]$" && "^pv_.*[4]$"]' "$dev6"
+sel pv 'tags=~["^pv_.*[12]$" || "^pv_.*[34]$"]' "$dev1" "$dev6"
+sel pv 'tags=~["^pv_.*[12]$" || "^pv_.*[3]$"]' "$dev1"
+sel pv 'tags=~["^pv_.*[12]$" || "^pv_.*[4]$"]' "$dev6"
+sel pv 'tags=~{"^pv_.*[12]$" && "^pv_.*[34]$"}' "$dev1" "$dev6"
+sel pv 'tags=~{"^pv_.*[12]$" && "^pv_.*[3]$"}' "$dev1"
+sel pv 'tags=~{"^pv_.*[1]$" && "^pv_.*[4]$"}' "$dev6"
+sel pv 'tags=~{"^pv_.*[12]$" || "^pv_.*[34]$"}' "$dev1" "$dev6"
+sel pv 'tags=~{"^pv_.*[12]$" || "^pv_.*[3]$"}' "$dev1" "$dev6"
+sel pv 'tags=~{"^pv_.*[12]$" || "^pv_.*[4]$"}' "$dev1" "$dev6"
+sel pv 'tags!~{"^pv_.*[12]$" && "^pv_.*[3]$"}' "$dev2" "$dev3" "$dev4" "$dev5" "$dev6"
 
 ##########################
 # NUMBER FIELD SELECTION #
@@ -182,7 +198,7 @@ sel lv 'name="vol1"' vol1
 sel vg 'vg_mda_copies=unmanaged' $vg2 $vg3
 sel vg 'vg_mda_copies=2' $vg1
 # also, we must match only vg1, not including vg2 and vg3
-# when comparing ranges - unamanged is mapped onto 2^64 - 1 internally,
+# when comparing ranges - unmanaged is mapped onto 2^64 - 1 internally,
 # so we need to skip this internal value if it matches with selection criteria!
 sel vg 'vg_mda_copies>=2' $vg1
 not sel vg 'vg_mda_copies=18446744073709551615'

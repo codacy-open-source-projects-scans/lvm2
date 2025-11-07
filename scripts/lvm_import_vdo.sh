@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright (C) 2021-2023 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2021-2025 Red Hat, Inc. All rights reserved.
 #
 # This file is part of LVM2.
 #
@@ -30,11 +30,10 @@ set -euE -o pipefail
 
 TOOL=lvm_import_vdo
 IMPORT_NAME="VDO_${TOOL}_${RANDOM}$$"
-test ${#IMPORT_NAME} -lt 100 || error "Random name \"$IMPORT_NAME\" is too long!"
 TEMPDIR="${TMPDIR:-/tmp}/$IMPORT_NAME"
 
 _SAVEPATH=$PATH
-PATH="/sbin:/usr/sbin:/bin:/usr/sbin:$PATH"
+PATH="/sbin:/usr/sbin:/bin:/usr/bin:$PATH"
 
 # Set of trapped signals
 declare -a SIGNALS=("HUP" "INT" "QUIT" "ABRT" "TERM" "EXIT")
@@ -105,20 +104,23 @@ vdo_writePolicy=
 
 # help message
 tool_usage() {
-	echo "${TOOL}: Utility to convert VDO volume to VDO LV."
-	echo
-	echo "	${TOOL} [options] <vdo_device_path>"
-	echo
-	echo "	Options:"
-	echo "	  -f | --force	      Bypass sanity checks"
-	echo "	  -h | --help	      Show this help message"
-	echo "	  -n | --name	      Specifies VG/LV name for converted VDO volume"
-	echo "	  -v | --verbose      Be verbose"
-	echo "	  -y | --yes	      Answer \"yes\" at any prompts"
-	echo "	       --dry-run      Print verbosely commands without running them"
-	echo "	       --no-snapshot  Do not use snapshot for converted VDO device"
-	echo "	       --uuid-prefix  Prefix for DM snapshot uuid"
-	echo "	       --vdo-config   Configuration file for VDO manager"
+	cat <<-EOF
+	  ${TOOL}: Utility to convert VDO volume to VDO LV.
+
+	  ${TOOL} [options] <vdo_device_path>
+
+	  Options:
+	      -f | --force	  Bypass sanity checks
+	      -h | --help	  Show this help message
+	      -n | --name	  Specifies VG/LV name for converted VDO volume
+	      -v | --verbose	  Be verbose
+	      -y | --yes	  Answer "yes" at any prompts
+		   --dry-run	  Print verbosely commands without running them
+		   --no-snapshot  Do not use snapshot for converted VDO device
+		   --uuid-prefix  Prefix for DM snapshot uuid
+		   --vdo-config   Configuration file for VDO manager
+
+	EOF
 
 	exit
 }
@@ -129,14 +131,16 @@ verbose() {
 
 # Support multi-line error messages
 error() {
-	for i in "$@" ;  do
+	for i in "$@"; do
 		echo "$TOOL: $i" >&2
 	done
 	return 1
 }
 
 warn() {
-	echo "$TOOL: WARNING: $i" >&2
+	for i in "$@"; do
+		echo "$TOOL: WARNING: $i" >&2
+	done
 }
 
 dry() {
@@ -155,19 +159,22 @@ cleanup() {
 
 	[ -z "$PROMPTING" ] || echo "No"
 
-	[ -e "$VDO_CONFIG_RESTORE" ] && { dry cp -a "$VDO_CONFIG_RESTORE" "${VDO_CONFIG:-"$DEFAULT_VDO_CONFIG"}" || true ; }
+	if [ -e "$VDO_CONFIG_RESTORE" ]; then
+		dry cp -a "$VDO_CONFIG_RESTORE" "${VDO_CONFIG:-"$DEFAULT_VDO_CONFIG"}" || true
+	fi
 
 	if [ -n "$VDO_DM_SNAPSHOT_NAME" ]; then
 		dry "$LVM" vgchange -an --devices "$VDO_DM_SNAPSHOT_DEVICE" "$VGNAME" &>/dev/null || true
-		for i in {1..20} ; do
+		for i in {1..20}; do
 			[ "$(dry "$DMSETUP" info --noheading -co open "$VDO_DM_SNAPSHOT_NAME")" = "0" ] && break
 			sleep .1
 		done
 		dry "$DMSETUP" remove "$VDO_DM_SNAPSHOT_NAME" &>/dev/null || true
 	fi
 
-
-	[ -n "$VDO_SNAPSHOT_LOOP" ] && { dry "$LOSETUP" -d "$VDO_SNAPSHOT_LOOP" || true ; }
+	if [ -n "$VDO_SNAPSHOT_LOOP" ]; then
+		dry "$LOSETUP" -d "$VDO_SNAPSHOT_LOOP" || true
+	fi
 
 	[ -z "$VDO_INCONSISTENT" ] || echo "$TOOL: VDO volume import process exited unexpectedly!" >&2
 
@@ -214,7 +221,7 @@ snapshot_merge_() {
 	# Loop for a while, till the snapshot is merged.
 	# Should be nearly instantaneous.
 	# FIXME: Recovery when something prevents merging is hard
-	for i in $(seq 1 20) ; do
+	for i in {1..20}; do
 		status=( $("$DMSETUP" status "$VDO_DM_SNAPSHOT_NAME") )
 		# Check if merging is finished
 		[ "${status[3]%/*}" = "${status[4]}" ] && break
@@ -227,8 +234,8 @@ snapshot_merge_() {
 		# Keep snapshot in DM table for possible analysis...
 		VDO_DM_SNAPSHOT_NAME=
 		VDO_SNAPSHOT_LOOP=
-		echo "$TOOL: Initial snapshot status ${initial_status[*]}"
-		echo "$TOOL: Failing merge snapshot status ${status[*]}"
+		echo "$TOOL: Initial snapshot status ${initial_status[*]}."
+		echo "$TOOL: Failing merge snapshot status ${status[*]}."
 		error "ABORTING: Snapshot failed to merge! (Administrator required...)"
 	fi
 
@@ -258,11 +265,11 @@ get_enabled_value_() {
 
 get_kb_size_with_unit_() {
 	case "$1" in
-	*[kK]) echo $(( ${1%[kK]} )) ;;
-	*[mM]) echo $(( ${1%[mM]} * 1024 )) ;;
-	*[gG]) echo $(( ${1%[gG]} * 1024 * 1024 )) ;;
-	*[tT]) echo $(( ${1%[tT]} * 1024 * 1024 * 1024 )) ;;
-	*[pP]) echo $(( ${1%[pP]} * 1024 * 1024 * 1024 * 1024 )) ;;
+	*[kK]) echo "$(( ${1%[kK]} ))" ;;
+	*[mM]) echo "$(( ${1%[mM]} * 1024 ))" ;;
+	*[gG]) echo "$(( ${1%[gG]} * 1024 * 1024 ))" ;;
+	*[tT]) echo "$(( ${1%[tT]} * 1024 * 1024 * 1024 ))" ;;
+	*[pP]) echo "$(( ${1%[pP]} * 1024 * 1024 * 1024 * 1024 ))" ;;
 	esac
 }
 
@@ -274,7 +281,7 @@ get_largest_extent_size_() {
 	local i
 	local d
 
-	for i in 8 16 32 64 128 256 512 1024 2048 4096 ; do
+	for i in 8 16 32 64 128 256 512 1024 2048 4096; do
 		d=$(( $1 / i ))
 		[ $(( d * i )) -eq "$1" ] || break
 		d=$(( $2 / i ))
@@ -310,7 +317,7 @@ detect_lv_() {
 		;;
 	esac
 
-	[ "$DEVMAJOR" != "$(grep device-mapper /proc/devices | cut -f1 -d' ')" ] && return
+	[ "$DEVMAJOR" != "$(awk '/device-mapper/ {print $1}' /proc/devices)" ] && return
 
 	DEV="$("$DMSETUP" info -c -j "$DEVMAJOR" -m "$DEVMINOR" -o uuid,name --noheadings --nameprefixes --separator ' ')"
 	case "$DEV" in
@@ -329,7 +336,7 @@ parse_yaml_() {
 
 	s='[[:space:]]*'
 	w='[a-zA-Z0-9_.-]*'
-	fs="$(echo @|tr @ '\034')"
+	fs=$(printf '\034')
 
 	(
 	    sed -ne '/^--/s|--||g; s|\"|\\\"|g; s/[[:space:]]*$//g;' \
@@ -458,7 +465,7 @@ convert_non_lv_() {
 	local vdo_aligned=0
 	local vdo_offset=0
 	local vdo_non_converted=0
-	while IFS=  read -r line ; do
+	while IFS=  read -r line; do
 		# trim leading spaces
 		case "$(echo $line)" in
 		"Non converted"*) vdo_non_converted=1 ;;
@@ -480,7 +487,7 @@ convert_non_lv_() {
 	# after 'vdo convert' call there is ~(1-2)M free space at the front of the device
 	pvfree=$("$BLOCKDEV" --getsize64 "$DEVICE")
 	pvfree=$(( ( pvfree - vdo_offset ) / 1024 ))	# to KiB
-	if [ -n "$vdo_aligned" ] && [ "$vdo_aligned" != "0" ]; then
+	if [ "${vdo_aligned:-0}" -ne 0 ]; then
 		extent_size=$(( vdo_aligned / 1024 ))
 	else
 		extent_size=$(get_largest_extent_size_ "$pvfree" "$vdo_logicalSize")
@@ -532,7 +539,8 @@ convert_non_lv_() {
 
 	# For systems using devicesfile add 'merged' PV into system.devices.
 	# Bypassing use of --valuesonly to keep compatibility with older lvm.
-	local usedev=$("$LVM" lvmconfig --typeconfig full devices/use_devicesfile || true)
+	local usedev
+	usedev=$("$LVM" lvmconfig --typeconfig full devices/use_devicesfile || true)
 	[ "${usedev#*=}" = "1" ] && dry "$LVM" lvmdevices --adddev "$DEVICE"
 
 	# Restore auto activation for a VG
@@ -595,7 +603,7 @@ convert2lvm_() {
 
 	# Check list of devices in VDO configure file for their major:minor
 	# and match with given $DEVICE devmajor:devminor
-	for i in $(awk '/.*device:/ {print $2}' "$TEMPDIR/vdoconf.yml") ; do
+	for i in $(awk '/.*device:/ {print $2}' "$TEMPDIR/vdoconf.yml"); do
 		local DEV
 		DEV=$("$READLINK" $READLINK_E "$i") || continue
 		RSTAT=$("$STAT" --format "MAJOR=\$((0x%t)) MINOR=\$((0x%T))" "$DEV" 2>/dev/null) || continue
@@ -610,7 +618,7 @@ convert2lvm_() {
 	verbose "Found matching device $FOUND  $MAJOR:$MINOR."
 
 	VDONAME=$(awk -v DNAME="$FOUND" '/.*VDOService$/ {VNAME=substr($1, 0, length($1) - 1)} /[[:space:]]*device:/ { if ($2 ~ DNAME) {print VNAME}}' "$TEMPDIR/vdoconf.yml")
-	TRVDONAME=$(echo "$VDONAME" | tr '-' '_')
+	TRVDONAME=${VDONAME//-/_}
 
 	# When VDO volume is 'active', check it's not mounted/being used
 	DM_OPEN="$("$DMSETUP" info -c -o open  "$VDONAME" --noheadings --nameprefixes 2>/dev/null || true)"
@@ -622,37 +630,37 @@ convert2lvm_() {
 	esac
 
 	#parse_yaml_ "$TEMPDIR/vdoconf.yml" _
-	eval "$(parse_yaml_ "$TEMPDIR/vdoconf.yml" _ | grep "$TRVDONAME" | sed -e "s/_config_vdos_$TRVDONAME/vdo/g")"
+	eval "$(parse_yaml_ "$TEMPDIR/vdoconf.yml" _ | sed -ne "/$TRVDONAME/s/_config_vdos_$TRVDONAME/vdo/gp")"
 
 	vdo_logicalSize=$(get_kb_size_with_unit_ "$vdo_logicalSize")
 	vdo_physicalSize=$(get_kb_size_with_unit_ "$vdo_physicalSize")
 
 	verbose "Converted VDO device has logical/physical size $vdo_logicalSize/$vdo_physicalSize KiB."
 
-	VDO_ALLOCATION_PARAMS=$(cat <<EOF
-allocation {
-	vdo_use_compression = $(get_enabled_value_ "$vdo_compression")
-	vdo_use_deduplication = $(get_enabled_value_ "$vdo_deduplication")
-	vdo_use_metadata_hints=1
-	vdo_minimum_io_size = $vdo_logicalBlockSize
-	vdo_block_map_cache_size_mb = $(( $(get_kb_size_with_unit_ "$vdo_blockMapCacheSize") / 1024 ))
-	vdo_block_map_period = $vdo_blockMapPeriod
-	vdo_use_sparse_index = $(get_enabled_value_ "$vdo_indexSparse")
-	vdo_index_memory_size_mb = $(awk "BEGIN {print $vdo_indexMemory * 1024}")
-	vdo_slab_size_mb = $(( $(get_kb_size_with_unit_ "$vdo_slabSize") / 1024 ))
-	vdo_ack_threads = $vdo_ackThreads
-	vdo_bio_threads = $vdo_bioThreads
-	vdo_bio_rotation = $vdo_bioRotationInterval
-	vdo_cpu_threads = $vdo_cpuThreads
-	vdo_hash_zone_threads = $vdo_hashZoneThreads
-	vdo_logical_threads = $vdo_logicalThreads
-	vdo_physical_threads = $vdo_physicalThreads
-	vdo_write_policy = $vdo_writePolicy
-	vdo_max_discard = $(( $(get_kb_size_with_unit_ "$vdo_maxDiscardSize") / 4 ))
-	vdo_pool_header_size = 0
-}
-EOF
-)
+	VDO_ALLOCATION_PARAMS=$(cat <<-EOF
+	allocation {
+		vdo_use_compression = $(get_enabled_value_ "$vdo_compression")
+		vdo_use_deduplication = $(get_enabled_value_ "$vdo_deduplication")
+		vdo_use_metadata_hints=1
+		vdo_minimum_io_size = $vdo_logicalBlockSize
+		vdo_block_map_cache_size_mb = $(( $(get_kb_size_with_unit_ "$vdo_blockMapCacheSize") / 1024 ))
+		vdo_block_map_period = $vdo_blockMapPeriod
+		vdo_use_sparse_index = $(get_enabled_value_ "$vdo_indexSparse")
+		vdo_index_memory_size_mb = $(awk "BEGIN {print $vdo_indexMemory * 1024}")
+		vdo_slab_size_mb = $(( $(get_kb_size_with_unit_ "$vdo_slabSize") / 1024 ))
+		vdo_ack_threads = $vdo_ackThreads
+		vdo_bio_threads = $vdo_bioThreads
+		vdo_bio_rotation = $vdo_bioRotationInterval
+		vdo_cpu_threads = $vdo_cpuThreads
+		vdo_hash_zone_threads = $vdo_hashZoneThreads
+		vdo_logical_threads = $vdo_logicalThreads
+		vdo_physical_threads = $vdo_physicalThreads
+		vdo_write_policy = $vdo_writePolicy
+		vdo_max_discard = $(( $(get_kb_size_with_unit_ "$vdo_maxDiscardSize") / 4 ))
+		vdo_pool_header_size = 0
+	}
+	EOF
+	)
 	verbose "VDO conversion parameters: $VDO_ALLOCATION_PARAMS"
 
 	verbose "Stopping VDO volume."
@@ -708,6 +716,8 @@ do
 	esac
 	shift
 done
+
+test ${#IMPORT_NAME} -lt 100 || error "Random name \"$IMPORT_NAME\" is too long!"
 
 [ -n "$DEVICE" ] || error "Device name is not specified. (see: $TOOL --help)"
 

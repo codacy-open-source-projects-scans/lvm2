@@ -16,7 +16,9 @@
 #ifndef _LVM_TOOLS_H
 #define _LVM_TOOLS_H
 
+#include "tools/errors.h"
 #include "tools/tool.h"
+#include "tools/toollib.h"
 
 #include "lib/log/lvm-logging.h"
 
@@ -31,7 +33,6 @@
 #include "lib/device/device.h"
 #include "lib/device/device_id.h"
 #include "lib/display/display.h"
-#include "errors.h"
 #include "lib/metadata/metadata-exported.h"
 #include "lib/locking/locking.h"
 #include "lib/misc/lvm-exec.h"
@@ -41,7 +42,6 @@
 #include "lib/metadata/segtype.h"
 #include "lib/datastruct/str_list.h"
 #include "lib/commands/toolcontext.h"
-#include "toollib.h"
 #include "lib/notify/lvmnotify.h"
 #include "lib/label/hints.h"
 
@@ -51,7 +51,7 @@
 #define CMD_LEN 256
 #define MAX_ARGS 64
 
-#include "command_enums.h"
+#include "command.h"
 
 /* command functions */
 #define xx(a, b...) int a(struct cmd_context *cmd, int argc, char **argv);
@@ -148,6 +148,7 @@ const void *arg_ptr_value(const struct cmd_context *cmd, int a, const void *def)
 sign_t arg_sign_value(const struct cmd_context *cmd, int a, const sign_t def);
 percent_type_t arg_percent_value(const struct cmd_context *cmd, int a, const percent_type_t def);
 int arg_count_increment(struct cmd_context *cmd, int a);
+force_t arg_force_value(const struct cmd_context *cmd);
 
 unsigned grouped_arg_count(const struct arg_values *av, int a);
 unsigned grouped_arg_is_set(const struct arg_values *av, int a);
@@ -172,6 +173,9 @@ int vgchange_background_polling(struct cmd_context *cmd, struct volume_group *vg
 int vgchange_locktype_cmd(struct cmd_context *cmd, int argc, char **argv);
 int vgchange_lock_start_stop_cmd(struct cmd_context *cmd, int argc, char **argv);
 int vgchange_systemid_cmd(struct cmd_context *cmd, int argc, char **argv);
+int vgchange_setpersist_cmd(struct cmd_context *cmd, int argc, char **argv);
+int vgchange_persist_cmd(struct cmd_context *cmd, int argc, char **argv);
+int vgchange_setlockargs_cmd(struct cmd_context *cmd, int argc, char **argv);
 
 const struct opt_name *get_opt_name(int opt);
 const struct val_name *get_val_name(int val);
@@ -187,6 +191,15 @@ int lvchange_syncaction_cmd(struct cmd_context *cmd, int argc, char **argv);
 int lvchange_rebuild_cmd(struct cmd_context *cmd, int argc, char **argv);
 int lvchange_monitor_poll_cmd(struct cmd_context *cmd, int argc, char **argv);
 int lvchange_persistent_cmd(struct cmd_context *cmd, int argc, char **argv);
+
+int lvdisplay_columns_cmd(struct cmd_context *cmd, int argc, char **argv);
+int lvdisplay_colon_cmd(struct cmd_context *cmd, int argc, char **argv);
+int lvdisplay_general_cmd(struct cmd_context *cmd, int argc, char **argv);
+int pvdisplay_columns_cmd(struct cmd_context *cmd, int argc, char **argv);
+int pvdisplay_cmd(struct cmd_context *cmd, int argc, char **argv);
+int vgdisplay_columns_cmd(struct cmd_context *cmd, int argc, char **argv);
+int vgdisplay_colon_cmd(struct cmd_context *cmd, int argc, char **argv);
+int vgdisplay_general_cmd(struct cmd_context *cmd, int argc, char **argv);
 
 int lvconvert_repair_cmd(struct cmd_context *cmd, int argc, char **argv);
 int lvconvert_replace_pv_cmd(struct cmd_context *cmd, int argc, char **argv);

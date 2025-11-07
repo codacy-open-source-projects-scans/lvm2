@@ -10,17 +10,20 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 which mkfs.ext4 || skip
 aux have_integrity 1 5 0 || skip
 # Avoid 4K ramdisk devices on older kernels
 aux kernel_at_least  5 10 || export LVM_TEST_PREFER_BRD=0
 
+aux lvmconf 'activation/raid_fault_policy = "allocate"'
+
+aux prepare_dmeventd
+
 mnt="mnt"
-mkdir -p $mnt
+mkdir -p "$mnt"
 
 aux prepare_devs 6 64
 
@@ -94,10 +97,23 @@ _verify_data_on_lv() {
         lvchange -an $vg/$lv1
 }
 
-aux lvmconf \
-        'activation/raid_fault_policy = "allocate"'
-
-aux prepare_dmeventd
+# Wait for dmeventd repair to complete by checking if specified devices
+# are no longer present in lvs output. Times out after 11 seconds.
+# Usage: _wait_for_repair dev1 [dev2 ...]
+_wait_for_repair() {
+	local dev
+	sync
+	for i in {1..11}; do
+		sleep 1
+		lvs -a -o+devices $vg > out 2>&1 || true
+		for dev in "$@"; do
+			grep -q "$dev" out && continue 2
+		done
+		# All devices gone, repair completed
+		return 0
+	done
+	die "dmeventd repair timeout - expected devices removed: $*."
+}
 
 # raid1, one device fails, dmeventd calls repair
 
@@ -115,8 +131,7 @@ aux disable_dev "$dev2"
 
 # wait for dmeventd to call lvconvert --repair which should
 # replace dev2 with dev4
-sync
-sleep 5
+_wait_for_repair "$dev2"
 
 lvs -a -o+devices $vg | tee out
 not grep "$dev2" out
@@ -133,7 +148,7 @@ grep "$dev4" out
 grep "$dev1" out
 grep "$dev3" out
 
-umount $mnt
+umount "$mnt"
 lvchange -an $vg/$lv1
 _verify_data_on_lv
 lvremove $vg/$lv1
@@ -155,8 +170,7 @@ aux disable_dev "$dev1" "$dev2"
 
 # wait for dmeventd to call lvconvert --repair which should
 # replace dev1 and dev2 with dev4 and dev5
-sync
-sleep 5
+_wait_for_repair "$dev1" "$dev2"
 
 lvs -a -o+devices $vg | tee out
 not grep "$dev1" out
@@ -177,7 +191,7 @@ grep "$dev4" out
 grep "$dev5" out
 grep "$dev3" out
 
-umount $mnt
+umount "$mnt"
 lvchange -an $vg/$lv1
 _verify_data_on_lv
 lvremove $vg/$lv1
@@ -201,8 +215,7 @@ aux disable_dev "$dev2"
 
 # wait for dmeventd to call lvconvert --repair which should
 # replace dev2 with dev6
-sync
-sleep 5
+_wait_for_repair "$dev2"
 
 lvs -a -o+devices $vg | tee out
 not grep "$dev2" out
@@ -217,7 +230,7 @@ lvs -a -o+devices $vg | tee out
 not grep "$dev2" out
 grep "$dev6" out
 
-umount $mnt
+umount "$mnt"
 lvchange -an $vg/$lv1
 _verify_data_on_lv
 lvremove $vg/$lv1
@@ -240,8 +253,7 @@ aux disable_dev "$dev1"
 
 # wait for dmeventd to call lvconvert --repair which should
 # replace dev1 with dev5
-sync
-sleep 5
+_wait_for_repair "$dev1"
 
 lvs -a -o+devices $vg | tee out
 not grep "$dev1" out
@@ -256,7 +268,7 @@ lvs -a -o+devices $vg | tee out
 not grep "$dev1" out
 grep "$dev5" out
 
-umount $mnt
+umount "$mnt"
 lvchange -an $vg/$lv1
 _verify_data_on_lv
 lvremove $vg/$lv1

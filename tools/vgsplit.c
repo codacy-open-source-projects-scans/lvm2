@@ -14,6 +14,7 @@
  */
 
 #include "tools.h"
+#include "lib/device/persist.h"
 
 static int _lv_is_in_vg(struct volume_group *vg, struct logical_volume *lv)
 {
@@ -49,7 +50,8 @@ static int _lv_tree_move(struct dm_list *lvh,
 		*lvht = dm_list_next(lvh, lvh);
 
 	dm_list_move(&vg_to->lvs, lvh);
-	lv->vg = vg_to;
+	if (!lv_set_vg(lv, vg_to))
+		return_0;
 	lv->lvid.id[0] = lv->vg->id;
 
 	if (seg)
@@ -169,7 +171,7 @@ static int _move_lvs(struct volume_group *vg_from, struct volume_group *vg_to)
 
 		}
 
-		if (vg_with == vg_from)
+		if (!vg_with || vg_with == vg_from)
 			continue;
 
 		/* Move this LV */
@@ -449,6 +451,8 @@ static int _move_cache(struct volume_group *vg_from,
 
 		if (lv_is_cache_vol(lv)) {
 			fast = lv;
+		} else if (lv_is_cache_vol(seg->lv)) {
+			fast = seg->lv;
 		} else {
 			data = seg_lv(seg, 0);
 			meta = seg->metadata_lv;
@@ -519,8 +523,10 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	struct vgcreate_params vp_new;
 	struct vgcreate_params vp_def;
 	const char *vg_name_from, *vg_name_to;
-	struct volume_group *vg_to = NULL, *vg_from = NULL;
-	struct lvmcache_vginfo *vginfo_to;
+	struct volume_group *vg_to, *vg_from = NULL;
+	DM_LIST_INIT(devs_moved);
+	struct device *dev_moved;
+	int pr_from, pr_to;
 	int opt;
 	int existing_vg = 0;
 	int r = ECMD_FAILED;
@@ -562,7 +568,7 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	if (!lvmcache_label_scan(cmd))
 		return_ECMD_FAILED;
 
-	if (!(vginfo_to = lvmcache_vginfo_from_vgname(vg_name_to, NULL))) {
+	if (!lvmcache_vginfo_from_vgname(vg_name_to, NULL)) {
 		if (!validate_name(vg_name_to)) {
 			log_error("Invalid vg name %s.", vg_name_to);
 			return ECMD_FAILED;
@@ -579,16 +585,29 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 			return ECMD_FAILED;
 		}
 	} else {
-		if (!(vg_to = vg_read_for_update(cmd, vg_name_to, NULL, 0, 0))) {
+		if (!(vg_to = vg_read_for_update(cmd, vg_name_to, NULL, 0))) {
 			log_error("Failed to read VG %s.", vg_name_to);
 			return ECMD_FAILED;
 		}
 		existing_vg = 1;
+
+		if (vg_is_shared(vg_to)) {
+			log_error("vgsplit is not supported with shared VGs.");
+			unlock_and_release_vg(cmd, vg_to, vg_name_to);
+			return ECMD_FAILED;
+		}
 	}
 
-	if (!(vg_from = vg_read_for_update(cmd, vg_name_from, NULL, 0, 0))) {
+	if (!(vg_from = vg_read_for_update(cmd, vg_name_from, NULL, 0))) {
 		log_error("Failed to read VG %s.", vg_name_to);
 		unlock_and_release_vg(cmd, vg_to, vg_name_to);
+		return ECMD_FAILED;
+	}
+
+	if (vg_is_shared(vg_from)) {
+		log_error("vgsplit is not supported with shared VGs.");
+		unlock_and_release_vg(cmd, vg_to, vg_name_to);
+		unlock_and_release_vg(cmd, vg_from, vg_name_from);
 		return ECMD_FAILED;
 	}
 
@@ -607,7 +626,7 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 			goto_bad;
 		}
 		vp_def.vg_name = vg_name_to;
-		if (!vgcreate_params_set_from_args(cmd, &vp_new, &vp_def)) {
+		if (!vgcreate_params_set_from_args(cmd, &vp_new, &vp_def, NULL)) {
 			r = EINVALID_CMD_LINE;
 			goto_bad;
 		}
@@ -633,12 +652,14 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	/* Move PVs across to new structure */
 	for (opt = 0; opt < argc; opt++) {
 		dm_unescape_colons_and_at_signs(argv[opt], NULL, NULL);
-		if (!move_pv(vg_from, vg_to, argv[opt]))
+		if (!move_pv(vg_from, vg_to, argv[opt], &dev_moved))
+			goto_bad;
+		if (dev_moved && !device_list_add(cmd->mem, &devs_moved, dev_moved))
 			goto_bad;
 	}
 
 	/* If an LV given on the cmdline, move used_by PVs */
-	if (lv_name && !move_pvs_used_by_lv(vg_from, vg_to, lv_name))
+	if (lv_name && !move_pvs_used_by_lv(vg_from, vg_to, lv_name, &devs_moved))
 		goto_bad;
 
 	/*
@@ -693,6 +714,17 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	log_verbose("Writing out updated volume groups");
 
 	/*
+	 * Make PR of moved PVs match the VG they are moved to.
+	 * !pr_from && pr_to: on dest, not on source: start dest PR before move
+	 * pr_from && !pr_to: on source, not on dest: stop dest PR after move
+	 */
+	pr_from = (vg_from->pr & (VG_PR_REQUIRE|VG_PR_AUTOSTART)) ? 1 : 0;
+	pr_to = (vg_to->pr & (VG_PR_REQUIRE|VG_PR_AUTOSTART)) ? 1 : 0;
+
+	if (!pr_from && pr_to && !persist_start(cmd, vg_to, NULL, NULL))
+		goto_bad;
+
+	/*
 	 * First, write out the new VG as EXPORTED.  We do this first in case
 	 * there is a crash - we will still have the new VG information, in an
 	 * exported state.  Recovery after this point would importing and removal
@@ -702,6 +734,7 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	vg_to->status |= EXPORTED_VG;
 
 
+	/* coverity[format_string_injection] pool_metadata_spare_lv name is validated */
 	if (!handle_pool_metadata_spare(vg_to, 0, &vg_to->pvs, poolmetadataspare))
 		goto_bad;
 
@@ -734,6 +767,9 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 		goto_bad;
 
 	backup(vg_to);
+
+	if (pr_from && !pr_to && !persist_stop_devs(cmd, vg_to, &devs_moved))
+		log_warn("WARNING: Failed to stop PR.");
 
 	log_print_unless_silent("%s volume group \"%s\" successfully split from \"%s\"",
 				existing_vg ? "Existing" : "New",

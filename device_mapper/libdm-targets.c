@@ -120,7 +120,7 @@ int dm_get_status_raid(struct dm_pool *mem, const char *params,
 	if (!(pp = _skip_fields(p, 1)))
 		goto_bad;
 
-	/* Raid target can actually report more then real number of legs in a case
+	/* Raid target can actually report more than real number of legs in a case
 	 * raid legs have been removed during initial raid array resynchronization */
 	if (i > (pp - p - 1))
 		i = pp - p - 1;
@@ -335,11 +335,19 @@ int dm_get_status_cache(struct dm_pool *mem, const char *params,
 
 	/* Read in policy args */
 	pp = p;
-	if (!(p = _skip_fields(p, 1)) ||
-	    !(s->policy_name = dm_pool_zalloc(mem, (p - pp))))
+	if (!(p = _skip_fields(p, 1)))
+		goto_bad;
+
+	i = p - pp;
+	if ((i < 1) ||
+	    !(s->policy_name = dm_pool_zalloc(mem, i)))
+		goto_bad;
+
+	dm_strncpy(s->policy_name, pp, i);
+
+	if (sscanf(p, "%d", &s->policy_argc) != 1)
 		goto bad;
-	if (sscanf(pp, "%s %d", s->policy_name, &s->policy_argc) != 2)
-		goto bad;
+
 	if (s->policy_argc &&
 	    (!(s->policy_argv = dm_pool_zalloc(mem, sizeof(char *) * s->policy_argc)) ||
 	     !(p = _skip_fields(p, 1)) ||
@@ -401,12 +409,12 @@ int dm_get_status_integrity(struct dm_pool *mem, const char *params,
 			     struct dm_status_integrity **status)
 {
 	struct dm_status_integrity *s;
-	char recalc_str[16] = "\0";
+	char recalc_str[16] = { 0 };
 
 	if (!(s = dm_pool_zalloc(mem, sizeof(*s))))
 		return_0;
 
-	if (sscanf(params, "%llu %llu %s",
+	if (sscanf(params, "%llu %llu %15s",
 		   (unsigned long long *)&s->number_of_mismatches,
 		   (unsigned long long *)&s->provided_data_sectors,
 		   recalc_str) != 3) {
@@ -571,7 +579,7 @@ int dm_get_status_mirror(struct dm_pool *mem, const char *params,
 	pos += used;
 
 	if (num_devs > DM_MIRROR_MAX_IMAGES) {
-		log_error(INTERNAL_ERROR "More then " DM_TO_STRING(DM_MIRROR_MAX_IMAGES)
+		log_error(INTERNAL_ERROR "More than " DM_TO_STRING(DM_MIRROR_MAX_IMAGES)
 			  " reported in mirror status.");
 		goto out;
 	}

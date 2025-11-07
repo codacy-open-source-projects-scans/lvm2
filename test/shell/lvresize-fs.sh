@@ -11,9 +11,8 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 which mkfs.ext4 || skip
 which resize2fs || skip
@@ -137,11 +136,25 @@ mount "$DM_DEV_DIR/$vg/$lv" "$mount_dir"
 # so exit 0 test here, if the feature is not present
 blkid -p "$DM_DEV_DIR/$vg/$lv" | grep FSLASTBLOCK || exit 0
 
+# existence of FSLASTBLOCK gives assumption on having 'new enough' blkid
+FSLASTBLOCK="$(blkid -p -o udev --match-tag FSLASTBLOCK "$DM_DEV_DIR/$vg/$lv")"
+FSLASTBLOCK=${FSLASTBLOCK/*=}
+# lvextend, ext4, active, mounted,
+df --output=size "$mount_dir" |tee df1
+lvextend -L+5M $vg/$lv
+check lv_field $vg/$lv lv_size "25.00m"
+#  here the filesystem should be resize to match 25M and must not fail
+lvextend -r -L25M $vg/$lv
+workaround_
+NEW_FSLASTBLOCK="$(blkid -p -o udev --match-tag FSLASTBLOCK "$DM_DEV_DIR/$vg/$lv")"
+NEW_FSLASTBLOCK=${NEW_FSLASTBLOCK/*=}
+test "$NEW_FSLASTBLOCK" -gt "$FSLASTBLOCK" ||
+	die "Filesystem should be extended!"
 
 # lvextend, ext4, active, mounted, no --fs setting is same as --fs ignore
 df --output=size "$mount_dir" |tee df1
 dd if=/dev/zero of="$mount_dir/zeros1" bs=1M count=8 oflag=direct
-lvextend -L+10M $vg/$lv
+lvextend -L+5M $vg/$lv
 check lv_field $vg/$lv lv_size "30.00m"
 # with no --fs used, the fs size should be the same
 df --output=size "$mount_dir" |tee df2
@@ -177,6 +190,13 @@ lvextend --resizefs -L+10M $vg/$lv
 check lv_field $vg/$lv lv_size "60.00m"
 df --output=size "$mount_dir" |tee df2
 not diff df1 df2
+
+# check if there is a snapshot over mounted origin,
+# resize works and reports correct size info.
+lvcreate -s -n $lv1 -L80M $vg/$lv
+not lvresize -L80M $vg/$lv1
+lvremove -f $vg/$lv1
+
 # keep mounted fs
 
 if [ -n "$HAVE_FSINFO" ]; then
@@ -659,23 +679,26 @@ lvremove -f $vg
 ######################################
 
 lvcreate -n $lv -L 16M $vg
-mkswap /dev/$vg/$lv
+mkswap "$DM_DEV_DIR/$vg/$lv"
 
-# lvreduce not allowed if LV size < swap size
-not lvreduce --fs checksize -L8m $vg/$lv
-check lv_field $vg/$lv lv_size "16.00m"
+# FSSIZE reported since util-linux/blkid v2.39 and later only
+blkid -p "$DM_DEV_DIR/$vg/$lv" | grep FSSIZE && {
+	# lvreduce not allowed if LV size < swap size
+	not lvreduce --fs checksize -L8m $vg/$lv
+	check lv_field $vg/$lv lv_size "16.00m"
 
-# lvreduce not allowed if LV size < swap size,
-# even with --fs resize, this is not supported
-not lvreduce --fs resize $vg/$lv
-check lv_field $vg/$lv lv_size "16.00m"
+	# lvreduce not allowed if LV size < swap size,
+	# even with --fs resize, this is not supported
+	not lvreduce --fs resize $vg/$lv
+	check lv_field $vg/$lv lv_size "16.00m"
 
-# lvextend allowed if LV size > swap size
-lvextend -L32m $vg/$lv
-check lv_field $vg/$lv lv_size "32.00m"
+	# lvextend allowed if LV size > swap size
+	lvextend -L32m $vg/$lv
+	check lv_field $vg/$lv lv_size "32.00m"
 
-# lvreduce allowed if LV size == swap size
-lvreduce -L16m $vg/$lv
-check lv_field $vg/$lv lv_size "16.00m"
+	# lvreduce allowed if LV size == swap size
+	lvreduce -L16m $vg/$lv
+	check lv_field $vg/$lv lv_size "16.00m"
+}
 
 vgremove -ff $vg

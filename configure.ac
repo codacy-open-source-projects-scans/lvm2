@@ -1,4 +1,3 @@
-###############################################################################
 ## Copyright (C) 2000-2004 Sistina Software, Inc. All rights reserved.
 ## Copyright (C) 2004-2023 Red Hat, Inc. All rights reserved.
 ##
@@ -217,6 +216,8 @@ test "$exec_prefix" = "NONE" && exec_prefix='${prefix}'
 
 AC_ARG_WITH(blkid, [AS_HELP_STRING([--without-blkid], [do not build with blkid library])],
 	    [], with_blkid="yes")
+AC_ARG_WITH(libnvme, [AS_HELP_STRING([--without-libnvme], [do not build with libnvme library])],
+	    [], with_libnvme="yes")
 AC_ARG_WITH(systemd, [AS_HELP_STRING([--without-systemd], [do not build with systemd library])],
 	    [], with_systemd="yes")
 AC_ARG_WITH(udev, [AS_HELP_STRING([--without-udev], [do not build with udev library])],
@@ -933,8 +934,12 @@ AC_MSG_RESULT([$BUILD_LOCKDSANLOCK])
 
 dnl -- Look for sanlock libraries
 AS_IF([test "$BUILD_LOCKDSANLOCK" = "yes"], [
+	LOCKDSANLOCK_SUPPORT=370
+	PKG_CHECK_EXISTS(libsanlock_client >= 4.0.0, [LOCKDSANLOCK_SUPPORT=400])
+	PKG_CHECK_EXISTS(libsanlock_client >= 4.1.0, [LOCKDSANLOCK_SUPPORT=410])
+	PKG_CHECK_EXISTS(libsanlock_client >= 4.2.0, [LOCKDSANLOCK_SUPPORT=420])
 	PKG_CHECK_MODULES(LIBSANLOCKCLIENT, libsanlock_client >= 3.7.0, [BUILD_LVMLOCKD="yes"])
-	AC_DEFINE([LOCKDSANLOCK_SUPPORT], 1, [Define to 1 to include code that uses lvmlockd sanlock option.])
+	AC_DEFINE_UNQUOTED([LOCKDSANLOCK_SUPPORT], [$LOCKDSANLOCK_SUPPORT], [Define version of sanlock.])
 ])
 
 ################################################################################
@@ -1046,7 +1051,9 @@ SYSTEMD_MIN_VERSION=0
 NOTIFYDBUS_SUPPORT="no"
 SYSTEMD_JOURNAL_SUPPORT="no"
 APP_MACHINEID_SUPPORT="no"
+SD_NOTIFY_SUPPORT="no"
 AS_IF([test "$with_systemd" = "yes"],
+      PKG_CHECK_EXISTS(systemd >= 218, [SYSTEMD_MIN_VERSION=218 SD_NOTIFY_SUPPORT="maybe"])
       PKG_CHECK_EXISTS(systemd >= 221, [SYSTEMD_MIN_VERSION=221 NOTIFYDBUS_SUPPORT="maybe" SYSTEMD_JOURNAL_SUPPORT="maybe"])
       PKG_CHECK_EXISTS(systemd >= 234, [SYSTEMD_MIN_VERSION=234 APP_MACHINEID_SUPPORT="maybe"]))
 
@@ -1081,6 +1088,22 @@ AC_MSG_RESULT([$APP_MACHINEID_SUPPORT])
 
 AS_IF([test "$APP_MACHINEID_SUPPORT" = "yes"],
       AC_DEFINE([APP_MACHINEID_SUPPORT], 1, [Define to 1 to include code that uses libsystemd machine-id apis.]))
+
+################################################################################
+dnl -- Build with sd_notify when the header file sd-daemon.h is present
+AS_IF([test "$SD_NOTIFY_SUPPORT" != "no"],
+      AC_CHECK_HEADER([systemd/sd-daemon.h], [SD_NOTIFY_SUPPORT="yes"], [SD_NOTIFY_SUPPORT="no"]))
+AC_ARG_ENABLE(sd-notify,
+	      AS_HELP_STRING([--disable-sd-notify],
+			     [disable LVM sd_notify]),
+	      AS_IF([test "$enableval" = "yes" && test "$SD_NOTIFY_SUPPORT" = "no"],
+		    AC_MSG_ERROR([--enable-sd-notify requires systemd/sd-daemon.h. (--with-systemd=$with_systemd)]))
+	      SD_NOTIFY_SUPPORT=$enableval, [])
+AC_MSG_CHECKING([whether to enable to sd_notify])
+AC_MSG_RESULT([$SD_NOTIFY_SUPPORT])
+
+AS_IF([test "$SD_NOTIFY_SUPPORT" = "yes"],
+      AC_DEFINE([SD_NOTIFY_SUPPORT], 1, [Define to 1 to include code that uses sd_notify.]))
 
 ################################################################################
 dnl -- Support override for systemd-run path if they need to (NixOS builds)
@@ -1138,6 +1161,38 @@ AC_MSG_CHECKING([whether to enable libblkid detection of signatures when wiping]
 AC_MSG_RESULT([$BLKID_WIPING])
 AC_DEFINE_UNQUOTED(DEFAULT_USE_BLKID_WIPING, [$DEFAULT_USE_BLKID_WIPING],
 		   [Use blkid wiping by default.])
+
+################################################################################
+dnl -- Enable nvme alternate WWID via libnvme
+AC_ARG_ENABLE(nvme-wwid,
+	      AS_HELP_STRING([--disable-nvme-wwid],
+			     [do not use libnvme to detect alternate WWIDs]),
+	      NVME_WWID=$enableval,
+	      [AS_IF([test "$with_libnvme" = "yes"], [NVME_WWID="maybe"], [NVME_WWID="no"])])
+
+# ATM NVME_WWID is the only user of libnvme, so skip checking for libnvme when disabled
+AS_IF([test "$NVME_WWID" = "no"], [with_libnvme="no"])
+
+AS_IF([test "$with_libnvme" = "yes"], [
+      PKG_CHECK_MODULES([LIBNVME], [libnvme >= 1.4], [
+		AC_CACHE_CHECK([for NVME_NIDT_CSI in libnvme.h],
+			[ac_cv_have_libnvme_csi],
+			[AC_COMPILE_IFELSE([AC_LANG_PROGRAM([#include <libnvme.h>
+const int a = NVME_NIDT_CSI;
+			])], [ac_cv_have_libnvme_csi="yes"], [ac_cv_have_libnvme_csi="no"])])
+
+		AS_IF([test "$NVME_WWID" != "no"], [
+		      AC_IF_YES(ac_cv_have_libnvme_csi, [NVME_WWID="yes"
+				AC_DEFINE(NVME_SUPPORT, 1, [Use libnvme for WWID.])],
+				[NVME_WWID="error"])])
+      ], [AS_IF([test "$NVME_WWID" = "yes"], [NVME_WWID="error"], [NVME_WWID="no"])])
+], [AS_IF([test "$NVME_WWID" = "yes"], [NVME_WWID="error"])])
+
+AS_IF([test "$NVME_WWID" = "error"],
+	[AC_MSG_ERROR([--enable-nvme-wwid requires libnvme library >= 1.1. (--with-libnvme=$with_libnvme)])])
+
+AC_MSG_CHECKING([whether to use libnvme for alternate WWIDs])
+AC_MSG_RESULT([$NVME_WWID])
 
 ################################################################################
 dnl -- Enable udev synchronization
@@ -1231,24 +1286,25 @@ AC_MSG_RESULT([$BUILD_LVMDBUSD])
 dnl -- Build notifydbus
 AC_ARG_ENABLE(notify-dbus,
 	      [AS_HELP_STRING([--enable-notify-dbus], [enable LVM notification using dbus])],
-	      [NOTIFYDBUS_SUPPORT=$enableval])
+	      [AS_IF([test "enableval" = "yes" && test "$NOTIFYDBUS_SUPPORT" = "no"],
+		     [AC_MSG_ERROR([--enable-notify-dbus requires systemd >= 221. (--with-systemd=$with_systemd)])])
+	       NOTIFYDBUS_SUPPORT=$enableval])
 
 AS_IF([test "$NOTIFYDBUS_SUPPORT" = "maybe"],
-      [AS_IF([test "$BUILD_LVMDBUSD" = "yes"], [NOTIFYDBUS_SUPPORT="yes"], [NOTIFYDBUS_SUPPORT="no"])])
+      [AS_IF([test "$BUILD_LVMDBUSD" = "yes"],
+      [NOTIFYDBUS_SUPPORT="yes"], [NOTIFYDBUS_SUPPORT="no"])])
 
 AS_IF([test "$NOTIFYDBUS_SUPPORT" = "yes"],
-      [AS_IF([test "$SYSTEMD_MIN_VERSION" -lt 221],
-	    [AC_MSG_ERROR([--enable-notify-dbus requires systemd >= 221. (--with-systemd=$with_systemd)])])
-       AC_DEFINE([NOTIFYDBUS_SUPPORT], 1, [Define to 1 to include code that uses dbus notification.])])
+       [AC_DEFINE([NOTIFYDBUS_SUPPORT], 1, [Define to 1 to include code that uses dbus notification.])])
 
 AC_MSG_CHECKING([whether to build notifydbus])
 AC_MSG_RESULT([$NOTIFYDBUS_SUPPORT])
 
 ################################################################################
 dnl -- Look for libsystemd libraries if needed
-AS_IF([test "$NOTIFYDBUS_SUPPORT" = "yes" || test "$SYSTEMD_JOURNAL_SUPPORT" = "yes" || test "$APP_MACHINEID_SUPPORT" = "yes"], [
-	PKG_CHECK_MODULES(LIBSYSTEMD, [libsystemd])
-])
+AS_IF([test "$NOTIFYDBUS_SUPPORT" = "yes" || test "$SYSTEMD_JOURNAL_SUPPORT" = "yes" ||
+       test "$APP_MACHINEID_SUPPORT" = "yes" || test "$SD_NOTIFY_SUPPORT" = "yes"],
+       [PKG_CHECK_MODULES(LIBSYSTEMD, [libsystemd])])
 
 ################################################################################
 dnl -- Enable Python dbus library
@@ -1341,7 +1397,7 @@ AS_IF([test "$CMDLIB" != "yes"], [CMDLIB="no" LVM2CMD_LIB=], [LVM2CMD_LIB="-llvm
 AC_MSG_CHECKING([whether to compile liblvm2cmd.so])
 AC_MSG_RESULT([$CMDLIB])
 
-AS_IF([test "$CMDLIB" == "yes" && test "$SHARED_LINK" = "no"],
+AS_IF([test "$CMDLIB" = "yes" && test "$SHARED_LINK" = "no"],
       [AC_MSG_ERROR([--enable-cmdlib requires dynamic linking.])])
 
 
@@ -1717,6 +1773,9 @@ LIBEXECDIR="$(eval echo $(eval echo $libexecdir))"
 LVRESIZE_FS_HELPER_PATH="$LIBEXECDIR/lvresize_fs_helper"
 AC_DEFINE_UNQUOTED(LVRESIZE_FS_HELPER_PATH, ["$LVRESIZE_FS_HELPER_PATH"], [Path to lvresize_fs_helper script.])
 
+LVMPERSIST_PATH="$SBINDIR/lvmpersist"
+AC_DEFINE_UNQUOTED(LVMPERSIST_PATH, ["$LVMPERSIST_PATH"], [Path to lvmpersist script.])
+
 ################################################################################
 dnl -- dmeventd pidfile and executable path
 AC_ARG_WITH(dmeventd-pidfile,
@@ -1938,6 +1997,7 @@ AC_SUBST(PYTHON3)
 AC_SUBST(PYTHON3DIR)
 AC_SUBST(RT_LIBS)
 AC_SUBST(SBINDIR)
+AC_SUBST(SD_NOTIFY_SUPPORT)
 AC_SUBST(SELINUX_LIBS)
 AC_SUBST(SELINUX_PC)
 AC_SUBST(SELINUX_STATIC_LIBS)
@@ -2075,3 +2135,6 @@ AS_IF([test "$ODIRECT" != "yes"],
 
 AS_IF([test "$BUILD_LVMDBUSD" = "yes" && test "$NOTIFYDBUS_SUPPORT" = "no"],
       [AC_MSG_WARN([Building D-Bus support without D-Bus notifications!])])
+
+AS_IF([test "$BUILD_LVMLOCKD" = "yes" && test "$SD_NOTIFY_SUPPORT" = "no"],
+      [AC_MSG_WARN([Building lvmlockd without sd-notify support may block!])])

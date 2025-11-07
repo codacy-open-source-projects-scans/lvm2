@@ -14,9 +14,9 @@
 
 #include "base/memory/zalloc.h"
 #include "lib/misc/lib.h"
-#include "lib/commands/toolcontext.h"
-#include "lib/device/device.h"
 #include "lib/device/dev-type.h"
+#include "lib/device/filesystem.h"
+#include "lib/display/display.h"
 #include "lib/misc/lvm-exec.h"
 #include "lib/activate/dev_manager.h"
 
@@ -24,17 +24,14 @@
 #include <mntent.h>
 #include <sys/ioctl.h>
 
-static const char *_lvresize_fs_helper_path;
-
-static const char *_get_lvresize_fs_helper_path(void)
+static const char *_get_lvresize_fs_helper_path(struct cmd_context *cmd)
 {
-	if (!_lvresize_fs_helper_path)
-		_lvresize_fs_helper_path = getenv("LVRESIZE_FS_HELPER_PATH");
+	const char *path = getenv("LVRESIZE_FS_HELPER_PATH");
 
-	if (!_lvresize_fs_helper_path)
-		_lvresize_fs_helper_path = LVRESIZE_FS_HELPER_PATH; /* from configure, usually in /usr/libexec */
+	if (!path)
+		path = find_config_tree_str(cmd, global_lvresize_fs_helper_executable_CFG, NULL);
 
-	return _lvresize_fs_helper_path;
+	return path;
 }
 
 /*
@@ -108,6 +105,152 @@ int lv_crypt_is_active(struct cmd_context *cmd, char *lv_path)
 	return _get_crypt_path(st_lv.st_rdev, lv_path, crypt_path);
 }
 
+static int _fs_get_mnt(struct fs_info *fsi, dev_t devt)
+{
+	struct stat stme;
+	FILE *fme = NULL;
+	struct mntent *me;
+
+	/*
+	 * Note: used swap devices are not considered as mount points,
+	 * hence they're not listed in /etc/mtab, we'd need to read the
+	 * /proc/swaps instead. We don't need it at this moment though,
+	 * but if we do once, read the /proc/swaps here if fsi->fstype == "swap".
+	 */
+	if (!(fme = setmntent("/etc/mtab", "r")))
+		return_0;
+
+	while ((me = getmntent(fme))) {
+		if (strcmp(me->mnt_type, fsi->fstype))
+			continue;
+		if (me->mnt_dir[0] != '/')
+			continue;
+		if (me->mnt_fsname[0] != '/')
+			continue;
+
+		/*
+		 * st_dev of mnt_dir in btrfs is an anonymous device number,
+		 * use mnt_fsname instead.
+		 */
+		if (!strcmp(fsi->fstype, "btrfs")) {
+			if (stat(me->mnt_fsname, &stme) < 0)
+				log_sys_error("stat", me->mnt_fsname);
+			if (stme.st_rdev != devt)
+				continue;
+		} else {
+			if (stat(me->mnt_dir, &stme) < 0)
+				continue;
+			if (stme.st_dev != devt)
+				continue;
+			fsi->mounted = 1;
+		}
+
+		log_debug("fs_get_info %s is mounted \"%s\"", fsi->fs_dev_path, me->mnt_dir);
+		strncpy(fsi->mount_dir, me->mnt_dir, PATH_MAX-1);
+	}
+	endmntent(fme);
+
+	return 1;
+}
+
+static int _btrfs_get_mnt(struct fs_info *fsi, dev_t lv_devt)
+{
+	char devices_path[PATH_MAX];
+	char rdev_path[PATH_MAX];
+	unsigned major, minor;
+	dev_t devt;
+	char buffer[16];
+	char *device_name;
+	DIR *dr;
+	struct dirent *de;
+	int ret = 1;
+	int fd = -1;
+	int r;
+	bool found = false;
+
+	/* For a mounted btrfs, there will be a sys dir like /sys/fs/btrfs/$uuid/devices */
+	if (!dm_snprintf(devices_path, sizeof(devices_path), "%sfs/btrfs/%s/devices",
+			dm_sysfs_dir(), fsi->uuid)) {
+		log_error("Couldn't create btrfs devices path for %s.", fsi->fs_dev_path);
+		return 0;
+	}
+
+	/* btrfs module is not available or the device is not mounted */
+	if (!(dr = opendir(devices_path))) {
+		if (errno == ENOENT) {
+			fsi->mounted = 0;
+			return 1;
+		}
+	}
+
+	/*
+	 * Here iterates entries under /sys/fs/btrfs/$uuid/devices and read devt.
+	 * There is only one mnt entry per mounted fs even it's a multi-devices fs.
+	 * So also call _fs_get_mnt for every devices to find a matched mount point.
+	 */
+	while ((de = readdir(dr))) {
+		if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, ".."))
+			continue;
+
+		device_name = de->d_name;
+
+		if (!dm_snprintf(rdev_path, sizeof(devices_path), "%s/%s/dev",
+				 devices_path, device_name)) {
+			    log_error("Couldn't create rdev path for %s.", fsi->fs_dev_path);
+			    ret = 0;
+			    break;
+		}
+
+		if ((fd = open(rdev_path, O_RDONLY)) < 0) {
+			log_sys_debug("open", rdev_path);
+			ret = 0;
+			break;
+		}
+
+		r = read(fd, buffer, sizeof(buffer));
+
+		if (close(fd))
+			log_sys_debug("close", rdev_path);
+		fd = -1;
+
+		if (r <= 0) {
+			ret = 0;
+			log_sys_debug("read", rdev_path);
+			break;
+		}
+
+		buffer[r - 1] = 0;
+
+		if (sscanf(buffer, "%u:%u", &major, &minor) != 2) {
+			ret = 0;
+			log_sys_debug("sscanf", rdev_path);
+			break;
+		}
+
+		devt = MKDEV(major, minor);
+		if (devt == lv_devt)
+			found = true;
+
+		if (fsi->mount_dir[0] == 0)
+			_fs_get_mnt(fsi, devt);
+
+		if (fsi->mounted && fsi->mount_dir[0])
+			break;
+	}
+
+	if (closedir(dr))
+		log_sys_debug("closedir", devices_path);
+
+	fsi->mounted = !!found;
+
+	if (fsi->mounted && fsi->mount_dir[0] == 0) {
+		log_error("Couldn't get mount point for %s.", fsi->fs_dev_path);
+		ret = 0;
+	}
+
+	return ret;
+}
+
 int fs_get_info(struct cmd_context *cmd, struct logical_volume *lv,
 		struct fs_info *fsi, int include_mount)
 {
@@ -116,10 +259,7 @@ int fs_get_info(struct cmd_context *cmd, struct logical_volume *lv,
 	struct stat st_lv;
 	struct stat st_crypt;
 	struct stat st_top;
-	struct stat stme;
 	struct fs_info info;
-	FILE *fme = NULL;
-	struct mntent *me;
 	int fd;
 	int ret;
 
@@ -201,35 +341,10 @@ int fs_get_info(struct cmd_context *cmd, struct logical_volume *lv,
 	if (!include_mount)
 		return 1;
 
-	/*
-	 * Note: used swap devices are not considered as mount points,
-	 * hence they're not listed in /etc/mtab, we'd need to read the
-	 * /proc/swaps instead. We don't need it at this moment though,
-	 * but if we do once, read the /proc/swaps here if fsi->fstype == "swap".
-	 */
-
-	if (!(fme = setmntent("/etc/mtab", "r")))
-		return_0;
-
-	ret = 1;
-
-	while ((me = getmntent(fme))) {
-		if (strcmp(me->mnt_type, fsi->fstype))
-			continue;
-		if (me->mnt_dir[0] != '/')
-			continue;
-		if (me->mnt_fsname[0] != '/')
-			continue;
-		if (stat(me->mnt_dir, &stme) < 0)
-			continue;
-		if (stme.st_dev != st_top.st_rdev)
-			continue;
-
-		log_debug("fs_get_info %s is mounted \"%s\"", fsi->fs_dev_path, me->mnt_dir);
-		fsi->mounted = 1;
-		strncpy(fsi->mount_dir, me->mnt_dir, PATH_MAX-1);
-	}
-	endmntent(fme);
+	if (!strcmp(fsi->fstype, "btrfs"))
+		ret = _btrfs_get_mnt(fsi, st_lv.st_rdev);
+	else
+		ret = _fs_get_mnt(fsi, st_top.st_rdev);
 
 	fsi->unmounted = !fsi->mounted;
 	return ret;
@@ -239,11 +354,13 @@ int fs_mount_state_is_misnamed(struct cmd_context *cmd, struct logical_volume *l
 {
 	FILE *fp;
 	char proc_line[PATH_MAX];
-	char proc_fstype[FSTYPE_MAX];
-	char proc_devpath[PATH_MAX];
-	char proc_mntpath[PATH_MAX];
+	char proc_fstype[FSTYPE_MAX + 1];
+	char proc_devpath[PATH_MAX + 1];
+	char proc_mntpath[PATH_MAX + 1];
 	char mtab_mntpath[PATH_MAX] = { 0 };
 	char dm_devpath[PATH_MAX];
+	char dm_devpath_resolved[PATH_MAX];
+	char proc_devpath_resolved[PATH_MAX];
 	char tmp_path[PATH_MAX];
 	char *dm_name;
 	struct stat st_lv;
@@ -327,7 +444,7 @@ int fs_mount_state_is_misnamed(struct cmd_context *cmd, struct logical_volume *l
 		if (sscanf(proc_line, "%"
 			   DM_TO_STRING(PATH_MAX) "s %"
 			   DM_TO_STRING(PATH_MAX) "s %"
-			   DM_TO_STRING(PATH_MAX) "s", proc_devpath, proc_mntpath, proc_fstype) != 3)
+			   DM_TO_STRING(FSTYPE_MAX) "s", proc_devpath, proc_mntpath, proc_fstype) != 3)
 			continue;
 		if (strcmp(fstype, proc_fstype))
 			continue;
@@ -343,9 +460,19 @@ int fs_mount_state_is_misnamed(struct cmd_context *cmd, struct logical_volume *l
 		 * it appears in /proc/mounts once as
 		 * /dev/mapper/vg-lvol0 on /foo type xfs ...
 		 */
-
 		dir_match = !strcmp(mtab_mntpath, proc_mntpath);
-		dev_match = !strcmp(dm_devpath, proc_devpath);
+
+		/*
+		 * Resolve symlinks before comparing device paths. In test environments,
+		 * dm_devpath may be a symlink (e.g., /dev/shm/LVMTEST/dev/mapper/vg-lv
+		 * -> /dev/mapper/vg-lv), while proc_devpath is the resolved real path.
+		 * Compare resolved paths to avoid false positives for rename detection.
+		 */
+		if (realpath(dm_devpath, dm_devpath_resolved) &&
+		    realpath(proc_devpath, proc_devpath_resolved))
+			dev_match = !strcmp(dm_devpath_resolved, proc_devpath_resolved);
+		else
+			dev_match = !strcmp(dm_devpath, proc_devpath);
 
 		if (!dir_match && !dev_match)
 			continue;
@@ -375,8 +502,7 @@ int fs_mount_state_is_misnamed(struct cmd_context *cmd, struct logical_volume *l
 
 #define FS_CMD_MAX_ARGS 16
 
-int crypt_resize_script(struct cmd_context *cmd, struct logical_volume *lv, struct fs_info *fsi,
-			uint64_t newsize_bytes_fs)
+int crypt_resize_script(struct cmd_context *cmd, struct logical_volume *lv, struct fs_info *fsi)
 {
 	char crypt_path[PATH_MAX];
 	char newsize_str[16] = { 0 };
@@ -384,13 +510,13 @@ int crypt_resize_script(struct cmd_context *cmd, struct logical_volume *lv, stru
 	int args = 0;
 	int status;
 
-	if (dm_snprintf(newsize_str, sizeof(newsize_str), "%llu", (unsigned long long)newsize_bytes_fs) < 0)
+	if (dm_snprintf(newsize_str, sizeof(newsize_str), "%llu", (unsigned long long)fsi->new_size_bytes) < 0)
 		return_0;
 
 	if (dm_snprintf(crypt_path, sizeof(crypt_path), "/dev/dm-%u", MINOR(fsi->crypt_devt)) < 0)
 		return_0;
 
-	argv[0] = _get_lvresize_fs_helper_path();
+	argv[0] = _get_lvresize_fs_helper_path(cmd);
 	argv[++args] = "--cryptresize";
 	argv[++args] = "--cryptpath";
 	argv[++args] = crypt_path;
@@ -420,12 +546,11 @@ int crypt_resize_script(struct cmd_context *cmd, struct logical_volume *lv, stru
  * if needs_crypt
  * 	cryptsetup resize --size $newsize_sectors $cryptpath
  *
- * Note: when a crypt layer is included, newsize_bytes_fs is smaller
+ * Note: when a crypt layer is included, new_size_bytes is smaller
  * than newsize_bytes_lv because of the crypt header.
  */
 
-int fs_reduce_script(struct cmd_context *cmd, struct logical_volume *lv, struct fs_info *fsi,
-		     uint64_t newsize_bytes_fs, char *fsmode)
+int fs_reduce_script(struct cmd_context *cmd, struct logical_volume *lv, struct fs_info *fsi, char *fsmode)
 {
 	char lv_path[PATH_MAX];
 	char crypt_path[PATH_MAX];
@@ -435,20 +560,20 @@ int fs_reduce_script(struct cmd_context *cmd, struct logical_volume *lv, struct 
 	int args = 0;
 	int status;
 
-	if (dm_snprintf(newsize_str, sizeof(newsize_str), "%llu", (unsigned long long)newsize_bytes_fs) < 0)
+	if (dm_snprintf(newsize_str, sizeof(newsize_str), "%llu", (unsigned long long)fsi->new_size_bytes) < 0)
 		return_0;
 
 	if (dm_snprintf(lv_path, PATH_MAX, "%s%s/%s", lv->vg->cmd->dev_dir, lv->vg->name, lv->name) < 0)
 		return_0;
 
-	argv[0] = _get_lvresize_fs_helper_path();
+	argv[0] = _get_lvresize_fs_helper_path(cmd);
 	argv[++args] = "--fsreduce";
 	argv[++args] = "--fstype";
 	argv[++args] = fsi->fstype;
 	argv[++args] = "--lvpath";
 	argv[++args] = lv_path;
 
-	if (newsize_bytes_fs) {
+	if (fsi->new_size_bytes) {
 		argv[++args] = "--newsizebytes";
 		argv[++args] = newsize_str;
 	}
@@ -484,8 +609,8 @@ int fs_reduce_script(struct cmd_context *cmd, struct logical_volume *lv, struct 
 	devpath = fsi->needs_crypt ? crypt_path : (char *)display_lvname(lv);
 
 	log_print_unless_silent("Reducing file system %s to %s (%llu bytes) on %s...",
-				fsi->fstype, display_size(cmd, newsize_bytes_fs/512),
-				(unsigned long long)newsize_bytes_fs, devpath);
+				fsi->fstype, display_size(cmd, fsi->new_size_bytes/512),
+				(unsigned long long)fsi->new_size_bytes, devpath);
 
 	if (!exec_cmd(cmd, argv, &status, 1)) {
 		log_error("Failed to reduce file system with lvresize_fs_helper.");
@@ -513,30 +638,38 @@ int fs_reduce_script(struct cmd_context *cmd, struct logical_volume *lv, struct 
  * if $fstype == "xfs"
  * 	xfs_growfs $devpath
  *
- * Note: when a crypt layer is included, newsize_bytes_fs is smaller
+ * Note: when a crypt layer is included, new_size_bytes is smaller
  * than newsize_bytes_lv because of the crypt header.
  */
 
 int fs_extend_script(struct cmd_context *cmd, struct logical_volume *lv, struct fs_info *fsi,
-		     uint64_t newsize_bytes_fs, char *fsmode)
+		     char *fsmode)
 {
 	char lv_path[PATH_MAX];
 	char crypt_path[PATH_MAX];
+	char newsize_str[16] = { 0 };
 	const char *argv[FS_CMD_MAX_ARGS + 4];
 	char *devpath;
 	int args = 0;
 	int status;
 
+	if (dm_snprintf(newsize_str, sizeof(newsize_str), "%llu", (unsigned long long)fsi->new_size_bytes) < 0)
+		return_0;
+
 	if (dm_snprintf(lv_path, PATH_MAX, "%s%s/%s", lv->vg->cmd->dev_dir, lv->vg->name, lv->name) < 0)
 		return_0;
 
-	argv[0] = _get_lvresize_fs_helper_path();
+	argv[0] = _get_lvresize_fs_helper_path(cmd);
 	argv[++args] = "--fsextend";
 	argv[++args] = "--fstype";
 	argv[++args] = fsi->fstype;
 	argv[++args] = "--lvpath";
 	argv[++args] = lv_path;
 
+	if (fsi->new_size_bytes) {
+		argv[++args] = "--newsizebytes";
+		argv[++args] = newsize_str;
+	}
 	if (fsi->mounted) {
 		argv[++args] = "--mountdir";
 		argv[++args] = fsi->mount_dir;
@@ -569,8 +702,8 @@ int fs_extend_script(struct cmd_context *cmd, struct logical_volume *lv, struct 
 	devpath = fsi->needs_crypt ? crypt_path : (char *)display_lvname(lv);
 
 	log_print_unless_silent("Extending file system %s to %s (%llu bytes) on %s...",
-				fsi->fstype, display_size(cmd, newsize_bytes_fs/512),
-				(unsigned long long)newsize_bytes_fs, devpath);
+				fsi->fstype, display_size(cmd, fsi->new_size_bytes/512),
+				(unsigned long long)fsi->new_size_bytes, devpath);
 
 	if (!exec_cmd(cmd, argv, &status, 1)) {
 		log_error("Failed to extend file system with lvresize_fs_helper.");

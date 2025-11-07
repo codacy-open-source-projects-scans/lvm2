@@ -15,15 +15,15 @@
 #ifndef _LVM_UTIL_H
 #define _LVM_UTIL_H
 
-#include <inttypes.h>
+#include "device_mapper/all.h"
 
-#define min(a, b) ({ typeof(a) _a = (a); \
-		     typeof(b) _b = (b); \
+#define min(a, b) ({ __typeof__(a) _a = (a); \
+		     __typeof__(b) _b = (b); \
 		     (void) (&_a == &_b); \
 		     _a < _b ? _a : _b; })
 
-#define max(a, b) ({ typeof(a) _a = (a); \
-		     typeof(b) _b = (b); \
+#define max(a, b) ({ __typeof__(a) _a = (a); \
+		     __typeof__(b) _b = (b); \
 		     (void) (&_a == &_b); \
 		     _a > _b ? _a : _b; })
 

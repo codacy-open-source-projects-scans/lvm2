@@ -144,7 +144,7 @@ int label_remove(struct device *dev)
 		wipe = 0;
 
 		if (!memcmp(lh->id, LABEL_ID, sizeof(lh->id))) {
-			if (xlate64(lh->sector_xl) == sector)
+			if (htole64(lh->sector_xl) == sector)
 				wipe = 1;
 		} else {
 			dm_list_iterate_items(li, &_labellers) {
@@ -197,18 +197,18 @@ int label_write(struct device *dev, struct label *label)
 	memset(buf, 0, LABEL_SIZE);
 
 	memcpy(lh->id, LABEL_ID, sizeof(lh->id));
-	lh->sector_xl = xlate64(label->sector);
-	lh->offset_xl = xlate32(sizeof(*lh));
+	lh->sector_xl = htole64(label->sector);
+	lh->offset_xl = htole32(sizeof(*lh));
 
 	if (!(label->labeller->ops->write)(label, buf))
 		return_0;
 
-	lh->crc_xl = xlate32(calc_crc(INITIAL_CRC, (uint8_t *)&lh->offset_xl, LABEL_SIZE -
+	lh->crc_xl = htole32(calc_crc(INITIAL_CRC, (uint8_t *)&lh->offset_xl, LABEL_SIZE -
 				      ((uint8_t *) &lh->offset_xl - (uint8_t *) lh)));
 
 	log_very_verbose("%s: Writing label to sector %" PRIu64 " with stored offset %"
 			 PRIu32 ".", dev_name(dev), label->sector,
-			 xlate32(lh->offset_xl));
+			 htole32(lh->offset_xl));
 
 	if (!label_scan_open(dev)) {
 		log_error("Failed to open device %s", dev_name(dev));
@@ -291,15 +291,15 @@ static struct labeller *_find_lvm_header(struct device *dev,
 				log_error("Ignoring additional label on %s at sector %llu",
 					  dev_name(dev), (unsigned long long)(block_sector + sector));
 			}
-			if (xlate64(lh->sector_xl) != sector) {
+			if (htole64(lh->sector_xl) != sector) {
 				log_warn("%s: Label for sector %llu found at sector %llu - ignoring.",
 					 dev_name(dev),
-					 (unsigned long long)xlate64(lh->sector_xl),
+					 (unsigned long long)htole64(lh->sector_xl),
 					 (unsigned long long)(block_sector + sector));
 				continue;
 			}
 			if (calc_crc(INITIAL_CRC, (uint8_t *)&lh->offset_xl,
-				     LABEL_SIZE - ((uint8_t *) &lh->offset_xl - (uint8_t *) lh)) != xlate32(lh->crc_xl)) {
+				     LABEL_SIZE - ((uint8_t *) &lh->offset_xl - (uint8_t *) lh)) != htole32(lh->crc_xl)) {
 				log_very_verbose("Label checksum incorrect on %s - ignoring", dev_name(dev));
 				continue;
 			}
@@ -446,7 +446,7 @@ static int _process_block(struct cmd_context *cmd, struct dev_filter *f,
 			 * lvmcache with empty info->mdas, and it will behave
 			 * like a PV with no mdas (a common configuration.)
 			 */
-			log_warn("WARNING: scan failed to get metadata summary from %s PVID %s", dev_name(dev), dev->pvid);
+			log_warn("WARNING: Scan failed to get metadata summary from %s PVID %s.", dev_name(dev), dev->pvid);
 		}
 	}
  out:
@@ -856,9 +856,9 @@ void prepare_open_file_limit(struct cmd_context *cmd, unsigned int num_devs)
 	rv = prlimit(0, RLIMIT_NOFILE, &new, &old);
 	if (rv < 0) {
 		if (errno == EPERM)
-			log_warn("WARNING: permission error setting open file limit for scanning %u devices.", num_devs);
+			log_warn("WARNING: Permission error setting open file limit for scanning %u devices.", num_devs);
 		else
-			log_warn("WARNING: cannot set open file limit for scanning %u devices.", num_devs);
+			log_warn("WARNING: Cannot set open file limit for scanning %u devices.", num_devs);
 		return;
 	}
 #endif
@@ -1421,9 +1421,9 @@ int label_scan(struct cmd_context *cmd)
 		if ((remainder = (want_size_kb % 1024)))
 			want_size_kb = want_size_kb + 1024 - remainder;
 
-		log_warn("WARNING: metadata may not be usable with current io_memory_size %d KiB",
+		log_warn("WARNING: Metadata may not be usable with current io_memory_size %d KiB.",
 			 io_memory_size());
-		log_warn("WARNING: increase lvm.conf io_memory_size to at least %llu KiB",
+		log_warn("WARNING: Increase lvm.conf io_memory_size to at least %llu KiB.",
 			 (unsigned long long)want_size_kb);
 	}
 

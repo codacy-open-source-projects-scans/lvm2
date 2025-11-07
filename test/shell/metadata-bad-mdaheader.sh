@@ -10,9 +10,8 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 xxd -v || skip
 
@@ -54,7 +53,7 @@ dd if=meta1-bad of="$dev1" bs=4k seek=1
 
 # pvs reports bad metadata header
 pvs 2>&1 | tee out
-grep "bad metadata header" out
+grep -i "Bad metadata header" out
 
 pvs "$dev1"
 pvs "$dev2"
@@ -68,7 +67,7 @@ lvcreate -l1 $vg
 vgck --updatemetadata $vg
 
 pvs 2>&1 | tee out
-not grep "bad metadata header" out
+not grep -i "Bad metadata header" out
 
 pvs "$dev1"
 pvs "$dev2"

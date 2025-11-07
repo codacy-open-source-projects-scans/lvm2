@@ -11,9 +11,8 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA2110-1301 USA
 
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 case "$(uname -r)" in
   3.10.0-862*) skip "Cannot run this test on unfixed kernel." ;;
@@ -46,7 +45,7 @@ check lv_first_seg_field $vg/$lv1 segtype "raid5_ls"
 check lv_first_seg_field $vg/$lv1 stripesize "64.00k"
 check lv_first_seg_field $vg/$lv1 data_stripes 10
 check lv_first_seg_field $vg/$lv1 stripes 11
-wipefs -a "$DM_DEV_DIR/$vg/$lv1"
+aux wipefs_a "$DM_DEV_DIR/$vg/$lv1"
 mkfs -t ext4 "$DM_DEV_DIR//$vg/$lv1"
 
 mkdir -p $mount_dir

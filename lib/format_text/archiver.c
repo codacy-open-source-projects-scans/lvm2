@@ -324,6 +324,7 @@ struct volume_group *backup_read_vg(struct cmd_context *cmd,
 		return NULL;
 	}
 
+	/* coverity[unreachable] intentional single iteration to get first item */
 	dm_list_iterate_items(mda, &tf->metadata_areas_in_use) {
 		if (!(vg = mda->ops->vg_read(cmd, tf, vg_name, mda, NULL, NULL)))
 			stack;
@@ -542,6 +543,8 @@ int backup_restore_from_file(struct cmd_context *cmd, const char *vg_name,
 				break;
 			}
 		}
+		if (!check_lv_segments_complete_vg(lvl->lv))
+			goto_out;
 	}
 
 	missing_pvs = vg_missing_pv_count(vg);

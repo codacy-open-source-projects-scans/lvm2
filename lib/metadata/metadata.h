@@ -35,7 +35,7 @@
 #define MIN_PE_SIZE     (8192L >> SECTOR_SHIFT) /* 8 KB in sectors - format1 only */
 #define MAX_PE_SIZE     (16L * 1024L * (1024L >> SECTOR_SHIFT) * 1024L) /* format1 only */
 #define MIRROR_LOG_OFFSET	2	/* sectors */
-#define VG_MEMPOOL_CHUNK	10240	/* in bytes, hint only */
+#define VG_MEMPOOL_CHUNK	63000	/* in bytes, hint only */
 
 /*
  * Ceiling(n / sz)
@@ -196,6 +196,12 @@ struct metadata_area *mda_copy(struct dm_pool *mem,
 			       struct metadata_area *mda);
 
 unsigned mda_is_ignored(struct metadata_area *mda);
+/* Use wrapper for checked results */
+static inline __attribute__((warn_unused_result))
+	unsigned _mda_is_ignored(struct metadata_area *mda)
+{
+	return mda_is_ignored(mda);
+}
 void mda_set_ignored(struct metadata_area *mda, unsigned mda_ignored);
 unsigned mda_locns_match(struct metadata_area *mda1, struct metadata_area *mda2);
 struct device *mda_get_device(struct metadata_area *mda);
@@ -381,10 +387,8 @@ int get_default_pvmetadatasize_sectors(void);
 void set_pe_align(struct physical_volume *pv, uint64_t data_alignment);
 void set_pe_align_offset(struct physical_volume *pv, uint64_t data_alignment_offset);
 
-int pv_write_orphan(struct cmd_context *cmd, struct physical_volume *pv);
-
 int check_dev_block_size_for_vg(struct device *dev, const struct volume_group *vg,
-				unsigned int *max_phys_block_size_found);
+				unsigned int *max_logical_block_size_found);
 int check_pv_dev_sizes(struct volume_group *vg);
 uint32_t vg_bad_status_bits(const struct volume_group *vg, uint64_t status);
 int add_pv_to_vg(struct volume_group *vg, const char *pv_name,
@@ -395,6 +399,7 @@ struct logical_volume *find_lv_in_vg_by_lvid(const struct volume_group *vg,
 
 /* FIXME Merge these functions with ones above */
 struct physical_volume *find_pv(struct volume_group *vg, struct device *dev);
+struct physical_volume *find_pv_by_pv_name(struct volume_group *vg, const char *pv_name);
 
 struct pv_list *find_pv_in_pv_list(const struct dm_list *pl,
 				   const struct physical_volume *pv);
@@ -418,11 +423,10 @@ const char *strip_dir(const char *vg_name, const char *dev_dir);
 
 struct logical_volume *alloc_lv(struct dm_pool *mem);
 
-/*
- * Checks that an lv has no gaps or overlapping segments.
- * Set complete_vg to perform additional VG level checks.
- */
-int check_lv_segments(struct logical_volume *lv, int complete_vg);
+/* Checks that an lv has no gaps or overlapping segments. */
+int check_lv_segments_incomplete_vg(struct logical_volume *lv);
+/* Additional VG level checks on lv segment. */
+int check_lv_segments_complete_vg(struct logical_volume *lv);
 
 /*
  * Does every LV segment have the same number of stripes?

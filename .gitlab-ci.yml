@@ -1,6 +1,7 @@
 stages:
   - approve
   - test
+  - post
 
 approve1:
   stage: approve
@@ -57,6 +58,7 @@ test-job:
     paths:
       - test/results/
     expire_in: 1 week
+    when: always
   tags:
       - ${TAG}
   timeout: 2h
@@ -92,13 +94,36 @@ test-job:
     - rm -rf /dev/shm/lvm2-test
     - cut -d' ' -f2 test/results/list | sort | uniq -c
     # Filter artifacts - keep only logs from tests which are not pass
-    - cd test/results && rm $(grep 'passed$' list | cut -d' ' -f1 | sed -e 's|/|_|g' -e 's|.*|\0.txt|')
+    - (cd test/results && rm $(grep 'passed$' list | cut -d' ' -f1 | sed -e 's|/|_|g' -e 's|.*|\0.txt|'))
+    - find test/results -type f -empty -delete
     # TODO: Keep a list of known failures, and translate into regexp - or simply use python...
-    - if grep failed test/results/list | grep -v '\\\(dbustest\|lvconvert-mirror\)\.sh' | sort; then false; else true; fi
+    - if grep failed test/results/list | grep -v '\(dbustest\|lvconvert-mirror\)\.sh' | sort; then false; else true; fi
   rules:
     # Filter only safe repositories, or user in developers:
     # NOTE: Already done in approve stage, may be more caution than necessary
     - if: $CI_PROJECT_PATH != "csonto/lvm2" && $CI_PROJECT_PATH != "lvmteam/lvm2"
       when: manual
     - when: on_success
+
+# reboot must be configured to let runner finish cleanly while not accepting new jobs
+# NOTE: If this causes warnings, gitlab-runner needs to be configured to be stopped using SIGQUIT
+# See: https://docs.gitlab.com/runner/commands/#gitlab-runner-stop-doesnt-shut-down-gracefully
+# NOTE: It should be possible to use after_script in test job, which runs
+# before artifacts collection, but reboot may be too eager to stop the job
+# while collecting artifacts
+# NOTE: What would happen when there are multiple jobs in the queue for each
+# tag? Could the tests run first and reboot only after them? I think so!
+reboot:
+  stage: post
+  parallel:
+    matrix:
+      - TAG: rhel8
+      - TAG: rhel9
+  tags:
+      - ${TAG}
+  timeout: 1m
+  script:
+    - reboot
+  allow_failure: true
+  when: always
 

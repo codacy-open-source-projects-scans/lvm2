@@ -13,12 +13,12 @@
 
 # TODO: once code get fixed, add matching 'check' calls
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
-test -f /proc/mdstat && grep -q raid1 /proc/mdstat || \
+if not grep -q raid1 /proc/mdstat 2>/dev/null; then
 	modprobe raid1 || skip
+fi
 
 aux lvmconf 'devices/md_component_detection = 1'
 aux extend_filter_LVMTEST "a|/dev/md|"

@@ -65,14 +65,16 @@ const char *get_alloc_string(alloc_policy_t alloc)
 alloc_policy_t get_alloc_from_string(const char *str)
 {
 	int i;
-
-	/* cling_by_tags is part of cling */
-	if (!strcmp("cling_by_tags", str))
-		return ALLOC_CLING;
+	alloc_policy_t alloc;
 
 	for (i = 0; i < _num_policies; i++)
-		if (!strcmp(_policies[i].str, str))
-			return _policies[i].alloc;
+		if (!strcmp(_policies[i].str, str)) {
+			alloc = _policies[i].alloc;
+			/* cling_by_tags is part of cling */
+			if (alloc == ALLOC_CLING_BY_TAGS)
+				alloc = ALLOC_CLING;
+			return alloc;
+		}
 
 	/* Special case for old metadata */
 	if (!strcmp("next free", str))
@@ -204,6 +206,11 @@ const char *display_size_units(const struct cmd_context *cmd, uint64_t size)
 const char *display_size(const struct cmd_context *cmd, uint64_t size)
 {
 	return _display_size(cmd, size, DM_SIZE_SHORT);
+}
+
+const char *display_mb_size(const struct cmd_context *cmd, uint64_t size)
+{
+	return display_size(cmd, size << (20 - SECTOR_SHIFT));
 }
 
 void pvdisplay_colons(const struct physical_volume *pv)
@@ -413,6 +420,7 @@ int lvdisplay_full(struct cmd_context *cmd,
 	int thin_pool_active = 0;
 	dm_percent_t thin_data_percent = 0, thin_metadata_percent = 0;
 	int thin_active = 0;
+	uint64_t integrity_mismatches = 0;
 	dm_percent_t thin_percent = 0;
 	struct lv_status_thin *thin_status = NULL;
 	struct lv_status_thin_pool *thin_pool_status = NULL;
@@ -539,6 +547,20 @@ int lvdisplay_full(struct cmd_context *cmd,
 		seg = first_seg(lv);
 		log_print("LV Pool metadata       %s", seg->metadata_lv->name);
 		log_print("LV Pool data           %s", seg_lv(seg, 0)->name);
+	} else if (lv_is_integrity(lv)) {
+		seg = first_seg(lv);
+		log_print("LV Integrity origin    %s", seg_lv(seg, 0)->name);
+		log_print("LV Integrity metadata  %s", seg->integrity_meta_dev->name);
+		log_print("LV Integrity mode      %s",
+			  (seg->integrity_settings.mode[0] == 'B') ? "bitmap" :
+			  (seg->integrity_settings.mode[0] == 'J') ? "journal" : "");
+		log_print("LV Integrity blocksize %d",
+			  seg->integrity_settings.block_size);
+		if (inkernel &&
+		    lv_integrity_mismatches(lv->vg->cmd, lv, &integrity_mismatches))
+			log_print("LV Integrity mismatch  " FMTu64, integrity_mismatches);
+	} else if (lv_raid_has_integrity(lv)) {
+		log_print("LV Integrity           on");
 	} else if (lv_is_vdo_pool(lv)) {
 		seg = first_seg(lv);
 		log_print("LV VDO Pool data       %s", seg_lv(seg, 0)->name);
@@ -932,13 +954,13 @@ void display_name_error(name_error_t name_error)
 char yes_no_prompt(const char *prompt, ...)
 {
 	/* Lowercase Yes/No strings */
-	static const char _yes[] = "yes";
-	static const char _no[] = "no";
+	char buf[12] = { 0 };
+	static const char _yes[sizeof(buf)] = "yes";
+	static const char _no[sizeof(buf)] = "no";
 	const char *answer = NULL;
 	int c = silent_mode() ? EOF : 0;
 	int ret = 0, sig = 0;
 	unsigned i = 0;
-	char buf[12];
 	va_list ap;
 
 	sigint_allow();
@@ -949,7 +971,7 @@ char yes_no_prompt(const char *prompt, ...)
 			va_start(ap, prompt);
 			vfprintf(stderr, prompt, ap);
 			va_end(ap);
-			fflush(stderr);
+			(void) fflush(stderr);
 
 			if (c == EOF)
 				break;

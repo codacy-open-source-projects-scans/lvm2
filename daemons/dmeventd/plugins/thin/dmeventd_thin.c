@@ -45,10 +45,10 @@
 
 struct dso_state {
 	struct dm_pool *mem;
-	int metadata_percent_check;
-	int metadata_percent;
-	int data_percent_check;
-	int data_percent;
+	dm_percent_t metadata_percent_check;
+	dm_percent_t metadata_percent;
+	dm_percent_t data_percent_check;
+	dm_percent_t data_percent;
 	uint64_t known_metadata_size;
 	uint64_t known_data_size;
 	unsigned fails;
@@ -155,7 +155,7 @@ static int _wait_for_pid(struct dso_state *state)
 }
 
 void process_event(struct dm_task *dmt,
-		   enum dm_event_mask event __attribute__((unused)),
+		   enum dm_event_mask evmask,
 		   void **user)
 {
 	const char *device = dm_task_get_name(dmt);
@@ -179,7 +179,7 @@ void process_event(struct dm_task *dmt,
 		return;
 	}
 
-	if (event & DM_EVENT_DEVICE_ERROR) {
+	if (evmask & DM_EVENT_DEVICE_ERROR) {
 		/* Error -> no need to check and do instant resize */
 		state->data_percent = state->metadata_percent = 0;
 		if (_use_policy(dmt, state))
@@ -223,10 +223,12 @@ void process_event(struct dm_task *dmt,
 	}
 
 #if THIN_DEBUG
-	log_debug("Thin pool status " FMTu64 "/" FMTu64 "  "
-		  FMTu64 "/" FMTu64 ".",
+	log_debug("Thin pool status " FMTu64 "/" FMTu64 " (" FMTu64 ") "
+		  FMTu64 "/" FMTu64 " (" FMTu64").",
+		  tps->used_data_blocks, tps->total_data_blocks,
+		  state->known_data_size,
 		  tps->used_metadata_blocks, tps->total_metadata_blocks,
-		  tps->used_data_blocks, tps->total_data_blocks);
+		  state->known_metadata_size);
 #endif
 
 	/* Thin pool size had changed. Clear the threshold. */
@@ -382,10 +384,9 @@ int register_device(const char *device,
 	} else /* Unsupported command format */
 		goto inval;
 
+	state->max_fails = 1;
 	state->pid = -1;
 	*user = state;
-
-	log_info("Monitoring thin pool %s.", device);
 
 	return 1;
 inval:
@@ -430,7 +431,6 @@ int unregister_device(const char *device,
 	_restore_thread_signals(state);
 
 	dmeventd_lvm2_exit_with_pool(state);
-	log_info("No longer monitoring thin pool %s.", device);
 
 	return 1;
 }

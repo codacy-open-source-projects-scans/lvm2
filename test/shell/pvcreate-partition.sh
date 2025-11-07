@@ -11,10 +11,8 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 
-SKIP_WITH_LVMPOLLD=1
-SKIP_WITH_LVMLOCKD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld --skip-with-lvmlockd
 
 which sfdisk || skip
 
@@ -25,7 +23,7 @@ pvcreate_on_dev_with_part_table() {
 	local type=$2
 
 	# pvcreate passes on empty partition table
-	echo "label:$type" | sfdisk "$dev"
+	echo "label:$type" | sfdisk "$dev" || skip "sfdisk does not support label:$type"
 	pvcreate -y "$dev"
 	pvremove "$dev"
 

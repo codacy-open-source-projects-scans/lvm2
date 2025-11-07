@@ -185,7 +185,7 @@ int pvscan_display_cmd(struct cmd_context *cmd, int argc, char **argv)
 	}
 
 	if (arg_is_set(cmd, exported_ARG) || arg_is_set(cmd, novolumegroup_ARG))
-		log_warn("WARNING: only considering physical volumes %s",
+		log_warn("WARNING: Only considering physical volumes %s.",
 			  arg_is_set(cmd, exported_ARG) ?
 			  "of exported volume group(s)" : "in no volume group");
 
@@ -345,7 +345,12 @@ static void _lookup_file_count_pvid_files(FILE *fp, const char *vgname, int *pvs
 
 	log_debug("checking all pvid files using lookup file for %s", vgname);
 
+	errno = 0;
 	rewind(fp);
+	if (errno) {
+		/* trace possible failure from rewind() */
+		log_sys_debug("rewind", vgname);
+	}
 
 	while (fgets(line, sizeof(line), fp)) {
 		memcpy(pvid, line, ID_LEN);
@@ -661,7 +666,7 @@ static int _pvscan_aa_quick(struct cmd_context *cmd, struct pvscan_aa_params *pp
 	struct volume_group *vg;
 	struct pv_list *pvl;
 	const char *vgid;
-	uint32_t lockd_state = 0;
+	struct lockd_state lks = { 0 };
 	uint32_t error_flags = 0;
 	int ret = ECMD_PROCESSED;
 
@@ -718,7 +723,7 @@ static int _pvscan_aa_quick(struct cmd_context *cmd, struct pvscan_aa_params *pp
 
 	cmd->can_use_one_scan = 1;
 
-	vg = vg_read(cmd, vgname, vgid, READ_WITHOUT_LOCK | READ_FOR_ACTIVATE, lockd_state, &error_flags, NULL);
+	vg = vg_read(cmd, vgname, vgid, READ_WITHOUT_LOCK | READ_FOR_ACTIVATE, &lks, &error_flags, NULL);
 
 	if (!vg) {
 		/*
@@ -1060,10 +1065,10 @@ static int _online_devs(struct cmd_context *cmd, int do_all, struct dm_list *pvs
 		mda1 = lvmcache_get_dev_mda(dev, 1);
 		mda2 = lvmcache_get_dev_mda(dev, 2);
 
-		if (mda1 && !mda_is_ignored(mda1))
+		if (mda1 && !_mda_is_ignored(mda1))
 			vg = mda1->ops->vg_read(cmd, fid, "", mda1, NULL, NULL);
 
-		if (!vg && mda2 && !mda_is_ignored(mda2))
+		if (!vg && mda2 && !_mda_is_ignored(mda2))
 			vg = mda2->ops->vg_read(cmd, fid, "", mda2, NULL, NULL);
 
 		if (!vg) {
@@ -1771,8 +1776,7 @@ int pvscan_cache_cmd(struct cmd_context *cmd, int argc, char **argv)
 	if (pp.activate_errors)
 		ret = ECMD_FAILED;
 
-	if (!sync_local_dev_names(cmd))
-		stack;
+	sync_local_dev_names(cmd);
 	return ret;
 }
 

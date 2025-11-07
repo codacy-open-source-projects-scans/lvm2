@@ -30,17 +30,25 @@
 #define ONE_MB_IN_BYTES 1048576
 #define ONE_GB_IN_BYTES 1073741824
 
-int lv_is_integrity_origin(const struct logical_volume *lv)
+/* Return Integrity volume from Integrity Origin volume */
+struct logical_volume *lv_integrity_from_origin(const struct logical_volume *lv)
 {
 	struct seg_list *sl;
 
 	dm_list_iterate_items(sl, &lv->segs_using_this_lv) {
-		if (!sl->seg || !sl->seg->lv || !sl->seg->origin)
-			continue;
-		if (lv_is_integrity(sl->seg->lv) && (sl->seg->origin == lv))
-			return 1;
+		if (sl->seg &&
+		    sl->seg->lv &&
+		    lv_is_integrity(sl->seg->lv) &&
+		    (seg_lv(sl->seg, 0) == lv))
+			return sl->seg->lv;
 	}
-	return 0;
+
+	return NULL;
+}
+
+int lv_is_integrity_origin(const struct logical_volume *lv)
+{
+	return (lv_integrity_from_origin(lv)) ? 1 : 0;
 }
 
 /*
@@ -63,7 +71,7 @@ static uint64_t _lv_size_bytes_to_integrity_meta_bytes(uint64_t lv_size_bytes, u
 		/* for calculating the metadata LV size for the specified
 		   journal size, round the specified journal size up to the
 		   nearest extent.  extent_size is in sectors. */
-		initial_bytes = dm_round_up(journal_sectors, (int64_t)extent_size) * 512;
+		initial_bytes = dm_round_up(journal_sectors, (uint64_t)extent_size) * 512;
 		goto out;
 	}
 
@@ -80,7 +88,7 @@ static uint64_t _lv_size_bytes_to_integrity_meta_bytes(uint64_t lv_size_bytes, u
 		initial_bytes = 8 * ONE_MB_IN_BYTES;
 	else if (lv_size_bytes <= (4ULL * ONE_GB_IN_BYTES))
 		initial_bytes = 32 * ONE_MB_IN_BYTES;
-	else if (lv_size_bytes > (4ULL * ONE_GB_IN_BYTES))
+	else // if (lv_size_bytes > (4ULL * ONE_GB_IN_BYTES))
 		initial_bytes = 64 * ONE_MB_IN_BYTES;
  out:
 	log_debug("integrity_meta_bytes %llu from lv_size_bytes %llu meta_bytes %llu initial_bytes %llu journal_sectors %u",
@@ -107,8 +115,9 @@ static int _lv_create_integrity_metadata(struct cmd_context *cmd,
 		.alloc = ALLOC_INHERIT,
 		.major = -1,
 		.minor = -1,
+		.lv_name = metaname,
 		.permission = LVM_READ | LVM_WRITE,
-		.pvh = &vg->pvs,
+		.pvh = lp->pvh,
 		.read_ahead = DM_READ_AHEAD_NONE,
 		.stripes = 1,
 		.vg_name = vg->name,
@@ -124,13 +133,17 @@ static int _lv_create_integrity_metadata(struct cmd_context *cmd,
 		return 0;
 	}
 
-	lp_meta.lv_name = metaname;
-	lp_meta.pvh = lp->pvh;
-
+	/* the calculated meta_bytes value is always a multiple of 4MB, do not round again */
 	lv_size_bytes = (uint64_t)lp->extents * (uint64_t)vg->extent_size * 512;
 	meta_bytes = _lv_size_bytes_to_integrity_meta_bytes(lv_size_bytes, settings->journal_sectors, vg->extent_size);
 	meta_sectors = meta_bytes / 512;
 	lp_meta.extents = meta_sectors / vg->extent_size;
+
+	/* Use one extent if the VG extent size is larger than the number of sectors needed. */
+	if (!lp_meta.extents) {
+		log_debug("Round integrity meta size up to one extent.");
+		lp_meta.extents = 1;
+	}
 
 	log_verbose("Creating integrity metadata LV %s with size %s.",
 		    metaname, display_size(cmd, meta_sectors));
@@ -142,11 +155,6 @@ static int _lv_create_integrity_metadata(struct cmd_context *cmd,
 
 	if (!(lv = lv_create_single(vg, &lp_meta))) {
 		log_error("Failed to create integrity metadata LV");
-		return 0;
-	}
-
-	if (dm_list_size(&lv->segments) > 1) {
-		log_error("Integrity metadata uses more than one segment.");
 		return 0;
 	}
 
@@ -193,10 +201,13 @@ int lv_extend_integrity_in_raid(struct logical_volume *lv, struct dm_list *pvh)
 			return 0;
 		}
 
+		/* the calculated meta_bytes value is always a multiple of 4MB, do not round again */
 		lv_size_bytes = lv_iorig->size * 512;
 		meta_bytes = _lv_size_bytes_to_integrity_meta_bytes(lv_size_bytes, 0, 0);
 		meta_sectors = meta_bytes / 512;
 		meta_extents = meta_sectors / vg->extent_size;
+		if (!meta_extents)
+			meta_extents = 1;
 
 		prev_meta_sectors = lv_imeta->size;
 		prev_meta_extents = prev_meta_sectors / vg->extent_size;
@@ -231,16 +242,17 @@ int lv_extend_integrity_in_raid(struct logical_volume *lv, struct dm_list *pvh)
 	return 1;
 }
 
-int lv_remove_integrity_from_raid(struct logical_volume *lv)
+int lv_remove_integrity_from_raid(struct logical_volume *lv, char **remove_images)
 {
-	struct logical_volume *iorig_lvs[DEFAULT_RAID_MAX_IMAGES];
-	struct logical_volume *imeta_lvs[DEFAULT_RAID_MAX_IMAGES];
+	struct logical_volume *iorig_lvs[DEFAULT_RAID_MAX_IMAGES] = { 0 };
+	struct logical_volume *imeta_lvs[DEFAULT_RAID_MAX_IMAGES] = { 0 };
 	struct cmd_context *cmd = lv->vg->cmd;
 	struct volume_group *vg = lv->vg;
 	struct lv_segment *seg_top, *seg_image;
 	struct logical_volume *lv_image;
 	struct logical_volume *lv_iorig;
 	struct logical_volume *lv_imeta;
+	char *max_image_array = remove_images ? *remove_images : NULL;
 	uint32_t area_count, s;
 	int is_active = lv_is_active(lv);
 
@@ -253,11 +265,18 @@ int lv_remove_integrity_from_raid(struct logical_volume *lv)
 		return 0;
 	}
 
+	log_debug("Removing integrity from raid LV %s %s", display_lvname(lv), remove_images ? "partial" : "");
+
 	area_count = seg_top->area_count;
 
 	for (s = 0; s < area_count; s++) {
+		if (max_image_array && !max_image_array[s])
+			continue;
+
 		lv_image = seg_lv(seg_top, s);
 		seg_image = first_seg(lv_image);
+
+		log_debug("Removing integrity layers from %s", lv_image->name);
 
 		if (!(lv_imeta = seg_image->integrity_meta_dev)) {
 			log_error("LV %s segment has no integrity metadata device.", display_lvname(lv));
@@ -265,9 +284,12 @@ int lv_remove_integrity_from_raid(struct logical_volume *lv)
 		}
 
 		if (!(lv_iorig = seg_lv(seg_image, 0))) {
-			log_error("LV %s integrity segment has no origin", display_lvname(lv));
+			log_error("LV %s integrity segment has no origin.", display_lvname(lv));
 			return 0;
 		}
+
+		if (!remove_layer_from_lv(lv_image, lv_iorig))
+			return_0;
 
 		if (!remove_seg_from_segs_using_this_lv(seg_image->integrity_meta_dev, seg_image))
 			return_0;
@@ -276,12 +298,12 @@ int lv_remove_integrity_from_raid(struct logical_volume *lv)
 		imeta_lvs[s] = lv_imeta;
 
 		lv_image->status &= ~INTEGRITY;
+		lv_imeta->status &= ~INTEGRITY_METADATA;
+		lv_set_visible(lv_imeta);
+		lv_set_visible(lv_iorig);
 		seg_image->integrity_meta_dev = NULL;
 		seg_image->integrity_data_sectors = 0;
 		memset(&seg_image->integrity_settings, 0, sizeof(seg_image->integrity_settings));
-
-		if (!remove_layer_from_lv(lv_image, lv_iorig))
-			return_0;
 	}
 
 	if (is_active) {
@@ -293,10 +315,16 @@ int lv_remove_integrity_from_raid(struct logical_volume *lv)
 	}
 
 	for (s = 0; s < area_count; s++) {
+		if (max_image_array && !max_image_array[s])
+			continue;
+
 		lv_iorig = iorig_lvs[s];
 		lv_imeta = imeta_lvs[s];
 
 		if (is_active) {
+			log_debug("Deactivating unused integrity layers %s %s.",
+				  display_lvname(lv_iorig), display_lvname(lv_imeta));
+
 			if (!deactivate_lv(cmd, lv_iorig))
 				log_error("Failed to deactivate unused iorig LV %s.", lv_iorig->name);
 
@@ -304,8 +332,7 @@ int lv_remove_integrity_from_raid(struct logical_volume *lv)
 				log_error("Failed to deactivate unused imeta LV %s.", lv_imeta->name);
 		}
 
-		lv_imeta->status &= ~INTEGRITY_METADATA;
-		lv_set_visible(lv_imeta);
+		log_debug("Removing unused integrity LVs %s %s", lv_iorig->name, lv_imeta->name);
 
 		if (!lv_remove(lv_iorig))
 			log_error("Failed to remove unused iorig LV %s.", lv_iorig->name);
@@ -497,7 +524,7 @@ int lv_add_integrity_to_raid(struct logical_volume *lv, struct integrity_setting
 	struct logical_volume *imeta_lvs[DEFAULT_RAID_MAX_IMAGES];
 	struct cmd_context *cmd = lv->vg->cmd;
 	struct volume_group *vg = lv->vg;
-	struct logical_volume *lv_image, *lv_imeta;
+	struct logical_volume *lv_image, *lv_imeta, *lv_iorig;
 	struct lv_segment *seg_top, *seg_image;
 	struct pv_list *pvl;
 	const struct segment_type *segtype;
@@ -508,6 +535,7 @@ int lv_add_integrity_to_raid(struct logical_volume *lv, struct integrity_setting
 	int lbs_4k = 0, lbs_512 = 0, lbs_unknown = 0;
 	int pbs_4k = 0, pbs_512 = 0, pbs_unknown = 0;
 	int is_active;
+	int r;
 
 	memset(imeta_lvs, 0, sizeof(imeta_lvs));
 
@@ -537,7 +565,6 @@ int lv_add_integrity_to_raid(struct logical_volume *lv, struct integrity_setting
 	 */
 	for (s = 0; s < area_count; s++) {
 		struct logical_volume *meta_lv;
-		struct wipe_params wipe = { .do_zero = 1 };
 
 		if (s >= DEFAULT_RAID_MAX_IMAGES)
 			goto_bad;
@@ -622,32 +649,20 @@ int lv_add_integrity_to_raid(struct logical_volume *lv, struct integrity_setting
 		 * dm-integrity requires the metadata LV header to be zeroed.
 		 */
 
-		if (!activate_lv(cmd, meta_lv)) {
-			log_error("Failed to activate LV %s to zero", display_lvname(meta_lv));
-			goto bad;
-		}
-
-		if (!wipe_lv(meta_lv, wipe)) {
+		if (!activate_and_wipe_lv(meta_lv, WIPE_MODE_DO_ZERO, 0, 0)) {
 			log_error("Failed to zero LV for integrity metadata %s", display_lvname(meta_lv));
-			if (deactivate_lv(cmd, meta_lv))
-				log_error("Failed to deactivate LV %s after zero", display_lvname(meta_lv));
-			goto bad;
-		}
-
-		if (!deactivate_lv(cmd, meta_lv)) {
-			log_error("Failed to deactivate LV %s after zero", display_lvname(meta_lv));
 			goto bad;
 		}
 	}
 
 	if (!is_active) {
+		sync_local_dev_names(cmd);
 		/* checking block size of fs on the lv requires the lv to be active */
 		if (!activate_lv(cmd, lv)) {
 			log_error("Failed to activate LV to check block size %s", display_lvname(lv));
 			goto bad;
 		}
-		if (!sync_local_dev_names(cmd))
-			stack;
+		sync_local_dev_names(cmd);
 	}
 
 	/*
@@ -655,18 +670,19 @@ int lv_add_integrity_to_raid(struct logical_volume *lv, struct integrity_setting
 	 * integrity block size chosen based on device logical block size and
 	 * file system block size.
 	 */
-	if (!_set_integrity_block_size(cmd, lv, is_active, settings, lbs_4k, lbs_512, pbs_4k, pbs_512)) {
-		if (!is_active && !deactivate_lv(cmd, lv))
-			stack;
-		goto_bad;
+
+	if (!(r = _set_integrity_block_size(cmd, lv, is_active, settings, lbs_4k, lbs_512, pbs_4k, pbs_512)))
+		stack;
+
+	if (!is_active && !deactivate_lv(cmd, lv)) {
+		log_error("Failed to deactivate LV %s after checking block size.", display_lvname(lv));
+		goto bad;
 	}
 
-	if (!is_active) {
-		if (!deactivate_lv(cmd, lv)) {
-			log_error("Failed to deactivate LV after checking block size %s", display_lvname(lv));
-			goto bad;
-		}
-	}
+	sync_local_dev_names(cmd);
+
+	if (!r)
+		goto bad;
 
 	/*
 	 * For each rimage, move its segments to a new rimage_iorig and give
@@ -709,6 +725,8 @@ int lv_add_integrity_to_raid(struct logical_volume *lv, struct integrity_setting
 		seg_image->integrity_data_sectors = lv_image->size;
 		seg_image->integrity_meta_dev = lv_imeta;
 		seg_image->integrity_recalculate = 1;
+		if (!add_seg_to_segs_using_this_lv(lv_imeta, seg_image))
+			goto_bad;
 
 		memcpy(&seg_image->integrity_settings, settings, sizeof(struct integrity_settings));
 		set = &seg_image->integrity_settings;
@@ -783,11 +801,38 @@ bad:
 		for (s = 0; s < DEFAULT_RAID_MAX_IMAGES; s++) {
 			if (!imeta_lvs[s])
 				continue;
-			if (!lv_remove(imeta_lvs[s]))
-				log_error("New integrity metadata LV may require manual removal.");
+
+			lv_image = seg_lv(seg_top, s);
+			seg_image = first_seg(lv_image);
+			lv_iorig = seg_lv(seg_image, 0);
+			if (lv_image->status & INTEGRITY) {
+				if (!remove_layer_from_lv(lv_image, lv_iorig) ||
+				    !remove_seg_from_segs_using_this_lv(seg_image->integrity_meta_dev,
+									seg_image)) {
+					log_error("Aborting. Cannot remove integrity layer from LV %s.", display_lvname(lv_image));
+					return 0;
+				}
+
+				lv_image->status &= ~INTEGRITY;
+				imeta_lvs[s]->status &= ~INTEGRITY_METADATA;
+
+				lv_set_visible(imeta_lvs[s]);
+				lv_set_visible(lv_iorig);
+
+				if (!lv_remove(lv_iorig)) {
+					log_error("Aborting. Cannot remove new integrity origin LV %s.",
+						  display_lvname(lv_iorig));
+					return 0;
+				}
+			}
+			if (!lv_remove(imeta_lvs[s])) {
+				log_error("Aborting. Cannot remove new integrity metadata LV %s.",
+					  display_lvname(imeta_lvs[s]));
+				return 0;
+			}
 		}
 	}
-			       
+
 	if (!vg_write(vg) || !vg_commit(vg))
 		log_error("New integrity metadata LV may require manual removal.");
 
@@ -825,7 +870,7 @@ void lv_clear_integrity_recalculate_metadata(struct logical_volume *lv)
 	}
 
 	if (!vg_write(vg) || !vg_commit(vg)) {
-		log_warn("WARNING: failed to clear integrity recalculate flag for %s",
+		log_warn("WARNING: Failed to clear integrity recalculate flag for %s.",
 			 display_lvname(lv));
 	}
 }
@@ -859,7 +904,7 @@ int lv_has_integrity_recalculate_metadata(struct logical_volume *lv)
 	return ret;
 }
 
-int lv_raid_has_integrity(struct logical_volume *lv)
+int lv_raid_has_integrity(const struct logical_volume *lv)
 {
 	struct logical_volume *lv_image;
 	struct lv_segment *seg, *seg_image;

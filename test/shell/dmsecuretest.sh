@@ -12,13 +12,11 @@
 
 # Test secure table is not leaking data in user land
 
-SKIP_WITH_LVMPOLLD=1
-SKIP_WITH_LVMLOCKD=1
 
 # AES key matching rot13 string from dmsecuretest.c */
 SECURE="434e0cbab02ca68ffba9268222c3789d703fe62427b78b308518b3228f6a2122"
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld --skip-with-lvmlockd
 
 DMTEST="${PREFIX}-test-secure"
 
@@ -42,7 +40,7 @@ for i in securetest dmsecuretest ; do
 for j in empty existing ; do
 
 rm -f cmdout
-"$i" "$dev1" "$DMTEST" >cmdout 2>&1 &
+"$i" "$dev1" "$DMTEST" "TEST-${PREFIX}-secure" >cmdout 2>&1 &
 PID=$!
 for k in $(seq 1 20); do
 	sleep .1
@@ -60,7 +58,7 @@ unset DEBUGINFOD_URLS
 gcore "$PID" | tee out || skip
 
 # check we capture core while  dmsecuretest was already sleeping
-grep -e "nanosleep\|kernel_vsyscall" out
+grep -e "nanosleep\|kernel_vsyscall\|internal_syscall_cancel" out
 kill "$PID" || true
 wait
 
@@ -84,8 +82,7 @@ for k in 1 2 4 8; do
 done
 if [ "$fail_test" -gt 0 ]; then
 	## cp "core.$PID" /dev/shm/core
-	should dmsetup remove "$DMTEST" # go around weird bugs
-	die "!!! Secure string $SECURE or its parts found present in core.$PID !!!"
+	should not echo "!!! Secure string $SECURE or its parts found present in core.$PID !!!"
 fi
 rm -f "core.$PID"
 

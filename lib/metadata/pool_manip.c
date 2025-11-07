@@ -376,15 +376,15 @@ struct lv_segment *find_pool_seg(const struct lv_segment *seg)
 	struct seg_list *sl;
 
 	dm_list_iterate_items(sl, &seg->lv->segs_using_this_lv) {
-		/* Needs to be he only item in list */
+		/* Needs to be the only item in list */
 		if (lv_is_pending_delete(sl->seg->lv))
 			continue;
 
 		if (pool_seg) {
-			log_error("%s is referenced by more then one segments (%s, %s).",
+			log_error("%s is referenced by more than one segment (%s, %s).",
 				  display_lvname(seg->lv), display_lvname(pool_seg->lv),
 				  display_lvname(sl->seg->lv));
-			return NULL; /* More then one segment */
+			return NULL; /* More than one segment */
 		}
 
 		pool_seg = sl->seg;
@@ -417,7 +417,7 @@ int validate_pool_chunk_size(struct cmd_context *cmd,
 
 int recalculate_pool_chunk_size_with_dev_hints(struct logical_volume *pool_lv,
 					       struct logical_volume *pool_data_lv,
-					       int chunk_size_calc_policy)
+					       unsigned chunk_size_calc_policy)
 {
 	struct lv_segment *seg;
 	struct physical_volume *pv;
@@ -443,7 +443,7 @@ int recalculate_pool_chunk_size_with_dev_hints(struct logical_volume *pool_lv,
 		switch (seg->area_count ? seg_type(seg, 0) : AREA_UNASSIGNED) {
 		case AREA_PV:
 			pv = seg_pv(seg, 0);
-			if (chunk_size_calc_policy == THIN_CHUNK_SIZE_CALC_METHOD_PERFORMANCE)
+			if (chunk_size_calc_policy == CHUNK_SIZE_CALC_POLICY_PERFORMANCE)
 				hint = dev_optimal_io_size(cmd->dev_types, pv_dev(pv));
 			else
 				hint = dev_minimum_io_size(cmd->dev_types, pv_dev(pv));
@@ -489,7 +489,6 @@ int create_pool(struct logical_volume *pool_lv,
 	struct logical_volume *meta_lv, *data_lv;
 	struct lv_segment *seg;
 	char name[NAME_LEN];
-	int r;
 
 	if (pool_lv->le_count) {
 		log_error(INTERNAL_ERROR "Pool %s already has extents.",
@@ -535,30 +534,13 @@ int create_pool(struct logical_volume *pool_lv,
 		 */
 		/*
 		 * pool_lv is a new LV so the VG lock protects us
-		 * Pass in LV_TEMPORARY flag, since device is activated purely for wipe
-		 * and later it is either deactivated (in cluster)
-		 * or directly converted to invisible device via suspend/resume
 		 */
-		pool_lv->status |= LV_TEMPORARY;
-		if (!activate_lv(pool_lv->vg->cmd, pool_lv)) {
-			log_error("Aborting. Failed to activate pool metadata %s.",
-				  display_lvname(pool_lv));
-			goto bad;
-		}
 		/* Clear pool metadata device. */
-		if (!(r = wipe_lv(pool_lv, (struct wipe_params) { .is_metadata = 1 }))) {
+		if (!activate_and_wipe_lv(pool_lv, WIPE_MODE_METADATA, 0, 0)) {
 			log_error("Aborting. Failed to wipe pool metadata %s.",
 				  display_lvname(pool_lv));
-		}
-		pool_lv->status &= ~LV_TEMPORARY;
-		/* Deactivates cleared metadata LV */
-		if (!deactivate_lv(pool_lv->vg->cmd, pool_lv)) {
-			log_error("Aborting. Could not deactivate pool metadata %s.",
-				  display_lvname(pool_lv));
-			return 0;
-		}
-		if (!r)
 			goto bad;
+		}
 	}
 
 	if (!(meta_lv = lv_create_empty(name, NULL, LVM_READ | LVM_WRITE,
@@ -760,7 +742,7 @@ int handle_pool_metadata_spare(struct volume_group *vg, uint32_t extents,
 		/* TODO: Not showing when lvm.conf would define 'n' ? */
 		if (DEFAULT_POOL_METADATA_SPARE && extents)
 			/* Warn if there would be any user */
-			log_warn("WARNING: recovery of pools without pool "
+			log_warn("WARNING: Recovery of pools without pool "
 				 "metadata spare LV is not automated.");
 		return 1;
 	}

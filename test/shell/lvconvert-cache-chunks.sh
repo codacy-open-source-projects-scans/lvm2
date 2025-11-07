@@ -14,9 +14,8 @@
 # Skips creation of real cached device for older cache targets...
 
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 aux have_cache 1 3 0 || skip
 
@@ -28,7 +27,7 @@ lvcreate -L1T -n cpool $vg
 # Works and pick higher chunks size then default
 lvconvert -y --type cache-pool $vg/cpool
 
-# Check chunk size in sectors is more then 512K
+# Check chunk size in sectors is more than 512K
 test "$(get lv_field "$vg/cpool" chunk_size --units s --nosuffix)" -gt 1000
 
 lvcreate -L1M -n $lv1 $vg
@@ -50,7 +49,7 @@ lvremove -f $vg
 
 # Really large cache pool data LV
 lvcreate -L1T -n cpool $vg
-# Not allowed to create more then 10e6 chunks
+# Not allowed to create more than 10e6 chunks
 fail lvconvert -y --type cache-pool --chunksize 128K $vg/cpool
 
 if aux have_cache 1 8 0 ; then

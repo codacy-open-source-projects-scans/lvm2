@@ -66,11 +66,16 @@ struct config_source {
  * Map each ID to respective definition of the configuration item.
  */
 static const struct cfg_def_item _cfg_def_items[CFG_COUNT + 1] = {
-#define cfg_section(id, name, parent, flags, since_version, deprecated_since_version, deprecation_comment, comment) {id, parent, name, CFG_TYPE_SECTION, {0}, (flags), since_version, {0}, deprecated_since_version, deprecation_comment, comment},
-#define cfg(id, name, parent, flags, type, default_value, since_version, unconfigured_value, deprecated_since_version, deprecation_comment, comment) {id, parent, name, type, {.v_##type = (default_value)}, (flags), since_version, {.v_UNCONFIGURED = (unconfigured_value)}, deprecated_since_version, deprecation_comment, comment},
-#define cfg_runtime(id, name, parent, flags, type, since_version, deprecated_since_version, deprecation_comment, comment) {id, parent, name, type, {.fn_##type = get_default_##id}, (flags) | CFG_DEFAULT_RUN_TIME, since_version, {.fn_UNCONFIGURED = get_default_unconfigured_##id}, deprecated_since_version, (deprecation_comment), comment},
-#define cfg_array(id, name, parent, flags, types, default_value, since_version, unconfigured_value, deprecated_since_version, deprecation_comment, comment) {id, parent, name, CFG_TYPE_ARRAY | (types), {.v_CFG_TYPE_STRING = (default_value)}, (flags), (since_version), {.v_UNCONFIGURED = (unconfigured_value)}, deprecated_since_version, deprecation_comment, comment},
-#define cfg_array_runtime(id, name, parent, flags, types, since_version, deprecated_since_version, deprecation_comment, comment) {id, parent, name, CFG_TYPE_ARRAY | (types), {.fn_CFG_TYPE_STRING = get_default_##id}, (flags) | CFG_DEFAULT_RUN_TIME, (since_version), {.fn_UNCONFIGURED = get_default_unconfigured_##id}, deprecated_since_version, deprecation_comment, comment},
+#define cfg_section(id, name, parent, flags, since_version, deprecated_since_version, deprecation_comment, comment)\
+	{id, parent, name, CFG_TYPE_SECTION, (flags), since_version, deprecated_since_version, {0}, {0}, deprecation_comment, comment},
+#define cfg(id, name, parent, flags, type, default_value, since_version, unconfigured_value, deprecated_since_version, deprecation_comment, comment)\
+	{id, parent, name, type, (flags), since_version, deprecated_since_version, {.v_##type = (default_value)}, {.v_UNCONFIGURED = (unconfigured_value)}, deprecation_comment, comment},
+#define cfg_runtime(id, name, parent, flags, type, since_version, deprecated_since_version, deprecation_comment, comment)\
+	{id, parent, name, type, (flags) | CFG_DEFAULT_RUN_TIME, since_version, deprecated_since_version, {.fn_##type = get_default_##id}, {.fn_UNCONFIGURED = get_default_unconfigured_##id}, (deprecation_comment), comment},
+#define cfg_array(id, name, parent, flags, types, default_value, since_version, unconfigured_value, deprecated_since_version, deprecation_comment, comment)\
+	{id, parent, name, CFG_TYPE_ARRAY | (types), (flags), (since_version), deprecated_since_version, {.v_CFG_TYPE_STRING = (default_value)}, {.v_UNCONFIGURED = (unconfigured_value)}, deprecation_comment, comment},
+#define cfg_array_runtime(id, name, parent, flags, types, since_version, deprecated_since_version, deprecation_comment, comment)\
+	{id, parent, name, CFG_TYPE_ARRAY | (types), (flags) | CFG_DEFAULT_RUN_TIME, (since_version), deprecated_since_version, {.fn_CFG_TYPE_STRING = get_default_##id}, {.fn_UNCONFIGURED = get_default_unconfigured_##id},deprecation_comment, comment},
 #include "lib/config/config_settings.h"
 #undef cfg_section
 #undef cfg
@@ -103,7 +108,7 @@ static inline int _is_file_based_config_source(config_source_t source)
  */
 struct dm_config_tree *config_open(config_source_t source,
 				   const char *filename,
-				   int unused)
+				   int keep_open __attribute__((unused)))
 {
 	struct dm_config_tree *cft = dm_config_create();
 	struct config_source *cs;
@@ -483,7 +488,7 @@ int override_config_tree_from_profile(struct cmd_context *cmd,
 int config_file_read_fd(struct dm_config_tree *cft, struct device *dev, dev_io_reason_t reason,
 			off_t offset, size_t size, off_t offset2, size_t size2,
 			checksum_fn_t checksum_fn, uint32_t checksum,
-			int checksum_only, int no_dup_node_check)
+			int checksum_only, int no_dup_node_check, int only_pv_summary)
 {
 	char namebuf[NAME_LEN + 1] __attribute__((aligned(8)));
 	int namelen = 0;
@@ -517,10 +522,11 @@ int config_file_read_fd(struct dm_config_tree *cft, struct device *dev, dev_io_r
 		/* Note: also used for lvm.conf to read all settings */
 		for (rsize = 0; rsize < size; rsize += sz) {
 			do {
+				/* coverity[overflow_sink] - only positive 'sz' is used */
 				sz = read(dev_fd(dev), buf + rsize, size - rsize);
 			} while ((sz < 0) && ((errno == EINTR) || (errno == EAGAIN)));
 
-			if (sz < 0) {
+			if (sz <= 0) {
 				log_sys_error("read", dev_name(dev));
 				goto out;
 			}
@@ -573,7 +579,10 @@ int config_file_read_fd(struct dm_config_tree *cft, struct device *dev, dev_io_r
 	if (!checksum_only) {
 		fe = fb + size + size2;
 		if (no_dup_node_check) {
-			if (!dm_config_parse_without_dup_node_check(cft, fb, fe))
+			if (only_pv_summary) {
+				if (!dm_config_parse_only_section(cft, fb, fe, "physical_volumes"))
+					goto_out;
+			} else if (!dm_config_parse_without_dup_node_check(cft, fb, fe))
 				goto_out;
 		} else {
 			if (!dm_config_parse(cft, fb, fe))
@@ -635,7 +644,7 @@ int config_file_read_from_file(struct dm_config_tree *cft)
 	cf->dev = &fake_dev;
 
 	r = config_file_read_fd(cft, cf->dev, DEV_IO_MDA_CONTENT, 0, (size_t) info.st_size, 0, 0,
-				(checksum_fn_t) NULL, 0, 0, 0);
+				(checksum_fn_t) NULL, 0, 0, 0, 0);
 
 	free((void*)alias->str);
 	free((void*)alias);
@@ -924,7 +933,7 @@ static int _check_value_differs_from_default(struct cft_check_handle *handle,
 			case DM_CFG_FLOAT:
 				f = v_def ? v_def->v.f
 					  : cfg_def_get_default_value(handle->cmd, def, CFG_TYPE_FLOAT, NULL);
-				diff = fabs(f - v->v.f) < FLT_EPSILON;
+				diff = fabsf(f - v->v.f) < FLT_EPSILON;
 				break;
 			case DM_CFG_STRING:
 				/* string value can be a real string but it can also represent bool */
@@ -1933,11 +1942,13 @@ int config_write(struct dm_config_tree *cft,
 		.tree_spec = tree_spec,
 		.mem = cft->mem
 	};
+	int free_fp = 1;
 	int r = 1;
 
 	if (!file) {
 		baton.fp = stdout;
 		file = "stdout";
+		free_fp = 0;
 	} else if (!(baton.fp = fopen(file, "w"))) {
 		log_sys_error("open", file);
 		return 0;
@@ -1968,7 +1979,7 @@ int config_write(struct dm_config_tree *cft,
 		argv++;
 	}
 
-	if (baton.fp && baton.fp != stdout && dm_fclose(baton.fp)) {
+	if (free_fp && baton.fp && dm_fclose(baton.fp)) {
 		stack;
 		r = 0;
 	}
@@ -2521,10 +2532,10 @@ const char *get_default_activation_mirror_image_fault_policy_CFG(struct cmd_cont
 int get_default_allocation_thin_pool_chunk_size_CFG(struct cmd_context *cmd, struct profile *profile)
 {
 	uint32_t chunk_size;
-	int chunk_size_calc_method;
+	unsigned chunk_size_calc_policy;
 
 	if (!get_default_allocation_thin_pool_chunk_size(cmd, profile, &chunk_size,
-							 &chunk_size_calc_method)) {
+							 &chunk_size_calc_policy)) {
 		stack; /* Ignore this error, never happens... */
 		chunk_size = DEFAULT_THIN_POOL_CHUNK_SIZE * 2;
 	}

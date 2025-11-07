@@ -70,8 +70,7 @@ static int _raid_text_import_area_count(const struct dm_config_node *sn,
 
 static int _raid_text_import_areas(struct lv_segment *seg,
 				   const struct dm_config_node *sn,
-				   const struct dm_config_value *cv,
-				   struct dm_hash_table *lv_hash)
+				   const struct dm_config_value *cv)
 {
 	unsigned int s;
 	struct logical_volume *lv;
@@ -89,7 +88,7 @@ static int _raid_text_import_areas(struct lv_segment *seg,
 		}
 
 		/* Metadata device comes first. */
-		if (!(lv = dm_hash_lookup(lv_hash, cv->v.str))) {
+		if (!(lv = find_lv(seg->lv->vg, cv->v.str))) {
 			log_error("Couldn't find volume '%s' for segment '%s'.",
 				  cv->v.str ? : "NULL", seg_name);
 			return 0;
@@ -107,7 +106,7 @@ static int _raid_text_import_areas(struct lv_segment *seg,
 		}
 
 		/* Data device comes second */
-		if (!(lv = dm_hash_lookup(lv_hash, cv->v.str))) {
+		if (!(lv = find_lv(seg->lv->vg, cv->v.str))) {
 			log_error("Couldn't find volume '%s' for segment '%s'.",
 				  cv->v.str ? : "NULL", seg_name);
 			return 0;
@@ -129,9 +128,7 @@ static int _raid_text_import_areas(struct lv_segment *seg,
 }
 
 static int _raid_text_import(struct lv_segment *seg,
-			     const struct dm_config_node *sn,
-			     struct dm_hash_table *pv_hash,
-			     struct dm_hash_table *lv_hash)
+			     const struct dm_config_node *sn)
 {
 	const struct dm_config_value *cv;
 	const struct {
@@ -173,7 +170,7 @@ static int _raid_text_import(struct lv_segment *seg,
 		return 0;
 	}
 
-	if (!_raid_text_import_areas(seg, sn, cv, lv_hash)) {
+	if (!_raid_text_import_areas(seg, sn, cv)) {
 		log_error("Failed to import RAID component pairs.");
 		return 0;
 	}
@@ -302,7 +299,7 @@ bool raid_is_available(const struct logical_volume *lv)
 		    lv_is_partial(seg_lv(seg, s)))
 			missing_legs++;
 
-	/* Degradation: segtype raid1 may miss legs-1, raid0/4/5/6 may loose parity devices. */
+	/* Degradation: segtype raid1 may miss legs-1, raid0/4/5/6 may lose parity devices. */
 	return missing_legs <= (seg_is_raid1(seg) ? seg->area_count - 1 : seg->segtype->parity_devs);
 }
 

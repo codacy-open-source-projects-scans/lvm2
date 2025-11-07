@@ -11,13 +11,22 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 lvm version
 
 lvm pvmove --version|sed -n "1s/.*: *\([0-9][^ ]*\) .*/\1/p" | tee version
+
+# check LVM_SUPPRESS_FD_WARNINGS suppression works
+exec 3< version
+lvs 2>err
+# without suppression command prints message about leaked descriptor
+grep "leaked" err
+LVM_SUPPRESS_FD_WARNINGS=1 lvs 2>err
+# with suppression there should be no such message
+not grep "leaked" err
+exec 3<&-
 
 # ensure they are the same
 diff -u version lib/version-expected
@@ -37,7 +46,7 @@ not lvs "${DEVICES[@]}"
 
 # validate testing machine with its services is in expected state and will not interfere with tests
 if systemctl -a >out 2>/dev/null ; then
-	for i in dm-event lvm2-lvmpolld lvm2-monitor ; do
+	for i in dm-event lvm2-lvmpolld lvm2-monitor tuned; do
 		grep $i out > mout || continue
 		grep -v masked mout || continue
 		should not echo "Present unmasked $i service/socket may randomize testing results!"

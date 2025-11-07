@@ -294,7 +294,8 @@ static int _add_alias(struct device *dev, const char *path, enum add_hash hash)
 	size_t path_len = strlen(path);
 
 	if (hash == REHASH)
-		radix_tree_remove(_cache.names, path, path_len);
+		if (!radix_tree_remove(_cache.names, path, path_len))
+			stack;
 
 	/* Is name already there? */
 	dm_list_iterate_items(strl, &dev->aliases)
@@ -406,7 +407,7 @@ out:
 /* Change bit ordering for devno to generate more compact bTree */
 static inline uint32_t _shuffle_devno(dev_t d)
 {
-	return cpu_to_be32(d);
+	return htobe32(d);
 	//return (d & 0xff) << 24 | (d & 0xff00) << 8 | (d & 0xff0000) >> 8 | (d & 0xff000000) >> 24;
 	//return (d & 0xff000000) >> 24 | (d & 0xffff00) | ((d & 0xff) << 24);
 	//return (uint32_t) d;
@@ -696,7 +697,8 @@ void dev_cache_failed_path(struct device *dev, const char *path)
 {
 	struct dm_str_list *strl;
 
-	radix_tree_remove(_cache.names, path, strlen(path));
+	if (!radix_tree_remove(_cache.names, path, strlen(path)))
+		stack;
 
 	dm_list_iterate_items(strl, &dev->aliases) {
 		if (!strcmp(strl->str, path)) {
@@ -869,7 +871,7 @@ static int _insert_dir(const char *dir)
 		if (bsearch(path + 5, _no_scan, DM_ARRAY_SIZE(_no_scan), sizeof(_no_scan[0]),
 			    (int (*)(const void*, const void*))strcmp)) {
 			/* Skip insertion of directories that can't have block devices */
-			log_debug("Skipping \"%s\" (no block devices).", path);
+			log_debug_devs("Skipping \"%s\" (no block devices).", path);
 			return 1;
 		}
 	}
@@ -1159,12 +1161,12 @@ static int _insert(const char *path, const struct stat *info,
 		}
 
 		if (S_ISLNK(tinfo.st_mode)) {
-			log_debug_devs("%s: Symbolic link to directory", path);
+			log_debug_devs("Skipping \"%s\" (symbolic link to directory).", path);
 			return 1;
 		}
 
 		if (info->st_dev != _cache.st_dev) {
-			log_debug_devs("%s: Different filesystem in directory", path);
+			log_debug_devs("Skipping \"%s\" (different filesystem in directory).", path);
 			return 1;
 		}
 
@@ -1187,7 +1189,8 @@ static void _drop_all_aliases(struct device *dev)
 
 	dm_list_iterate_items_safe(strl, strl2, &dev->aliases) {
 		log_debug("Drop alias for %u:%u %s.", MAJOR(dev->dev), MINOR(dev->dev), strl->str);
-		radix_tree_remove(_cache.names, strl->str, strlen(strl->str));
+		if (!radix_tree_remove(_cache.names, strl->str, strlen(strl->str)))
+			stack;
 		dm_list_del(&strl->list);
 	}
 }
@@ -1281,11 +1284,13 @@ void dm_devs_cache_destroy(void)
 	_cache.use_dm_devs_cache = 0;
 
 	if (_cache.dm_devnos) {
+		log_debug_cache("Destroying DM devno cache.");
 		radix_tree_destroy(_cache.dm_devnos);
 		_cache.dm_devnos = NULL;
 	}
 
 	if (_cache.dm_uuids) {
+		log_debug_cache("Destroying DM uuid cache.");
 		radix_tree_destroy(_cache.dm_uuids);
 		_cache.dm_uuids = NULL;
 	}
@@ -1293,22 +1298,67 @@ void dm_devs_cache_destroy(void)
 	dm_device_list_destroy(&_cache.dm_devs);
 }
 
+/*
+ * Updates cached trees with active DM devices.
+ *
+ * TODO:
+ * For large amount of active devices it might be useful
+ * to update existing trees - especially when there is high
+ * chance the set of active devices is nearly the same).
+ * However its not so trivial, so just make it a TODO.
+ * And do only an easy 1:1 match or full rebuild.
+ */
 int dm_devs_cache_update(void)
 {
-	struct dm_active_device *dm_dev;
+	struct dm_active_device *dm_dev, *dm_dev_new;
 	unsigned devs_features;
 	uint32_t d;
+	struct dm_list *dm_devs_new, *l;
+	int cache_changed;
 
-	dm_devs_cache_destroy();
-
-	if (!get_dm_active_devices(NULL, &_cache.dm_devs, &devs_features))
+	if (!get_dm_active_devices(NULL, &dm_devs_new, &devs_features))
 		return 1;
 
 	if (!(devs_features & DM_DEVICE_LIST_HAS_UUID)) {
 		/* Cache unusable with older kernels without UUIDs in LIST */
-		dm_device_list_destroy(&_cache.dm_devs);
+		dm_device_list_destroy(&dm_devs_new);
 		return 1;
 	}
+
+	if (_cache.dm_devs) {
+		/* Compare existing cached list with a new one.
+		 * When there is any mismatch, just rebuild whole cache */
+		if ((l = dm_list_first(dm_devs_new))) {
+			cache_changed = dm_list_empty(_cache.dm_devs); // 1 for empty cache and new list has entries */
+			dm_list_iterate_items(dm_dev, _cache.dm_devs) {
+				dm_dev_new = dm_list_item(l, struct dm_active_device);
+				if ((dm_dev->devno != dm_dev_new->devno) ||
+				    strcmp(dm_dev->uuid, dm_dev_new->uuid)) {
+					log_debug_cache("Mismatching UUID or devno found  %s %u:%u   %s %u:%u.",
+							dm_dev->uuid, MAJOR(dm_dev->devno), MINOR(dm_dev->devno),
+							dm_dev_new->uuid, MAJOR(dm_dev_new->devno), MINOR(dm_dev_new->devno));
+					cache_changed = 1;
+					break;
+				}
+				if (!(l = dm_list_next(dm_devs_new, l))) {
+					if (dm_list_next(_cache.dm_devs, &dm_dev->list))
+						cache_changed = 1; /* old cached list still with entries */
+					break;
+				}
+			}
+		} else
+			cache_changed = 1;
+
+		if (!cache_changed) {
+			log_debug_cache("Preserving DM cache.");
+			dm_device_list_destroy(&dm_devs_new);
+
+			return 1;
+		}
+		dm_devs_cache_destroy();
+	}
+
+	_cache.dm_devs = dm_devs_new;
 
 	/* _cache.dm_devs entries are referenced by radix trees */
 
@@ -1320,6 +1370,7 @@ int dm_devs_cache_update(void)
 		return_0; // FIXME
 	}
 
+	log_debug_cache("Creating DM cache for devno and uuid.");
 	/* Insert every active DM device into radix trees */
 	dm_list_iterate_items(dm_dev, _cache.dm_devs) {
 		d = _shuffle_devno(dm_dev->devno);
@@ -1572,7 +1623,8 @@ void dev_cache_verify_aliases(struct device *dev)
 			log_debug("Drop alias for %u:%u invalid path %s %u:%u.",
 				  MAJOR(dev->dev), MINOR(dev->dev), strl->str,
 				  MAJOR(st.st_rdev), MINOR(st.st_rdev));
-			radix_tree_remove(_cache.names, strl->str, strlen(strl->str));
+			if (!radix_tree_remove(_cache.names, strl->str, strlen(strl->str)))
+				stack;
 			dm_list_del(&strl->list);
 		}
 	}
@@ -1606,7 +1658,8 @@ static struct device *_dev_cache_get(struct cmd_context *cmd, const char *name, 
 			log_debug("Device path %s is invalid for %u:%u %s.",
 				  name, MAJOR(dev->dev), MINOR(dev->dev), dev_name(dev));
 
-			radix_tree_remove(_cache.names, name, strlen(name));
+			if (!radix_tree_remove(_cache.names, name, strlen(name)))
+				stack;
 
 			_remove_alias(dev, name);
 
@@ -1662,7 +1715,7 @@ static struct device *_dev_cache_get(struct cmd_context *cmd, const char *name, 
 		 * a warning to look for any other unknown cases.
 		 */
 		if (MAJOR(st.st_rdev) != cmd->dev_types->device_mapper_major) {
-			log_warn("WARNING: new device appeared %u:%u %s",
+			log_warn("WARNING: New device appeared %u:%u %s.",
 				  MAJOR(st.st_rdev), (MINOR(st.st_rdev)), name);
 		}
 #endif
@@ -1732,7 +1785,7 @@ static struct device *_dev_cache_get(struct cmd_context *cmd, const char *name, 
 		 * a warning to look for any other unknown cases.
 		 */
 		if (MAJOR(st.st_rdev) != cmd->dev_types->device_mapper_major) {
-			log_warn("WARNING: new device appeared %u:%u %s.",
+			log_warn("WARNING: New device appeared %u:%u %s.",
 				  MAJOR(st.st_rdev), MINOR(st.st_rdev), name);
 		}
 #endif
@@ -2331,7 +2384,7 @@ static char *_get_devname_from_devno(struct cmd_context *cmd, dev_t devno)
 	static const char _partitions[] = "/proc/partitions";
 	char path[PATH_MAX];
 	char devname[PATH_MAX] = { 0 };
-	char namebuf[NAME_LEN];
+	char namebuf[NAME_LEN + 1];
 	char line[1024];
 	unsigned major = MAJOR(devno);
 	unsigned minor = MINOR(devno);

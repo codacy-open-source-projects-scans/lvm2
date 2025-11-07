@@ -12,9 +12,8 @@
 
 # Test writecache usage
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 aux have_writecache 1 0 0 || skip
 which mkfs.xfs || skip
@@ -71,7 +70,7 @@ blockdev --getpbsz "$dev2"
 
 
 mnt="mnt"
-mkdir -p $mnt
+mkdir -p "$mnt"
 
 awk 'BEGIN { while (z++ < 16384) printf "A" }' > fileA
 awk 'BEGIN { while (z++ < 16384) printf "B" }' > fileB

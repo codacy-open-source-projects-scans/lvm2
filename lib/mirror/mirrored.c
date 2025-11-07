@@ -73,9 +73,7 @@ static int _mirrored_text_import_area_count(const struct dm_config_node *sn, uin
 	return 1;
 }
 
-static int _mirrored_text_import(struct lv_segment *seg, const struct dm_config_node *sn,
-			struct dm_hash_table *pv_hash,
-			struct dm_hash_table *lv_hash)
+static int _mirrored_text_import(struct lv_segment *seg, const struct dm_config_node *sn)
 {
 	const struct dm_config_value *cv;
 	const char *logname = NULL;
@@ -103,13 +101,14 @@ static int _mirrored_text_import(struct lv_segment *seg, const struct dm_config_
 	}
 
 	if (dm_config_get_str(sn, "mirror_log", &logname)) {
-		if (!(seg->log_lv = dm_hash_lookup(lv_hash, logname))) {
+		if (!(seg->log_lv = find_lv(seg->lv->vg, logname))) {
 			log_error("Unrecognised mirror log in "
 				  "segment %s of logical volume %s.",
 				  dm_config_parent_name(sn), seg->lv->name);
 			return 0;
 		}
 		seg->log_lv->status |= MIRROR_LOG;
+		seg->log_lv->vg->fixup_imported_mirrors = 1;
 	}
 
 	if (logname && !seg->region_size) {
@@ -126,7 +125,7 @@ static int _mirrored_text_import(struct lv_segment *seg, const struct dm_config_
 		return 0;
 	}
 
-	return text_import_areas(seg, sn, cv, pv_hash, MIRROR_IMAGE);
+	return text_import_areas(seg, sn, cv, MIRROR_IMAGE);
 }
 
 static int _mirrored_text_export(const struct lv_segment *seg, struct formatter *f)
@@ -304,7 +303,7 @@ static int _add_log(struct dm_pool *mem, struct lv_segment *seg,
 			log_warn_suppress(seg->lv->vg->cmd->mirror_warn_printed,
 					  "WARNING: Mirror %s without monitoring will not react on failures.",
 					  display_lvname(seg->lv));
-			seg->lv->vg->cmd->mirror_warn_printed = 1; /* Do not print this more then once */
+			seg->lv->vg->cmd->mirror_warn_printed = 1; /* Do not print this more than once */
 		} else
 			log_flags |= DM_BLOCK_ON_ERROR;
 	}

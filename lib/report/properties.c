@@ -344,6 +344,10 @@ GET_PV_STR_PROPERTY_FN(pv_device_id_type, pv->device_id_type)
 #define _cache_write_hits_get prop_not_implemented_get
 #define _cache_write_misses_set prop_not_implemented_set
 #define _cache_write_misses_get prop_not_implemented_get
+#define _cache_promotions_set prop_not_implemented_set
+#define _cache_promotions_get prop_not_implemented_get
+#define _cache_demotions_set prop_not_implemented_set
+#define _cache_demotions_get prop_not_implemented_get
 
 #define _writecache_total_blocks_set prop_not_implemented_set
 #define _writecache_total_blocks_get prop_not_implemented_get
@@ -542,6 +546,10 @@ GET_VG_STR_PROPERTY_FN(vg_lock_type, vg_lock_type_dup(vg))
 #define _vg_lock_type_set prop_not_implemented_set
 GET_VG_STR_PROPERTY_FN(vg_lock_args, vg_lock_args_dup(vg))
 #define _vg_lock_args_set prop_not_implemented_set
+#define _vg_persist_set prop_not_implemented_set
+#define _vg_persist_get prop_not_implemented_get
+#define _vg_pr_set prop_not_implemented_set
+#define _vg_pr_get prop_not_implemented_get
 GET_VG_NUM_PROPERTY_FN(vg_extent_size, (SECTOR_SIZE * vg->extent_size))
 #define _vg_extent_size_set prop_not_implemented_set
 GET_VG_NUM_PROPERTY_FN(vg_extent_count, vg->extent_count)

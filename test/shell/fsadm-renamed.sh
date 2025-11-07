@@ -12,9 +12,8 @@
 
 test_description='Exercise fsadm operation on renamed device'
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 aux prepare_vg 1 700
 
@@ -40,15 +39,13 @@ cleanup_mounted_and_teardown()
 	aux teardown
 }
 
-check_mounted()
+check_vg_mounted()
 {
+	# Sleep so malfunctioning systemd has time to umount
+	# so it is not happening later during test
+	sleep 1
 	mount | tee out
-	grep $vg out || {
-		# older versions of systemd sometimes umount volume by mistake
-		# skip further test when this case happens
-		systemctl --version | grep "systemd 222" && \
-			skip "System is running old racy systemd version."
-	}
+	grep -q "$vg" out
 }
 
 # Test for block sizes != 1024 (rhbz #480022)
@@ -84,7 +81,7 @@ echo "$i"
 aux udev_wait
 
 # mount /dev/test/lv1 on /mnt
-mount "$dev_vg_lv" "$mount_dir"
+mount "$dev_vg_lv" "$mount_dir" || continue
 
 aux udev_wait
 
@@ -92,8 +89,13 @@ aux udev_wait
 # but "df" and "mount" commands will still show /dev/test/lv1 mounted on /mnt.
 lvrename $vg_lv $vg_lv_ren
 
-check_mounted
-
+# skip this resize test if the volume is unmounted
+check_vg_mounted || {
+	umount "$mount_dir" || skip "Likely systemd unmounted our test volume."
+	# Old system were using /dev/dm-xxx names, which are imune to renames.
+	# On such system we have nothing to test...
+	skip "System uses different mount name."
+}
 # fails on renamed LV
 # lvextend -r test/lv1_renamed succeeds in extending the LV (as lv1_renamed),
 # but xfs_growfs /dev/test/lv1_renamed fails because it doesn't recognize
@@ -115,16 +117,15 @@ aux udev_wait
 # /dev/mapper/test-lv1 ... /mnt $SPACE dir
 mount "$dev_vg_lv" "$mount_dolar_dir"
 
-check_mounted
+if check_vg_mounted ; then
+	# try to resize the LV that was renamed:  lvextend -r test/lv1_renamed
+	# this succeeds in extending the LV (lv1_renamed), but xfs_growfs fails
+	# for the same reason as above, i.e. mount doesn't show the lv1_renamed
+	# device is mounted anywhere.
+	fail lvresize -L+10M -r $vg_lv_ren
+fi
 
-# try to resize the LV that was renamed:  lvextend -r test/lv1_renamed
-# this succeeds in extending the LV (lv1_renamed), but xfs_growfs fails
-# for the same reason as above, i.e. mount doesn't show the lv1_renamed
-# device is mounted anywhere.
-not lvresize -L+10M -r $vg_lv_ren
-
-umount "$mount_dir"
-
+umount "$mount_dir" || true
 
 USE_NOT=
 # TODO: this is somewhat surprising for users

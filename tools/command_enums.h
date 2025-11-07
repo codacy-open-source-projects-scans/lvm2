@@ -21,6 +21,8 @@
  */
 #include "lib/commands/cmd_enum.h"
 
+struct arg_values;
+
 /* define the enums for the command line --options, foo_ARG */
 enum {
 #define arg(a, b, c, d, e, f, g) a ,
@@ -92,7 +94,6 @@ enum {
 /* Command prints devices file entries that were not found. */
 #define ALTERNATIVE_EXTENTS	 0x00040000
 
-#include "command.h"       /* defines struct command */
 #include "command-count.h" /* defines COMMAND_COUNT */
 
 #endif /* _LVM_COMMAND_ENUMS_H */

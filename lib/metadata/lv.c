@@ -21,6 +21,7 @@
 #include "lib/metadata/segtype.h"
 #include "lib/datastruct/str_list.h"
 #include "lib/locking/lvmlockd.h"
+#include "base/data-struct/radix-tree.h"
 
 #include <time.h>
 #include <sys/utsname.h>
@@ -605,8 +606,8 @@ struct logical_volume *lv_origin_lv(const struct logical_volume *lv)
 		origin = first_seg(lv)->external_lv;
 	else if (lv_is_writecache(lv) && first_seg(lv)->origin)
 		origin = first_seg(lv)->origin;
-	else if (lv_is_integrity(lv) && first_seg(lv)->origin)
-		origin = first_seg(lv)->origin;
+	else if (lv_is_integrity(lv))
+		origin = seg_lv(first_seg(lv), 0);
 
 	return origin;
 }
@@ -1157,7 +1158,6 @@ static int lv_raid_integrity_image_in_sync(const struct logical_volume *lv_iorig
 	struct logical_volume *lv_image = NULL;
 	struct logical_volume *lv_raid = NULL;
 	struct lv_segment *raid_seg = NULL;
-	const struct seg_list *sl;
 	char *raid_health;
 	unsigned int s;
 	int found = 0;
@@ -1168,14 +1168,7 @@ static int lv_raid_integrity_image_in_sync(const struct logical_volume *lv_iorig
 	/* Get top level raid LV from lv_iorig. */
 
 	/* step 1: get lv_image from lv_iorig */
-	dm_list_iterate_items(sl, &lv_iorig->segs_using_this_lv) {
-		if (!sl->seg || !sl->seg->lv || !sl->seg->origin)
-			continue;
-		if (lv_is_integrity(sl->seg->lv) && (sl->seg->origin == lv_iorig)) {
-			lv_image = sl->seg->lv;
-			break;
-		}
-	}
+	lv_image = lv_integrity_from_origin(lv_iorig);
 
 	if (!lv_image) {
 		log_error("No lv_image found for lv_iorig %s", lv_iorig->name);
@@ -1568,11 +1561,56 @@ int lv_set_creation(struct logical_volume *lv,
 			_utsinit = 1;
 		}
 
-		hostname = _utsname.nodename;
+		lv->hostname = _utsname.nodename;
+	} else
+		lv->hostname = dm_pool_strdup(lv->vg->vgmem, hostname);
+
+	lv->timestamp = timestamp ? : (uint64_t) time(NULL);
+
+	return 1;
+}
+
+/*
+ * As we keep now vg->lv_names for quick looking of an LV by name
+ * when the LV name is changed, we need to also update our lookup tree
+ */
+int lv_set_name(struct logical_volume *lv, const char *lv_name)
+{
+	int r;
+
+	if (lv->vg->lv_names && lv->name &&
+	    !radix_tree_remove(lv->vg->lv_names, lv->name, strlen(lv->name))) {
+		log_error("Cannot remove from lv_names LV %s", lv->name);
+		return 0;
 	}
 
-	lv->hostname = dm_pool_strdup(lv->vg->vgmem, hostname);
-	lv->timestamp = timestamp ? : (uint64_t) time(NULL);
+	lv->name = lv_name; /* NULL -> LV is removed from tree */
+
+	if (lv->vg->lv_names && lv->name &&
+	    (1 != (r = radix_tree_uniq_insert_ptr(lv->vg->lv_names, lv->name,
+						  strlen(lv->name), lv)))) {
+		if (!r)
+			log_error("Cannot insert to lv_names LV %s", lv->name);
+		else
+			log_error("Duplicate LV name %s detected.", lv->name);
+		return 0;
+	}
+
+	return 1;
+}
+
+int lv_set_vg(struct logical_volume *lv, struct volume_group *vg)
+{
+	const char *lv_name;
+
+	if (lv->vg != vg) {
+		lv_name = lv->name;
+		if (!lv_set_name(lv, NULL))
+			return_0; /* drop from existing VG radix_tree */
+		lv->vg = vg;
+		if (!lv_set_name(lv, lv_name))
+			return_0;
+	}
 
 	return 1;
 }

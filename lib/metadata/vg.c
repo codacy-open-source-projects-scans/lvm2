@@ -19,6 +19,8 @@
 #include "lib/activate/activate.h"
 #include "lib/commands/toolcontext.h"
 #include "lib/format_text/archiver.h"
+#include "lib/device/persist.h"
+#include "base/data-struct/radix-tree.h"
 
 struct volume_group *alloc_vg(const char *pool_name, struct cmd_context *cmd,
 			      const char *vg_name)
@@ -76,6 +78,16 @@ static void _free_vg(struct volume_group *vg)
 
 	if (vg->committed_cft)
 		config_destroy(vg->committed_cft);
+
+	if (vg->lv_names)
+		radix_tree_destroy(vg->lv_names);
+
+	if (vg->lv_uuids)
+		radix_tree_destroy(vg->lv_uuids);
+
+	if (vg->pv_names)
+		radix_tree_destroy(vg->pv_names);
+
 	dm_pool_destroy(vg->vgmem);
 }
 
@@ -108,9 +120,7 @@ int link_lv_to_vg(struct volume_group *vg, struct logical_volume *lv)
 	if (vg_max_lv_reached(vg))
 		stack;
 
-	if (!(lvl = dm_pool_zalloc(vg->vgmem, sizeof(*lvl))))
-		return_0;
-
+	lvl = &lv->lvl;
 	lvl->lv = lv;
 	lv->vg = vg;
 	dm_list_add(&vg->lvs, &lvl->list);
@@ -128,6 +138,12 @@ int unlink_lv_from_vg(struct logical_volume *lv)
 
 	dm_list_move(&lv->vg->removed_lvs, &lvl->list);
 	lv->status |= LV_REMOVED;
+
+	/* lv->lv_name stays valid for historical LV usage
+	 * So just remove the name from active lv_names */
+	if (lv->vg->lv_names &&
+	    !radix_tree_remove(lv->vg->lv_names, lv->name, strlen(lv->name)))
+		stack;
 
 	return 1;
 }
@@ -635,11 +651,32 @@ int vg_set_lock_type(struct volume_group *vg, const char *lock_type)
 	return 1;
 }
 
+int vg_set_persist(struct volume_group *vg, uint32_t set_flags)
+{
+	if (set_flags & SETPR_Y)
+		vg->pr = VG_PR_AUTOSTART | VG_PR_REQUIRE;
+	else if (set_flags & SETPR_N)
+		vg->pr = 0;
+	else if (set_flags & SETPR_REQUIRE)
+		vg->pr |= VG_PR_REQUIRE;
+	else if (set_flags & SETPR_NOREQUIRE)
+		vg->pr &= ~VG_PR_REQUIRE;
+	else if (set_flags & SETPR_AUTOSTART)
+		vg->pr |= VG_PR_AUTOSTART;
+	else if (set_flags & SETPR_NOAUTOSTART)
+		vg->pr &= ~VG_PR_AUTOSTART;
+	else if (set_flags & SETPR_PTPL)
+		vg->pr |= VG_PR_PTPL;
+	else if (set_flags & SETPR_NOPTPL)
+		vg->pr &= ~VG_PR_PTPL;
+	return 1;
+}
+
 char *vg_attr_dup(struct dm_pool *mem, const struct volume_group *vg)
 {
 	char *repstr;
 
-	if (!(repstr = dm_pool_zalloc(mem, 7))) {
+	if (!(repstr = dm_pool_zalloc(mem, 8))) {
 		log_error("dm_pool_alloc failed");
 		return NULL;
 	}
@@ -656,6 +693,11 @@ char *vg_attr_dup(struct dm_pool *mem, const struct volume_group *vg)
 		repstr[5] = 's';
 	else
 		repstr[5] = '-';
+
+	if (vg->pr & VG_PR_REQUIRE)
+		repstr[6] = persist_is_started(vg->cmd, (struct volume_group *)vg, NULL, 1) ? 'p' : 'P';
+	else
+		repstr[6] = '-';
 
 	return repstr;
 }

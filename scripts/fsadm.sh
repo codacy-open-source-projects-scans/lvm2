@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright (C) 2007-2020 Red Hat, Inc. All rights reserved.
+# Copyright (C) 2007-2025 Red Hat, Inc. All rights reserved.
 #
 # This file is part of LVM2.
 #
@@ -17,7 +17,7 @@
 # Script for resizing devices (usable for LVM resize)
 #
 # Needed utilities:
-#   mount, umount, grep, readlink, blockdev, blkid, fsck, xfs_check, cryptsetup
+#   mount, umount, grep, readlink, blockdev, blkid, fsck, cryptsetup
 #
 # ext2/ext3/ext4: resize2fs, tune2fs
 # reiserfs: resize_reiserfs, reiserfstune
@@ -34,7 +34,36 @@ set -euE -o pipefail
 TOOL="fsadm"
 
 _SAVEPATH=$PATH
-PATH="/sbin:/usr/sbin:/bin:/usr/sbin:$PATH"
+PATH="/sbin:/usr/sbin:/bin:/usr/bin:$PATH"
+
+tool_usage() {
+	cat <<-EOF
+	  ${TOOL}: Utility to resize or check the filesystem on a device
+
+	  ${TOOL} [options] check <device>
+	      - Check the filesystem on device using fsck
+
+	  ${TOOL} [options] resize <device> [<new_size>[BKMGTPE]]
+	      - Change the size of the filesystem on device to new_size
+
+	  Options:
+	      -h | --help	 Show this help message
+	      -v | --verbose	 Be verbose
+	      -e | --ext-offline Unmount filesystem before ext2/ext3/ext4 resize
+	      -f | --force	 Bypass sanity checks
+	      -n | --dry-run	 Print commands without running them
+	      -l | --lvresize	 Resize given device (if it is LVM device)
+	      -c | --cryptresize Resize given crypt device
+	      -y | --yes	 Answer "yes" at any prompts
+
+	  new_size - Absolute number of filesystem blocks to be in the filesystem,
+	             or an absolute size using a suffix (in powers of 1024).
+	             If new_size is not supplied, the whole device is used.
+
+	EOF
+
+	exit
+}
 
 # utilities
 TUNE_EXT="tune2fs"
@@ -88,39 +117,13 @@ IFS_OLD=$IFS
 NL='
 '
 
-tool_usage() {
-	echo "${TOOL}: Utility to resize or check the filesystem on a device"
-	echo
-	echo "  ${TOOL} [options] check <device>"
-	echo "    - Check the filesystem on device using fsck"
-	echo
-	echo "  ${TOOL} [options] resize <device> [<new_size>[BKMGTPE]]"
-	echo "    - Change the size of the filesystem on device to new_size"
-	echo
-	echo "  Options:"
-	echo "    -h | --help         Show this help message"
-	echo "    -v | --verbose      Be verbose"
-	echo "    -e | --ext-offline  unmount filesystem before ext2/ext3/ext4 resize"
-	echo "    -f | --force        Bypass sanity checks"
-	echo "    -n | --dry-run      Print commands without running them"
-	echo "    -l | --lvresize     Resize given device (if it is LVM device)"
-	echo "    -c | --cryptresize  Resize given crypt device"
-	echo "    -y | --yes          Answer \"yes\" at any prompts"
-	echo
-	echo "  new_size - Absolute number of filesystem blocks to be in the filesystem,"
-	echo "             or an absolute size using a suffix (in powers of 1024)."
-	echo "             If new_size is not supplied, the whole device is used."
-
-	exit
-}
-
 verbose() {
 	test -z "$VERB" || echo "$TOOL:" "$@"
 }
 
 # Support multi-line error messages
 error() {
-	for i in "$@" ;  do
+	for i in "$@"; do
 		echo "$TOOL: $i" >&2
 	done
 	cleanup 1
@@ -132,15 +135,51 @@ dry() {
 		return 0
 	fi
 	verbose "Executing" "$@"
-	$@
+	"$@"
 }
 
-# Accept as success also return code 1 with fsck
-accept_0_1() {
-	$@
-	local ret="$?"
-	test "$ret" -eq 1 || return "$ret"
-	# Filesystem was corrected
+# Handle fsck return codes according to fsck(8) exit code specification
+# 0 = no errors, 1 = errors corrected, 2 = reboot required
+# 4 = errors left uncorrected, 8 = operational error
+# 16 = usage error, 32 = canceled, 128 = shared library error
+accept_fsck() {
+	local ret=0
+	"$@" || ret=$?
+
+	case "$ret" in
+	  0)
+		# No errors
+		return 0
+		;;
+	  1)
+		# Filesystem was corrected
+		verbose "Filesystem errors were corrected on \"$VOLUME\"."
+		return 0
+		;;
+	  2)
+		# System should be rebooted
+		echo "$TOOL: WARNING: Filesystem was corrected but system should be rebooted." >&2
+		return 0
+		;;
+	  4)
+		error "Filesystem errors left uncorrected on \"$VOLUME\"." \
+		      "Manual intervention may be required."
+		;;
+	  8)
+		error "Fsck operational error on \"$VOLUME\"." \
+		      "Check fsck command syntax or system resources."
+		;;
+	  16)
+		error "Fsck usage or syntax error." \
+		      "This may indicate a bug in $TOOL script."
+		;;
+	  32)
+		error "Fsck canceled by user request."
+		;;
+	  *)
+		error "Fsck failed with return code $ret on \"$VOLUME\"."
+		;;
+	esac
 }
 
 cleanup() {
@@ -148,13 +187,13 @@ cleanup() {
 	# reset MOUNTPOINT - avoid recursion
 	test "$MOUNTPOINT" = "$TEMPDIR" && MOUNTPOINT="" temp_umount
 	if [ -n "$REMOUNT" ]; then
-		verbose "Remounting unmounted filesystem back"
+		verbose "Remounting unmounted filesystem back."
 		dry "$MOUNT" "$VOLUME" "$MOUNTED"
 	fi
 	IFS=$IFS_OLD
 	trap 2
 
-	test "$1" -eq 2 && verbose "Break detected"
+	test "$1" -eq 2 && verbose "Break detected."
 
 	if [ "$DO_LVRESIZE" -eq 2 ]; then
 		# start LVRESIZE with the filesystem modification flag
@@ -302,7 +341,7 @@ detect_mounted_with_proc_self_mountinfo() {
 	# TODO: for performance compare with sed and stop with 1st. match:
 	# sed -n "/$MAJORMINOR/ {;p;q;}"
 
-	# extract 2nd field after ' - ' separator as mouted device
+	# extract 2nd field after ' - ' separator as mounted device
 	MOUNTDEV=$(echo "${MOUNTED##* - }" | cut -d ' ' -f 2)
 	MOUNTDEV=$(echo -n -e "$MOUNTDEV")
 
@@ -333,7 +372,7 @@ detect_mounted_with_proc_mounts() {
 	MOUNTED=$(echo -n -e "${MOUNTED%% *}")
 
 	# for systems with different device names - check also mount output
-	if test -z "$MOUNTED" ; then
+	if test -z "$MOUNTED"; then
 		# will not work with spaces in paths
 		MOUNTED=$(LC_ALL=C "$MOUNT" | "$GREP" "^${VOLUME}[ \\t]")
 		test -z "$MOUNTED" && MOUNTED=$(LC_ALL=C "$MOUNT" | "$GREP" "^${RVOLUME}[ \\t]")
@@ -342,15 +381,15 @@ detect_mounted_with_proc_mounts() {
 		MOUNTED=${MOUNTED% type *} # allow type in the mount name
 	fi
 
-	if test -n "$MOUNTED" ; then
+	if test -n "$MOUNTED"; then
 		check_valid_mounted_device "$MOUNTDEV"
 		return 0  # mounted
 	fi
 
 	# If still nothing found and volume is in use
 	# check every known mount point against MAJOR:MINOR
-	if test "$(dmsetup info -c --noheading -o open -j "$MAJOR" -m "$MINOR")" -gt 0 ; then
-		while IFS=$'\n' read -r i ; do
+	if test "$(dmsetup info -c --noheading -o open -j "$MAJOR" -m "$MINOR")" -gt 0; then
+		while IFS=$NL read -r i; do
 			MOUNTDEV=$(echo -n -e "${i%% *}")
 			MOUNTED=${i#* }
 			MOUNTED=$(echo -n -e "${MOUNTED%% *}")
@@ -378,7 +417,7 @@ detect_mounted() {
 detect_device_size() {
 	# check if blockdev supports getsize64
 	DEVSIZE=$("$BLOCKDEV" --getsize64 "$VOLUME" 2>"$NULL" || true)
-	if test -z "$DEVSIZE" ; then
+	if test -z "$DEVSIZE"; then
 		DEVSIZE=$("$BLOCKDEV" --getsize "$VOLUME" || true)
 		test -n "$DEVSIZE" || error "Cannot read size of device \"$VOLUME\"."
 		SSSIZE=$("$BLOCKDEV" --getss "$VOLUME" || true)
@@ -391,17 +430,17 @@ detect_device_size() {
 # could be needed to guarantee 'at least given size'
 # but it makes many troubles
 round_up_block_size() {
-	echo $(( ($1 + $2 - 1) / $2 ))
+	echo "$(( ($1 + $2 - 1) / $2 ))"
 }
 
 temp_mount() {
-	dry "$MKDIR" -p -m 0000 "$TEMPDIR" || error "Failed to create $TEMPDIR."
-	dry "$MOUNT" "$VOLUME" "$TEMPDIR" || error "Failed to mount $TEMPDIR."
+	dry "$MKDIR" -p -m 0000 "$TEMPDIR" || error "Failed to create temporary mount point \"$TEMPDIR\"."
+	dry "$MOUNT" "$VOLUME" "$TEMPDIR" || error "Failed to mount \"$VOLUME\" on \"$TEMPDIR\"."
 }
 
 temp_umount() {
 	dry "$UMOUNT" "$TEMPDIR" || error "Failed to umount \"$TEMPDIR\"."
-	dry "$RMDIR" "${TEMPDIR}" || error "Failed to remove \"$TEMPDIR\","
+	dry "$RMDIR" "${TEMPDIR}" || error "Failed to remove \"$TEMPDIR\"."
 	dry "$RMDIR" "${TEMPDIR%%m}" || error "Failed to remove \"${TEMPDIR%%m}\"."
 }
 
@@ -409,15 +448,15 @@ yes_no() {
 	echo -n "$@" "? [Y|n] "
 
 	if [ -n "$YES" ]; then
-		echo y ; return 0
+		echo y; return 0
 	fi
 
-	while read -r -s -n 1 ANS ; do
+	while read -r -s -n 1 ANS; do
 		case "$ANS" in
-		 "y" | "Y" ) echo y ; return 0 ;;
+		 "y" | "Y" ) echo y; return 0 ;;
 		 "n" | "N") break ;;
-		 "" ) if [ -t 1 ] ; then
-			echo y ; return 0
+		 "" ) if [ -t 1 ]; then
+			echo y; return 0
 		      fi ;;
 		esac
 	done
@@ -432,7 +471,7 @@ try_umount() {
 }
 
 validate_parsing() {
-	if test -z "$BLOCKSIZE" || test -z "$BLOCKCOUNT" ; then
+	if test -z "$BLOCKSIZE" || test -z "$BLOCKCOUNT"; then
 		error "Cannot parse $1 output."
 	fi
 }
@@ -456,16 +495,16 @@ resize_ext() {
 	decode_size "$1" "$BLOCKSIZE"
 	FSFORCE=$FORCE
 
-	if test "$NEWBLOCKCOUNT" -lt "$BLOCKCOUNT" || test "$EXTOFF" -eq 1 ; then
+	if test "$NEWBLOCKCOUNT" -lt "$BLOCKCOUNT" || test "$EXTOFF" -eq 1; then
 		test "$IS_MOUNTED" -eq 1 && verbose "$RESIZE_EXT needs unmounted filesystem" && try_umount
 		REMOUNT=$MOUNTED
-		if test -n "$MOUNTED" ; then
+		if test -n "$MOUNTED"; then
 			# Forced fsck -f for umounted extX filesystem.
 			case "$-" in
 			*i*) FLAG=$YES ;;
 			*)   FLAG="-p" ;;
 			esac
-			accept_0_1 dry "$FSCK" -f $FLAG "$VOLUME" || error "Failed to fsck $VOLUME"
+			accept_fsck dry "$FSCK" -f $FLAG "$VOLUME"
 		fi
 	fi
 
@@ -479,7 +518,7 @@ resize_ext() {
 # - unmounted for downsize
 #############################
 resize_reiser() {
-	detect_mounted && verbose "ReiserFS resizes only unmounted filesystem" && try_umount
+	detect_mounted && verbose "ReiserFS resizes only unmounted filesystem." && try_umount
 	REMOUNT=$MOUNTED
 	verbose "Parsing $TUNE_REISER \"$VOLUME\""
 	for i in $(LC_ALL=C "$TUNE_REISER" "$VOLUME"); do
@@ -508,7 +547,7 @@ resize_xfs() {
 	MOUNTPOINT=$MOUNTED
 	if [ -z "$MOUNTED" ]; then
 		MOUNTPOINT=$TEMPDIR
-		temp_mount || error "Cannot mount Xfs filesystem."
+		temp_mount
 	fi
 	verbose "Parsing $TUNE_XFS \"$MOUNTPOINT\""
 	for i in $(LC_ALL=C "$TUNE_XFS" "$MOUNTPOINT"); do
@@ -524,9 +563,10 @@ resize_xfs() {
 		verbose "Resizing Xfs mounted on \"$MOUNTPOINT\" to fill device \"$VOLUME\""
 		dry "$RESIZE_XFS" "$MOUNTPOINT"
 	elif [ "$NEWBLOCKCOUNT" -eq "$BLOCKCOUNT" ]; then
-		verbose "Xfs filesystem already has the right size"
+		verbose "Xfs filesystem already has the right size."
 	else
-		error "Xfs filesystem shrinking is unsupported."
+		error "Xfs filesystem shrinking is unsupported." \
+		      "Current size: $(( BLOCKCOUNT * BLOCKSIZE )) bytes, requested: $NEWSIZE bytes."
 	fi
 }
 
@@ -563,7 +603,9 @@ detect_luks_device() {
 
 	# LUKS device must be active and mapped over volume where detected
 	if [ -z "$CRYPT_NAME" ] || [ -z "$CRYPT_DATA_OFFSET" ]; then
-		error "Can not find active LUKS device. Unlock \"$VOLUME\" volume first."
+		error "Cannot find active LUKS device for \"$VOLUME\"." \
+		      "LUKS device must be unlocked before resizing:" \
+		      "  cryptsetup luksOpen $VOLUME <name>"
 	fi
 }
 
@@ -607,7 +649,9 @@ resize_luks() {
 	fi
 
 	# resize LUKS device
-	dry "$CRYPTSETUP" resize "$NAME" --size $L_NEWBLOCKCOUNT || error "Failed to resize active LUKS device"
+	dry "$CRYPTSETUP" resize "$NAME" --size $L_NEWBLOCKCOUNT || \
+		error "Failed to resize LUKS device \"$NAME\"." \
+		      "Target size: $L_NEWSIZE bytes ($L_NEWBLOCKCOUNT sectors)."
 
 	if [ $SHRINK -eq 0 ]; then
 		# grow fs on top of LUKS device
@@ -620,11 +664,15 @@ detect_crypt_device() {
 	local L_NEWSIZE
 	local TMP
 
-	which "$CRYPTSETUP" >"$NULL" 2>&1 || error "$CRYPTSETUP utility required to resize crypt device"
+	which "$CRYPTSETUP" >"$NULL" 2>&1 || \
+		error "$CRYPTSETUP utility required to resize crypt device." \
+		      "Please install cryptsetup package."
 
 	CRYPT_TYPE=$("$CRYPTSETUP" status "$1" 2>"$NULL" | "$GREP" "type:")
 
-	test -n "$CRYPT_TYPE" || error "$CRYPTSETUP failed to detect device type on $1."
+	test -n "$CRYPT_TYPE" || \
+		error "Failed to detect crypt device type on \"$1\"." \
+		      "Device may not be active or not a valid crypt device."
 
 	CRYPT_TYPE=${CRYPT_TYPE##*[[:space:]]}
 
@@ -633,7 +681,8 @@ detect_crypt_device() {
 		verbose "\"$1\" crypt device is type $CRYPT_TYPE"
 		;;
 	 *)
-		error "Unsupported crypt type \"$CRYPT_TYPE\""
+		error "Unsupported crypt type \"$CRYPT_TYPE\" on device \"$1\"." \
+		      "Only LUKS1, LUKS2, and PLAIN types are supported."
 	esac
 
 	TMP=$NEWSIZE
@@ -659,7 +708,9 @@ detect_crypt_device() {
 #  (on direct user request only)
 #################################
 resize_crypt() {
-	dry "$CRYPTSETUP" resize "$1" --size $CRYPT_RESIZE_BLOCKS || error "$CRYPTSETUP failed to resize device $1"
+	dry "$CRYPTSETUP" resize "$1" --size "$CRYPT_RESIZE_BLOCKS" || \
+		error "Failed to resize crypt device \"$1\"." \
+		      "Target size: $CRYPT_RESIZE_BLOCKS sectors."
 }
 
 ####################
@@ -683,12 +734,13 @@ resize() {
 	  "reiserfs")	CMD=resize_reiser ;;
 	  "xfs")	CMD=resize_xfs ;;
 	  "crypto_LUKS")
-		which "$CRYPTSETUP" >"$NULL" 2>&1 || error "$CRYPTSETUP utility required to resize LUKS volume"
+		which "$CRYPTSETUP" >"$NULL" 2>&1 || error "$CRYPTSETUP utility required to resize LUKS volume."
 		CMD=resize_luks ;;
 	  *) error "Filesystem \"$FSTYPE\" on device \"$VOLUME\" is not supported by this tool." ;;
 	esac
 
-	$CMD $NEWSIZE || error "$FSTYPE resize failed."
+	$CMD "$NEWSIZE" || error "$FSTYPE resize failed on \"$VOLUME\"." \
+	                       "Target size: $NEWSIZE bytes."
 	test -z "${CRYPT_SHRINK-}" || resize_crypt "$VOLUME_ORIG"
 }
 
@@ -698,7 +750,7 @@ resize() {
 #  only one supported
 ####################################
 diff_dates() {
-         echo $(( $("$DATE" -u -d"$1" +%s 2>"$NULL") - $("$DATE" -u -d"$2" +%s 2>"$NULL") ))
+	echo "$(( $("$DATE" -u -d"$1" +%s 2>"$NULL") - $("$DATE" -u -d"$2" +%s 2>"$NULL") ))"
 }
 
 check_luks() {
@@ -712,8 +764,8 @@ check_luks() {
 ###################
 check() {
 	detect_fs "$1"
-	if detect_mounted ; then
-		verbose "Skipping filesystem check for device \"$VOLUME\" as the filesystem is mounted on $MOUNTED";
+	if detect_mounted; then
+		verbose "Skipping filesystem check for device \"$VOLUME\" as the filesystem is mounted on $MOUNTED.";
 		cleanup 3
 	fi
 
@@ -731,8 +783,8 @@ check() {
 		  *"n/a") ;; # nothing to do - system was not mounted yet
 		  *)
 			LASTDIFF=$(diff_dates "$LASTMOUNT" "$LASTCHECKED")
-			if test "$LASTDIFF" -gt 0 ; then
-				verbose "Filesystem has not been checked after the last mount, using fsck -f"
+			if test "$LASTDIFF" -gt 0; then
+				verbose "Filesystem has not been checked after the last mount, using fsck -f."
 				FORCE="-f"
 			fi
 			;;
@@ -741,14 +793,20 @@ check() {
 	esac
 
 	case "$FSTYPE" in
-	  "xfs") if which "$XFS_CHECK" >"$NULL" 2>&1 ; then
-			dry "$XFS_CHECK" "$VOLUME" || error "Xfs check failed."
-		 else
-			# Replacement for outdated xfs_check
+	  "xfs") if which "$XFS_REPAIR" >"$NULL" 2>&1; then
+			# Prefer modern xfs_repair -n over deprecated xfs_check
 			# FIXME: for small devices we need to force_geometry,
 			# since we run in '-n' mode, it shouldn't be problem.
 			# Think about better way....
-			dry "$XFS_REPAIR" -n -o force_geometry "$VOLUME" || error "Xfs repair failed."
+			dry "$XFS_REPAIR" -n -o force_geometry "$VOLUME" || \
+				error "Xfs repair check failed on \"$VOLUME\"." \
+				      "Filesystem may have errors requiring repair."
+		 elif which "$XFS_CHECK" >"$NULL" 2>&1; then
+			# Fallback to xfs_check for very old systems (pre-2012)
+			dry "$XFS_CHECK" "$VOLUME" || error "Xfs check failed on \"$VOLUME\"."
+		 else
+			error "Neither xfs_repair nor xfs_check found." \
+			      "Please install xfsprogs package."
 		 fi ;;
 	  ext[234]|"reiserfs")
 	        # check if executed from interactive shell environment
@@ -756,7 +814,7 @@ check() {
 		  *i*) FLAG=$YES ;;
 		  *)   FLAG="-p" ;;
 		esac
-		accept_0_1 dry "$FSCK" $FORCE $FLAG "$VOLUME" || error "Fsck $FSTYPE failed."
+		accept_fsck dry "$FSCK" $FORCE $FLAG "$VOLUME"
 		;;
 	  "crypto_LUKS")
 		which "$CRYPTSETUP" >"$NULL" 2>&1 || error "$CRYPTSETUP utility required."
@@ -792,7 +850,7 @@ echo Y | "$GREP" Y >"$NULL" || error "Grep does not work properly."
 test "$("$DATE" -u -d"Jan 01 00:00:01 1970" +%s)" -eq 1 || error "Date translation does not work."
 
 
-if [ "$#" -eq 0 ] ; then
+if [ "$#" -eq 0 ]; then
 	tool_usage
 fi
 
@@ -816,7 +874,7 @@ do
 		   CHECK=$2 ; shift ;;
 	  "resize") test -z "${2-}" && error "Missing <device>. (see: $TOOL --help)"
 		    RESIZE=$2 ; shift
-		    if test -n "${2-}" ; then NEWSIZE="${2-}" ; shift ; fi ;;
+		    if test -n "${2-}"; then NEWSIZE="${2-}" ; shift; fi ;;
 	  *) error "Wrong argument \"$1\". (see: $TOOL --help)"
 	esac
 	shift

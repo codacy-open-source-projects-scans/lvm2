@@ -11,9 +11,8 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 aux prepare_vg 3 12
 get_devs
@@ -39,7 +38,7 @@ makeold
 
 # reports old metadata
 vgs $vg 2>&1 | tee cmd.out
-grep "ignoring metadata" cmd.out
+grep -i "Ignoring metadata" cmd.out
 check lv_field $vg/resized lv_size "8.00m"
 
 # corrects old metadata
@@ -47,7 +46,7 @@ lvcreate -l1 -an $vg
 
 # no old report
 vgs $vg 2>&1 | tee cmd.out
-not grep "ignoring metadata" cmd.out
+not grep -i "Ignoring metadata" cmd.out
 check lv_field $vg/resized lv_size "8.00m"
 
 

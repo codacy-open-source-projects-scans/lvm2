@@ -12,9 +12,8 @@
 
 # Test repairing of broken cached LV
 
-SKIP_WITH_LVMLOCKD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmlockd
 
 MKFS=mkfs.ext4
 FSCK=fsck
@@ -117,6 +116,9 @@ lvs -a -o+seg_pe_ranges,cachemode $vg
 "$MKFS" "$DM_DEV_DIR/$vg/$lv1"
 sync
 
+# flushing status before error
+dmsetup status $vg-$lv1
+
 # Seriously damage cache metadata
 aux error_dev "$dev1" 2054:2
 
@@ -145,7 +147,11 @@ not lvconvert --force --uncache $vg/$lv1
 
 lvconvert --force --yes --uncache $vg/$lv1
 
+# Ignore this test with Valgrind pass as commands executes
+# slower and cache might be fast enough to clean itself...
+if [ "${LVM_VALGRIND:-0}" -eq 0 ]; then
 not "$FSCK" -n "$DM_DEV_DIR/$vg/$lv1"
+fi
 
 aux enable_dev "$dev1"
 

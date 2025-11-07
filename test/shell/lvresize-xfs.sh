@@ -11,9 +11,8 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 which mkfs.xfs || skip
 which xfs_growfs || skip
@@ -90,12 +89,24 @@ check lv_field $vg/$lv lv_size "380.00m"
 df --output=size "$mount_dir" |tee df2
 not diff df1 df2
 
+# lvextend, xfs, active, not mounted, quotas defined, --fs resize
 umount "$mount_dir"
+mount -o uquota,gquota,pquota "$DM_DEV_DIR/$vg/$lv" "$mount_dir"
+umount "$mount_dir"
+lvextend -y --fs resize -L+10M $vg/$lv | tee out
+grep "mount options for xfs: uquota,gquota,pquota" out # must preserve the mount options!
+
+# lvextend, xfs, active, not mounted, quotas not defined, --fs resize
+mount "$DM_DEV_DIR/$vg/$lv" "$mount_dir"
+umount "$mount_dir"
+lvextend -y --fs resize -L+10M $vg/$lv | tee out
+not grep "mount options for xfs" out # mount options not needed
+
 lvchange -an $vg/$lv
 
 # lvextend, xfs, inactive, --fs ignore
 lvextend --fs ignore -L+20M $vg/$lv
-check lv_field $vg/$lv lv_size "400.00m"
+check lv_field $vg/$lv lv_size "420.00m"
 
 lvremove -f $vg/$lv
 
@@ -104,16 +115,15 @@ lvremove -f $vg/$lv
 ####################
 
 # lvextend, xfs, active, mounted, --fs resize --fsmode offline
-lvcreate -n $lv -L 300M $vg
+lvcreate -n $lv -L 320M $vg
 mkfs.xfs "$DM_DEV_DIR/$vg/$lv"
 mount "$DM_DEV_DIR/$vg/$lv" "$mount_dir_space"
 df --output=size "$mount_dir_space" |tee df1
 dd if=/dev/zero of="$mount_dir_space/zeros1" bs=1M count=20 oflag=direct
-# xfs_growfs requires the fs to be mounted, so extending the lv is
-# succeeds, then the xfs extend fails because it cannot be done unmounted
+# xfs_growfs requires the fs to be mounted, so the lvextend fails here
 not lvextend --fs resize --fsmode offline -L+20M $vg/$lv
 check lv_field $vg/$lv lv_size "320.00m"
-df -a | tee dfa
+df | tee dfa
 grep "$mount_dir_space" dfa
 df --output=size "$mount_dir_space" |tee df2
 # fs not extended so fs size not changed
@@ -136,7 +146,7 @@ umount "$mount_dir_space"
 # xfs_growfs requires the fs to be mounted to grow, so --fsmode nochange
 # with an unmounted fs fails
 not lvextend --fs resize --fsmode nochange -L+20M $vg/$lv
-check lv_field $vg/$lv lv_size "380.00m"
+check lv_field $vg/$lv lv_size "360.00m"
 mount "$DM_DEV_DIR/$vg/$lv" "$mount_dir_space"
 df --output=size "$mount_dir_space" |tee df4
 # fs not extended so fs size not changed
@@ -147,7 +157,7 @@ umount "$mount_dir_space"
 # --yes needed because mount changes are required and plain "resize"
 # fsopt did not specify if the user wants to change mount state
 lvextend --yes --fs resize -L+10M $vg/$lv
-check lv_field $vg/$lv lv_size "390.00m"
+check lv_field $vg/$lv lv_size "370.00m"
 mount "$DM_DEV_DIR/$vg/$lv" "$mount_dir_space"
 df --output=size "$mount_dir_space" |tee df5
 not diff df4 df5
@@ -155,7 +165,7 @@ umount "$mount_dir_space"
 
 # lvextend, xfs, active, unmounted, --fs resize_fsadm
 lvextend --fs resize_fsadm -L+10M $vg/$lv
-check lv_field $vg/$lv lv_size "400.00m"
+check lv_field $vg/$lv lv_size "380.00m"
 mount "$DM_DEV_DIR/$vg/$lv" "$mount_dir_space"
 df --output=size "$mount_dir_space" |tee df6
 not diff df5 df6

@@ -11,9 +11,8 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 # use small default size  - 512KB
 aux lvmconf 'devices/pv_min_size = 512'
@@ -28,7 +27,7 @@ aux lvmconf 'devices/pv_min_size = 10240'
 # and test device is not visible
 not check pv_field "$dev1" pv_name "$dev1"
 
-# set too low value erroneous value
+# set too low erroneous value
 aux lvmconf 'devices/pv_min_size = -100'
 
 # check the incorrect value is printed

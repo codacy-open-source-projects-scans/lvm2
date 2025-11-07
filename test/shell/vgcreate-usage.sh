@@ -12,9 +12,8 @@
 
 test_description='Exercise some vgcreate diagnostics'
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 aux prepare_devs 3
 pvcreate "$dev1" "$dev2"
@@ -86,10 +85,10 @@ vgcreate $SHARED $vg "$dev1" "$dev2"
 check vg_field $vg vg_extent_size 4.00m
 check vg_field $vg max_lv 0
 check vg_field $vg max_pv 0
-ATTRS="wz--n-"
-test -e LOCAL_CLVMD && ATTRS="wz--nc"
+ATTRS="wz--n--"
+test -e LOCAL_CLVMD && ATTRS="wz--nc-"
 if test -n "$LVM_TEST_LVMLOCKD"; then
-ATTRS="wz--ns"
+ATTRS="wz--ns-"
 fi
 check vg_field $vg vg_attr $ATTRS
 vgremove -ff $vg

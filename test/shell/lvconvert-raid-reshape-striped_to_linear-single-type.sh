@@ -10,10 +10,8 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA2110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld --skip-with-lvmlockd
 
 aux lvmconf 'activation/raid_region_size = 512'
 
@@ -32,7 +30,7 @@ check lv_first_seg_field $vg/$lv segtype "striped"
 check lv_first_seg_field $vg/$lv stripes 4
 check lv_first_seg_field $vg/$lv data_stripes 4
 check lv_first_seg_field $vg/$lv stripesize "64.00k"
-wipefs -a "$DM_DEV_DIR/$vg/$lv"
+aux wipefs_a "$DM_DEV_DIR/$vg/$lv"
 mkfs -t ext4 "$DM_DEV_DIR/$vg/$lv"
 fsck -fn "$DM_DEV_DIR/$vg/$lv"
 lvextend -y -L64M $vg/$lv

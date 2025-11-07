@@ -128,9 +128,9 @@ STACKTRACE() {
 	stacktrace
 
 	test "${LVM_TEST_PARALLEL:-0}" -eq 0 && test -z "$RUNNING_DMEVENTD" && \
-		test ! -f LOCAL_DMEVENTD && pgrep dmeventd >DPID 2>/dev/null  && {
-			echo "## ERROR: The test started dmeventd ($(< DPID)) unexpectedly."
-			kill "$(< DPID)"
+		test ! -f LOCAL_DMEVENTD && DPID=$(pgrep -n dmeventd 2>/dev/null) && {
+			echo "## ERROR: The test started dmeventd ($DPID) unexpectedly."
+			kill "$DPID" 2>/dev/null || echo "## ERROR: Failed to kill dmeventd ($DPID)."
 		}
 
 	# Get backtraces from coredumps
@@ -193,10 +193,11 @@ STACKTRACE() {
 			echo "<======== Tree ========>"
 			dmsetup ls --tree | sed -e "s,^,## DMTREE:   ,"
 			echo "<======== Recursive list of $DM_DEV_DIR ========>"
-			ls -lR -I bsg -I bus -I char -Idma_heap -I dri \
+			ls -lR -I accel -I bsg -I bus -I char -I cpu \
+			   -I dma_heap -I dri \
 			   -I hugepages -I input -I mqueue \
 			   -I net -I pts -I shm -I snd \
-			   -I tty?* -I usb -I vfio -I vcs?* \
+			   -I tty?* -I usb -I v4l -I vfio -I vcs?* \
 			   -I virtio-ports \
 			   "$DM_DEV_DIR" | sed -e "s,^,## LS_LR:	,"
 			echo "<======== Udev DB content ========>"

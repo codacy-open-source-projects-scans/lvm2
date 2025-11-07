@@ -16,6 +16,7 @@
 #include "lib/misc/lib.h"
 #include "lib/device/dev-type.h"
 #include "lib/device/device-types.h"
+#include "lib/device/filesystem.h"
 #include "lib/mm/xlate.h"
 #include "lib/config/config.h"
 #include "lib/metadata/metadata.h"
@@ -23,6 +24,7 @@
 #include "lib/label/label.h"
 #include "lib/commands/toolcontext.h"
 #include "lib/activate/activate.h"
+#include "lib/display/display.h"
 #include "device_mapper/misc/dm-ioctl.h"
 
 #ifdef BLKID_WIPING_SUPPORT
@@ -46,9 +48,47 @@
  * is excessive and unnecessary compared to just comparing /dev/name*.
  */
 
-int dev_is_nvme(struct dev_types *dt, struct device *dev)
+int dev_is_nvme(struct device *dev)
 {
 	return (dev->flags & DEV_IS_NVME) ? 1 : 0;
+}
+
+int dev_is_scsi(struct cmd_context *cmd, struct device *dev)
+{
+	return major_is_scsi_device(cmd->dev_types, MAJOR(dev->dev));
+}
+
+int dm_uuid_has_prefix(char *sysbuf, const char *prefix)
+{
+	if (!strncmp(sysbuf, prefix, strlen(prefix)))
+		return 1;
+
+	/*
+	 * If it's a kpartx partitioned dm device the dm uuid will
+	 * be part%d-<prefix>...  e.g. part1-mpath-abc...
+	 * Check for the prefix after the part%-
+	 */ 
+	if (!strncmp(sysbuf, "part", 4)) {
+		const char *dash = strchr(sysbuf, '-');
+
+ 		if (!dash)
+			return 0;
+
+		if (!strncmp(dash + 1, prefix, strlen(prefix)))
+			return 1;
+	}
+	return 0;
+}
+
+int dev_is_mpath(struct cmd_context *cmd, struct device *dev)
+{
+	char buffer[128];
+
+	if (dev_dm_uuid(cmd, dev, buffer, sizeof(buffer)) &&
+	    dm_uuid_has_prefix(buffer, "mpath-"))
+		return 1;
+
+	return 0;
 }
 
 int dev_is_lv(struct cmd_context *cmd, struct device *dev)
@@ -57,7 +97,7 @@ int dev_is_lv(struct cmd_context *cmd, struct device *dev)
 
 	if (dev_dm_uuid(cmd, dev, buffer, sizeof(buffer)) &&
 	    !strncmp(buffer, UUID_PREFIX, sizeof(UUID_PREFIX) - 1))
-                return 1;
+		return 1;
 
 	return 0;
 }
@@ -106,7 +146,7 @@ int dev_is_used_by_active_lv(struct cmd_context *cmd, struct device *dev, int *u
 		 * from this name, create path "/dev/dm-1" to run stat on.
 		 */
 		
-		if (dm_snprintf(dm_dev_path, sizeof(dm_dev_path), "%s/%s", cmd->dev_dir, holder_name) < 0)
+		if (dm_snprintf(dm_dev_path, sizeof(dm_dev_path), "%s%s", cmd->dev_dir, holder_name) < 0)
 			continue;
 
 		/*
@@ -118,7 +158,7 @@ int dev_is_used_by_active_lv(struct cmd_context *cmd, struct device *dev, int *u
 
 		dm_dev_major = MAJOR(info.st_rdev);
 		dm_dev_minor = MINOR(info.st_rdev);
-        
+
 		if (dm_dev_major != cmd->dev_types->device_mapper_major)
 			continue;
 
@@ -562,7 +602,7 @@ static int _is_partitionable(struct dev_types *dt, struct device *dev)
 	    _loop_is_with_partscan(dev))
 		return 1;
 
-	if (dev_is_nvme(dt, dev)) {
+	if (dev_is_nvme(dev)) {
 		/* If this dev is already a partition then it's not partitionable. */
 		if (_has_sys_partition(dev))
 			return 0;
@@ -603,19 +643,19 @@ static int _has_gpt_partition_table(struct device *dev)
 
 	/* the gpt table is always written using LE on disk */
 
-	if (le64_to_cpu(gpt_header.magic) != PART_GPT_MAGIC)
-		return_0;
+	if (le64toh(gpt_header.magic) != PART_GPT_MAGIC)
+		return 0;
 
-	entries_start = le64_to_cpu(gpt_header.part_entries_lba) * lbs;
-	nr_entries = le32_to_cpu(gpt_header.nr_part_entries);
-	sz_entry = le32_to_cpu(gpt_header.sz_part_entry);
+	entries_start = le64toh(gpt_header.part_entries_lba) * lbs;
+	nr_entries = le32toh(gpt_header.nr_part_entries);
+	sz_entry = le32toh(gpt_header.sz_part_entry);
 
 	for (i = 0; i < nr_entries; i++) {
-		if (!dev_read_bytes(dev, entries_start + i * sz_entry,
+		if (!dev_read_bytes(dev, entries_start + (uint64_t)i * sz_entry,
 				    sizeof(gpt_part_entry), &gpt_part_entry))
 			return_0;
 
-		/* just check if the guid is nonzero, no need to call le64_to_cpu here */
+		/* just check if the guid is nonzero, no need to call le64toh here */
 		if (gpt_part_entry.part_type_guid)
 			return 1;
 	}
@@ -650,7 +690,7 @@ static int _has_partition_table(struct device *dev)
 	/* FIXME Check for other types of partition table too */
 
 	/* Check for msdos partition table */
-	if (buf.magic == xlate16(PART_MSDOS_MAGIC)) {
+	if (buf.magic == htole16(PART_MSDOS_MAGIC)) {
 		for (p = 0; p < 4; ++p) {
 			/* Table is invalid if boot indicator not 0 or 0x80 */
 			if (buf.part[p].boot_ind & 0x7f) {
@@ -790,7 +830,7 @@ int dev_get_primary_dev(struct dev_types *dt, struct device *dev, dev_t *result)
 	 * block dev types that have their own major number, so
 	 * the calculation based on minor number doesn't work.
 	 */
-	if (dev_is_nvme(dt, dev))
+	if (dev_is_nvme(dev))
 		goto sys_partition;
 
 	/*
@@ -997,6 +1037,9 @@ int fs_get_blkid(const char *pathname, struct fs_info *fsi)
 	if (!blkid_probe_lookup_value(probe, "FSSIZE", &str, &len) && len)
 		fssize = strtoull(str, NULL, 0);
 
+	if (!blkid_probe_lookup_value(probe, "UUID", &str, &len) && len)
+		memcpy(fsi->uuid, str, UUID_LEN);
+
 	blkid_free_probe(probe);
 
 	if (fslastblock && fsblocksize)
@@ -1005,14 +1048,21 @@ int fs_get_blkid(const char *pathname, struct fs_info *fsi)
 		fsi->fs_last_byte = fssize;
 
 		/*
-		 * For swap, there's no FSLASTBLOCK reported by blkid. We do have FSSIZE reported though.
-		 * The last block is then calculated as:
+		 * For swap, FSLASTBLOCK is reported by blkid since v2.41 so use that directly.
+		 * Otherwise, we do have FSSIZE reported since v2.39. Then. then last block is calculated as:
 		 *    FSSIZE (== size of the usable swap area) + FSBLOCKSIZE (== size of the swap header)
 		 */
 		if (!strcmp(fsi->fstype, "swap"))
 			fsi->fs_last_byte += fsblocksize;
 
 	}
+	/*
+	 * For a multi-devices btrfs, fslastblock * fsblocksize means the whole fs size.
+	 * Thus here fs_last_byte can't be used as a device size boundary.
+	 * Let btrfs handle it.
+	 */
+	if (!strcmp(fsi->fstype, "btrfs"))
+		fsi->fs_last_byte = 0;
 
 	log_debug("libblkid TYPE %s BLOCK_SIZE %d FSLASTBLOCK %llu FSBLOCKSIZE %u fs_last_byte %llu",
 		  fsi->fstype, fsi->fs_block_size_bytes, (unsigned long long)fslastblock, fsblocksize,
@@ -1378,6 +1428,22 @@ static unsigned long _dev_topology_attribute(struct dev_types *dt,
 	return result;
 }
 
+static unsigned long _dev_topology_attribute_4k(struct dev_types *dt,
+						const char *attribute,
+						struct device *dev,
+						unsigned long default_value)
+{
+	unsigned long result = _dev_topology_attribute(dt, attribute, dev, default_value);
+
+	if ((result > 1) && (result & 0x3)) {
+		log_warn("WARNING: Ignoring %s = %lu for device %s (not divisible by 4KiB).",
+			 attribute, result << SECTOR_SHIFT, dev_name(dev));
+		result = 8;
+	}
+
+	return result;
+}
+
 unsigned long dev_alignment_offset(struct dev_types *dt, struct device *dev)
 {
 	return _dev_topology_attribute(dt, "alignment_offset", dev, 0UL);
@@ -1385,12 +1451,12 @@ unsigned long dev_alignment_offset(struct dev_types *dt, struct device *dev)
 
 unsigned long dev_minimum_io_size(struct dev_types *dt, struct device *dev)
 {
-	return _dev_topology_attribute(dt, "queue/minimum_io_size", dev, 0UL);
+	return _dev_topology_attribute_4k(dt, "queue/minimum_io_size", dev, 0UL);
 }
 
 unsigned long dev_optimal_io_size(struct dev_types *dt, struct device *dev)
 {
-	return _dev_topology_attribute(dt, "queue/optimal_io_size", dev, 0UL);
+	return _dev_topology_attribute_4k(dt, "queue/optimal_io_size", dev, 0UL);
 }
 
 unsigned long dev_discard_max_bytes(struct dev_types *dt, struct device *dev)

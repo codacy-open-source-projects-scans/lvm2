@@ -61,7 +61,6 @@
 #include <iomanip>
 #include <fstream>
 #include <sstream>
-#include <iostream>
 #include <cassert>
 #include <iterator>
 #include <algorithm>
@@ -89,6 +88,27 @@ static const long TEST_TIMEOUT = 10 * 60; // Timeout for a single test in second
 
 #ifndef BRICK_SHELLTEST_H
 #define BRICK_SHELLTEST_H
+
+namespace {
+
+const char* hasenv( const char *name ) {
+    const char *v = getenv( name );
+    if ( !v )
+        return NULL;
+    if ( strlen( v ) == 0 || !strcmp( v, "0" ) )
+        return NULL;
+    return v;
+}
+
+template< typename C >
+void split( std::string s, C &c ) {
+    std::stringstream ss( s );
+    std::string item;
+    while ( std::getline( ss, item, ',' ) )
+        c.push_back( item );
+}
+
+}
 
 namespace brick {
 namespace shelltest {
@@ -177,7 +197,7 @@ public:
     }
 };
 
-static void _fsync_name( std::string n )
+static void _fsync_name( const std::string &n )
 {
     int fd = open( n.c_str(), O_WRONLY );
     if ( fd >= 0 ) {
@@ -277,18 +297,26 @@ struct Journal {
     }
 
     friend std::istream &operator>>( std::istream &i, R &r ) {
+        typedef std::map< std::string, R > StringToResult;
+        static StringToResult string_to_result;
+
+        // Initialize map on first use (compatible with pre-C++11 compilers)
+        if ( string_to_result.empty() ) {
+            string_to_result["failed"] = FAILED;
+            string_to_result["interrupted"] = INTERRUPTED;
+            string_to_result["passed"] = PASSED;
+            string_to_result["retried"] = RETRIED;
+            string_to_result["skipped"] = SKIPPED;
+            string_to_result["started"] = STARTED;
+            string_to_result["timeout"] = TIMEOUT;
+            string_to_result["warnings"] = WARNED;
+        }
+
         std::string x;
         i >> x;
 
-        if ( x == "started" ) r = STARTED;
-        else if ( x == "retried" ) r = RETRIED;
-        else if ( x == "failed" ) r = FAILED;
-        else if ( x == "interrupted" ) r = INTERRUPTED;
-        else if ( x == "passed" ) r = PASSED;
-        else if ( x == "skipped" ) r = SKIPPED;
-        else if ( x == "timeout" ) r = TIMEOUT;
-        else if ( x == "warnings" ) r = WARNED;
-        else r = UNKNOWN;
+        StringToResult::const_iterator it = string_to_result.find( x );
+        r = ( it != string_to_result.end() ) ? it->second : UNKNOWN;
         return i;
     }
 
@@ -322,8 +350,8 @@ struct Journal {
                     char buf[64];
                     time_t t = time( 0 );
                     if (localtime_r(&t, &time_info)) {
-                        strftime(buf, sizeof(buf), "%F %T", &time_info);
-                        of << "--- " << buf << " ---";
+                        if ( strftime( buf, sizeof(buf), "%F %T", &time_info ) )
+                            of << "--- " << buf << " ---";
                     }
                 }
                 of << std::endl;
@@ -679,7 +707,7 @@ struct KMsg : Source {
     bool can_clear;
     ssize_t buffer_size;
 
-    KMsg() : can_clear( strcmp(getenv("LVM_TEST_CAN_CLOBBER_DMESG") ? : "0", "0") ),
+    KMsg() : can_clear( hasenv("LVM_TEST_CAN_CLOBBER_DMESG") ),
         buffer_size(128 * 1024)
     {
 #ifdef __unix
@@ -713,10 +741,11 @@ struct KMsg : Source {
     void transform( char *buf, ssize_t *sz ) {
         char newbuf[ buffer_size ];
         struct tm time_info;
-        unsigned level, num, pos;
+        unsigned level, num;
+        int pos;
         unsigned long t;
         time_t tt;
-        size_t len;
+        size_t len, slen;
         const char *delimiter;
 
         buf[ *sz ] = 0;
@@ -728,8 +757,10 @@ struct KMsg : Source {
             memcpy( newbuf, buf, *sz );
             tt = time( 0 );
             len = snprintf( buf, 64, "[%lu.%06lu] <%u> ", t / 1000000, t % 1000000, level );
-            if ( localtime_r( &tt, &time_info ) )
-                len += strftime( buf + len, 64, "%F %T  ", &time_info );
+            if ( localtime_r( &tt, &time_info ) &&
+                ( slen = strftime( buf + len, 64, "%F %T  ", &time_info ) ) )
+                    len += slen;
+
             memcpy( buf + len, newbuf + pos, *sz - pos );
             *sz = *sz - pos + len;
         }
@@ -1359,27 +1390,6 @@ struct Args {
     }
 };
 
-namespace {
-
-const char* hasenv( const char *name ) {
-    const char *v = getenv( name );
-    if ( !v )
-        return NULL;
-    if ( strlen( v ) == 0 || !strcmp( v, "0" ) )
-        return NULL;
-    return v;
-}
-
-template< typename C >
-void split( std::string s, C &c ) {
-    std::stringstream ss( s );
-    std::string item;
-    while ( std::getline( ss, item, ',' ) )
-        c.push_back( item );
-}
-
-}
-
 const char *DEF_FLAVOURS="ndev-vanilla";
 
 std::string resolve_path(std::string a_path, const char *default_path=".")
@@ -1398,12 +1408,12 @@ static int run( int argc, const char **argv, std::string fl_envvar = "TEST_FLAVO
     Options opt;
     const char *env;
 
-    if ( args.has( "--help" ) ) {
+    if ( args.has( "--help" ) || args.has( "-h" ) || args.has( "-?" ) ) {
         std::cout <<
             "  lvm2-testsuite - Run a lvm2 testsuite.\n\n"
             "lvm2-testsuite"
             "\n\t"
-            " [--flavours FLAVOURS]"
+            " [--flavours=FLAVOURS]"
             " [--only TESTS]"
             "\n\t"
             " [--outdir OUTDIR]"
@@ -1427,7 +1437,7 @@ static int run( int argc, const char **argv, std::string fl_envvar = "TEST_FLAVO
             "OPTIONS:\n\n"
             // TODO: looks like this could be worth a man page...
             "Filters:\n"
-            "  --flavours FLAVOURS\n\t\t- comma separated list of flavours to run.\n\t\t  For the list of flavours see `$TESTDIR/lib/flavour-*`.\n\t\t  Default: \"" << DEF_FLAVOURS << "\".\n"
+            "  --flavours=FLAVOURS\n\t\t- comma separated list of flavours to run.\n\t\t  For the list of flavours see `$TESTDIR/lib/flavour-*`.\n\t\t  Default: \"" << DEF_FLAVOURS << "\".\n"
             "  --only TESTS\t- comma separated list of tests to run. Default: All tests.\n"
             "\n"
             "Directories:\n"
@@ -1535,6 +1545,11 @@ static int run( int argc, const char **argv, std::string fl_envvar = "TEST_FLAVO
     opt.testdir = resolve_path( args.opt( "--testdir" ), TESTSUITE_DATA ) + "/";
     opt.workdir = resolve_path( args.opt( "--workdir" ), opt.testdir.c_str() );
     opt.outdir = resolve_path( args.opt( "--outdir" ), "." );
+
+    if (getuid() != 0) {
+        std::cout << "Skipping tests, root is required, current UID: " << getuid() << "\n";
+        return 0;
+    }
 
     setup_handlers();
 

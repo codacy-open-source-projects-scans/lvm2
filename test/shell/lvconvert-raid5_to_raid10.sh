@@ -11,9 +11,8 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA2110-1301 USA
 
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 which mkfs.ext4 || skip
 aux have_raid 1 13 2 || skip
@@ -30,7 +29,7 @@ check lv_field $vg/$lv1 segtype "raid5"
 check lv_field $vg/$lv1 stripes 4
 check lv_field $vg/$lv1 data_stripes 3
 check lv_field $vg/$lv1 region_size "256.00k"
-wipefs -a "$DM_DEV_DIR/$vg/$lv1"
+aux wipefs_a "$DM_DEV_DIR/$vg/$lv1"
 mkfs -t ext4 "$DM_DEV_DIR/$vg/$lv1"
 fsck -fn "$DM_DEV_DIR/$vg/$lv1"
 aux wait_for_sync $vg $lv1

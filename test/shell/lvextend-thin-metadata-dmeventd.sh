@@ -12,12 +12,10 @@
 
 # Test autoextension of thin metadata volume
 
-SKIP_WITH_LVMLOCKD=1
-SKIP_WITH_LVMPOLLD=1
 
 export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld --skip-with-lvmlockd
 
 
 meta_percent_() {
@@ -92,7 +90,7 @@ fail lvcreate -V20 $vg/pool
 
 lvchange -an $vg/pool
 
-# Consume more then (100% - 4MiB) out of 32MiB metadata volume  (>87.5%)
+# Consume more than (100% - 4MiB) out of 32MiB metadata volume  (>87.5%)
 # (Test for less than 4MiB free space in metadata, which is less than 25%)
 DATA=7200  # Newer version of thin-pool have hidden reserve, so use lower value
 test -z "$BIG_DATA" || DATA=7400
@@ -105,7 +103,7 @@ fake_metadata_ "$DATA" 2 >data
 # Swap volume with restored fake metadata
 lvconvert -y --chunksize 64k --thinpool $vg/pool --poolmetadata $vg/$lv2
 lvchange -ay $vg/pool
-# Check generated metadata consume more then 88%
+# Check generated metadata consume more than 88%
 test "$(meta_percent_)" -gt "88"
 lvchange -an $vg/pool
 

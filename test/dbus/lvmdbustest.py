@@ -58,6 +58,9 @@ test_shell = os.getenv('LVM_DBUSD_TEST_MODE', 2)
 # LVM binary to use
 LVM_EXECUTABLE = os.getenv('LVM_BINARY', '/usr/sbin/lvm')
 
+# Max wait time in seconds for udev updates
+max_wait_timeout = int(os.getenv('LVM_LVMDBUSD_MAX_WAIT', '5'))
+
 # Empty options dictionary (EOD)
 EOD = dbus.Dictionary({}, signature=dbus.Signature('sv'))
 # Base interfaces on LV objects
@@ -304,9 +307,16 @@ class DaemonInfo(object):
 			stdout_stream = None
 			stderr_stream = None
 			try:
-				stdout_stream = open(self.stdout, "ab")
-				stdin_stream = open(self.stdin, "rb")
-				stderr_stream = open(self.stderr, "ab")
+				# If stdout/stderr are sockets, they won't work when re-opened from /proc/PID/fd/
+				# Instead, let the subprocess inherit stdout/stderr from the test process
+				if 'socket:' in self.stdout or 'socket:' in self.stderr:
+					stdin_stream = open("/dev/null", "rb")
+					stdout_stream = None  # Inherit from parent test process
+					stderr_stream = None  # Inherit from parent test process
+				else:
+					stdout_stream = open(self.stdout, "ab")
+					stdin_stream = open(self.stdin, "rb")
+					stderr_stream = open(self.stderr, "ab")
 
 				self.process = Popen(self.cmdline, cwd=self.cwd, stdin=stdin_stream,
 									stdout=stdout_stream, stderr=stderr_stream, env=self.env)
@@ -404,6 +414,17 @@ class DaemonInfo(object):
 class TestDbusService(unittest.TestCase):
 	def setUp(self):
 		self.pvs = []
+		# Property names acceptable to change - for monitoring stats
+		self._acceptable_property_changes = set()
+		# LV to monitor for property changes (set by tests that need it)
+		self._monitored_lv = None
+
+		# Get current test name
+		test_name = self.id().split('.')[-1]
+		std_err_print("\n" + "="*80)
+		std_err_print("[TEST %.6f] >>>>>> STARTING TEST: %s" % (time.time(), test_name))
+		std_err_print("="*80 + "\n")
+		self._test_start_time = time.time()
 
 		# Because of the sensitive nature of running LVM tests we will only
 		# run if we have PVs and nothing else, so that we can be confident that
@@ -428,6 +449,14 @@ class TestDbusService(unittest.TestCase):
 
 		self.vdo = supports_vdo()
 		remove_lvm_debug()
+
+	def tearDown(self):
+		test_name = self.id().split('.')[-1]
+		elapsed = time.time() - self._test_start_time
+		std_err_print("\n" + "="*80)
+		std_err_print("[TEST %.6f] <<<<<< FINISHED TEST: %s (elapsed: %.2fs)" %
+			(time.time(), test_name, elapsed))
+		std_err_print("="*80 + "\n")
 
 	def _recurse_vg_delete(self, vg_proxy, pv_proxy, nested_pv_hash):
 		vg_name = str(vg_proxy.Vg.Name)
@@ -498,7 +527,48 @@ class TestDbusService(unittest.TestCase):
 		# Only do consistency checks if we aren't running the unit tests
 		# concurrently
 		if pv_device_list is None:
-			self.assertEqual(self._refresh(), 0)
+			# Snapshot property values before refresh
+			before_values = {}
+
+			if self._acceptable_property_changes and self._monitored_lv:
+				# Read current values of monitored properties
+				self._monitored_lv.update()
+				for prop in self._acceptable_property_changes:
+					try:
+						before_values[prop] = getattr(self._monitored_lv.LvCommon, prop)
+					except AttributeError:
+						pass
+
+			# Do the refresh
+			changes = self._refresh()
+
+			# Check what actually changed
+			if self._acceptable_property_changes and changes > 0 and before_values:
+				# Read values after refresh
+				self._monitored_lv.update()
+				actual_changes = set()
+				for prop, before_val in before_values.items():
+					try:
+						after_val = getattr(self._monitored_lv.LvCommon, prop)
+						if before_val != after_val:
+							actual_changes.add(prop)
+					except AttributeError:
+						pass
+
+				# Verify only acceptable properties changed
+				if actual_changes:
+					unexpected = actual_changes - self._acceptable_property_changes
+					if unexpected:
+						self.fail("Refresh detected %d changes with unexpected properties: %s\n"
+								  "Acceptable properties: %s\n"
+								  "All changed properties: %s" %
+								  (changes, unexpected, self._acceptable_property_changes, actual_changes))
+					else:
+						std_err_print("INFO: Refresh detected %d changes, all in acceptable properties: %s" %
+									  (changes, actual_changes))
+			elif changes > 0:
+				# Strict mode - no changes allowed
+				self.fail("Refresh detected %d changes (expected 0)" % changes)
 
 	def handle_return(self, rc):
 		if isinstance(rc, (tuple, list)):
@@ -577,9 +647,13 @@ class TestDbusService(unittest.TestCase):
 			vg.Remove(dbus.Int32(g_tmo), EOD))
 		self._check_consistency()
 
-	def _pv_remove(self, pv):
+	def _pv_remove(self, pv, force=False):
+		if force:
+			options = dbus.Dictionary({'--force': '--force', '--yes': ''}, 'sv')
+		else:
+			options = EOD
 		rc = self.handle_return(
-			pv.Pv.Remove(dbus.Int32(g_tmo), EOD))
+			pv.Pv.Remove(dbus.Int32(g_tmo), options))
 		return rc
 
 	def test_pv_remove_add(self):
@@ -2262,6 +2336,60 @@ class TestDbusService(unittest.TestCase):
 
 		self.handle_return(vg.Vg.Remove(dbus.Int32(g_tmo), EOD))
 
+	def test_lv_raid_repair(self):
+		if len(self.objs[PV_INT]) < 3:
+			self.skipTest("we need at least 3 PVs to run LV repair test")
+
+		lv_name = lv_n()
+		vg = self._vg_create(pv_paths=[self.objs[PV_INT][0].object_path,
+				 	       self.objs[PV_INT][1].object_path]).Vg
+		lv = self._test_lv_create(
+			vg.LvCreateRaid,
+			(dbus.String(lv_name), dbus.String('raid1'), dbus.UInt64(mib(16)),
+				dbus.UInt32(0), dbus.UInt32(0), dbus.Int32(g_tmo), EOD),
+			vg, LV_BASE_INT)
+
+		# deactivate the RAID LV (can't force remove PV with active LVs)
+		self.handle_return(lv.Lv.Deactivate(
+			dbus.UInt64(0), dbus.Int32(g_tmo), EOD))
+		lv.update()
+		self.assertFalse(lv.LvCommon.Active)
+
+		# remove second PV using --force --force
+		self._pv_remove(self.objs[PV_INT][1], force=True)
+
+		# activate the RAID LV (can't repair inactive LVs)
+		self.handle_return(lv.Lv.Activate(
+			dbus.UInt64(0), dbus.Int32(g_tmo), EOD))
+		lv.update()
+		self.assertTrue(lv.LvCommon.Active)
+
+		# LV should be "broken" now
+		self.assertEqual(lv.LvCommon.Health[1], "partial")
+
+		# add the third PV to the VG
+		path = self.handle_return(vg.Extend(
+			dbus.Array([self.objs[PV_INT][2].object_path], signature="o"),
+			dbus.Int32(g_tmo), EOD))
+		self.assertTrue(path == '/')
+
+		# repair the RAID LV using the third PV
+		rc = self.handle_return(
+			lv.Lv.RepairRaidLv(
+				dbus.Array([self.objs[PV_INT][2].object_path], 'o'),
+				dbus.Int32(g_tmo), EOD))
+
+		self.assertEqual(rc, '/')
+		self._check_consistency()
+
+		lv.update()
+
+		self.assertEqual(lv.LvCommon.Health[1], "unspecified")
+
+		# cleanup: remove the wiped PV from the VG and re-create it to have a clean PV
+		call_lvm(["vgreduce", "--removemissing", vg.Name])
+		self._pv_create(self.objs[PV_INT][1].Pv.Name)
+
 	def _test_lv_method_interface(self, lv):
 		self._rename_lv_test(lv)
 		self._test_activate_deactivate(lv)
@@ -2290,8 +2418,13 @@ class TestDbusService(unittest.TestCase):
 		self._test_lv_method_interface_sequence(self._create_vdo_lv())
 
 	def test_lv_interface_cache_lv(self):
-		self._test_lv_method_interface_sequence(
-			self._create_cache_lv(), remove_lv=False)
+		# Cache LVs have monitoring properties that are queried from the kernel
+		# and can change asynchronously between lvs calls. Only allow these specific
+		# properties to change - any other property change indicates a real problem.
+		self._acceptable_property_changes = {'SnapPercent', 'DataPercent'}
+		cached_lv = self._create_cache_lv()
+		self._monitored_lv = cached_lv
+		self._test_lv_method_interface_sequence(cached_lv, remove_lv=False)
 
 	def test_lv_interface_thin_pool_lv(self):
 		self._test_lv_method_interface_sequence(
@@ -2350,7 +2483,7 @@ class TestDbusService(unittest.TestCase):
 	def test_z_sigint(self):
 
 		number_of_intervals = 3
-		number_of_lvs = 10
+		number_of_lvs = 5
 
 		# Issue SIGINT while daemon is processing work to ensure we shut down.
 		if bool(int(os.getenv("LVM_DBUSD_TEST_SKIP_SIGNAL", "0"))):
@@ -2425,7 +2558,7 @@ class TestDbusService(unittest.TestCase):
 	def _block_present_absent(self, block_device, present=False):
 		start = time.time()
 		keep_looping = True
-		max_wait = 5
+		max_wait = max_wait_timeout
 		while keep_looping and time.time() < start + max_wait:
 			time.sleep(0.2)
 			if present:

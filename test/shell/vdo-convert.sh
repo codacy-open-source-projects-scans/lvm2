@@ -13,9 +13,8 @@
 # Test conversion of VDO volumes made by vdo manager into VDO LV.
 
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 # Use local for this test vdo configuration
 VDO_CONFIG="vdotestconf.yml"
@@ -35,7 +34,7 @@ if not which vdo ; then
 	which lvm_vdo_wrapper || skip "Missing 'lvm_vdo_wrapper'."
 	which oldvdoformat || skip "Emulation of vdo manager 'oldvdoformat' missing."
 	which oldvdoprepareforlvm || skip "Emulation of vdo manager 'oldvdoprepareforlvm' missing."
-	# enable expansion of aliasis within script itself
+	# enable expansion of aliases within script itself
 	shopt -s expand_aliases
 	alias vdo='lvm_vdo_wrapper'
 	export VDO_BINARY=lvm_vdo_wrapper
@@ -119,6 +118,7 @@ vdo stop $VDOCONF --name "$VDONAME"
 
 lvm_import_vdo -y -v --name $vg/$lv1 "$dev1"
 
+check lv_field $vg/$lv1 vdo_slab_size "128.00m"
 check lv_field $vg/$lv1 size "3.00t"
 
 vgremove -f $vg
@@ -130,16 +130,18 @@ vgremove -f $vg
 aux teardown_devs
 aux prepare_devs 1 23456
 
-vdo create $VDOCONF --name "$VDONAME" --device "$dev1" --vdoSlabSize 128M --vdoLogicalSize 23G
+vdo create $VDOCONF --name "$VDONAME" --device "$dev1" --vdoSlabSize 256M --vdoLogicalSize 23G
 
 mkfs -E nodiscard "$DM_DEV_DIR/mapper/$VDONAME"
 
 lvm_import_vdo --vdo-config "$VDO_CONFIG" -y -v --name $vg1/$lv2 "$dev1"
 
+check lv_field $vg1/$lv2 vdo_slab_size "256.00m"
+check lv_field $vg1/$lv2 size "23.00g"
+
 fsck -n "$DM_DEV_DIR/$vg1/$lv2"
 
 vgremove -f $vg1
-
 
 
 ########################################################################

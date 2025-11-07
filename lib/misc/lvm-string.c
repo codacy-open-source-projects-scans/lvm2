@@ -172,6 +172,9 @@ static const char *_lvname_has_reserved_component_string(const char *lvname)
 	};
 	unsigned i;
 
+	if (!(lvname = strchr(lvname, '_')))
+		return NULL;
+
 	for (i = 0; i < DM_ARRAY_SIZE(_strings); ++i)
 		if (strstr(lvname, _strings[i]))
 			return _strings[i];
@@ -188,6 +191,9 @@ static const char *_lvname_has_reserved_string(const char *lvname)
 	};
 	unsigned i;
 	const char *cs;
+
+	if (!(lvname = strchr(lvname, '_')))
+		return NULL;
 
 	if ((cs = _lvname_has_reserved_component_string(lvname)))
 		return cs;
@@ -258,11 +264,14 @@ char *build_dm_uuid(struct dm_pool *mem, const struct logical_volume *lv,
 			lv_is_cache_pool_data(lv) ? "cdata" :
 			lv_is_cache_pool_metadata(lv) ? "cmeta" :
 			lv_is_cache_vol(lv) ? "cvol" :
-			// FIXME: dm-tree needs fixes for mirrors/raids
-			//lv_is_mirror_image(lv) ? "mimage" :
-			//lv_is_mirror_log(lv) ? "mlog" :
-			//lv_is_raid_image(lv) ? "rimage" :
-			//lv_is_raid_metadata(lv) ? "rmeta" :
+			((lv_is_mirror_image(lv) ||
+			  lv_is_mirror_log(lv) ||
+			  lv_is_integrity_origin(lv) ||
+			  lv_is_integrity_metadata(lv) ||
+			  lv_is_raid_image(lv) ||
+			  lv_is_raid_metadata(lv)) &&
+			 !lv_is_visible(lv)) ? "real" :
+			lv_is_pvmove(lv) ? "real" :
 			lv_is_thin_pool(lv) ? "pool" :
 			lv_is_thin_pool_data(lv) ? "tdata" :
 			lv_is_thin_pool_metadata(lv) ? "tmeta" :
@@ -270,6 +279,11 @@ char *build_dm_uuid(struct dm_pool *mem, const struct logical_volume *lv,
 			lv_is_vdo_pool_data(lv) ? "vdata" :
 			NULL;
 	}
+
+	/* Temporary mirror layer can be only recognized by checking its name.
+	 * LV appears as public LV for initial activation. */
+	if (!layer && strstr(lv->name, MIRROR_SYNC_LAYER "_"))
+		layer = "real";
 
 	if (!(dlid = dm_build_dm_uuid(mem, UUID_PREFIX, lvid, layer)))
 		log_error("Failed to build LVM dlid for %s.",
@@ -316,4 +330,22 @@ int drop_lvname_suffix(char *new_name, const char *name, const char *suffix)
 	*c = 0; /* remove suffix */
 
 	return 1;
+}
+
+void split_line(char *buf, int *argc, char **argv, int max_args, char sep)
+{
+	char *p = buf;
+	int i;
+
+	argv[0] = p;
+
+	for (i = 1; i < max_args; i++) {
+		p = strchr(p, sep);
+		if (!p)
+			break;
+		*p++ = '\0';
+
+		argv[i] = p;
+	}
+	*argc = i;
 }

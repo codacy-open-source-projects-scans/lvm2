@@ -17,7 +17,7 @@
 #include "lib/device/dev-type.h"
 #include "lib/mm/xlate.h"
 #include "lib/misc/crc.h"
-#include "lib/commands/toolcontext.h"
+
 #ifdef UDEV_SYNC_SUPPORT
 #include <libudev.h> /* for MD detection using udev db records */
 #include "lib/device/dev-ext-udev-constants.h"
@@ -36,7 +36,7 @@
 
 static int _dev_has_md_magic(struct device *dev, uint64_t sb_offset)
 {
-	uint32_t md_magic;
+	uint32_t md_magic = 0;
 
 	/* Version 1 is little endian; version 0.90.0 is machine endian */
 
@@ -45,7 +45,7 @@ static int _dev_has_md_magic(struct device *dev, uint64_t sb_offset)
 
 	if ((md_magic == MD_SB_MAGIC) ||
 	    /* coverity[result_independent_of_operands] */
-	     ((MD_SB_MAGIC != xlate32(MD_SB_MAGIC)) && (md_magic == xlate32(MD_SB_MAGIC))))
+	     ((MD_SB_MAGIC != htole32(MD_SB_MAGIC)) && (md_magic == htole32(MD_SB_MAGIC))))
 		return 1;
 
 	return 0;
@@ -103,14 +103,14 @@ static int _dev_has_ddf_magic(struct device *dev, uint64_t devsize_sectors, uint
 	if (!dev_read_bytes(dev, off, 512, &hdr))
 		return_0;
 
-	if ((hdr.magic == cpu_to_be32(DDF_MAGIC)) ||
-	    (hdr.magic == cpu_to_le32(DDF_MAGIC))) {
+	if ((hdr.magic == htobe32(DDF_MAGIC)) ||
+	    (hdr.magic == htole32(DDF_MAGIC))) {
 		crc = hdr.crc;
 		hdr.crc = 0xffffffff;
 		our_crc = calc_crc(0, (const uint8_t *)&hdr, 512);
 
-		if ((cpu_to_be32(our_crc) == crc) ||
-		    (cpu_to_le32(our_crc) == crc)) {
+		if ((htobe32(our_crc) == crc) ||
+		    (htole32(our_crc) == crc)) {
 			*sb_offset = off;
 			return 1;
 		} else {
@@ -126,14 +126,14 @@ static int _dev_has_ddf_magic(struct device *dev, uint64_t devsize_sectors, uint
 	if (!dev_read_bytes(dev, off, 512, &hdr))
 		return_0;
 
-	if ((hdr.magic == cpu_to_be32(DDF_MAGIC)) ||
-	    (hdr.magic == cpu_to_le32(DDF_MAGIC))) {
+	if ((hdr.magic == htobe32(DDF_MAGIC)) ||
+	    (hdr.magic == htole32(DDF_MAGIC))) {
 		crc = hdr.crc;
 		hdr.crc = 0xffffffff;
 		our_crc = calc_crc(0, (const uint8_t *)&hdr, 512);
 
-		if ((cpu_to_be32(our_crc) == crc) ||
-		    (cpu_to_le32(our_crc) == crc)) {
+		if ((htobe32(our_crc) == crc) ||
+		    (htole32(our_crc) == crc)) {
 			*sb_offset = off;
 			return 1;
 		} else {
@@ -353,11 +353,12 @@ static int _md_sysfs_attribute_scanf(struct dev_types *dt,
 				     const char *attribute_fmt,
 				     void *attribute_value)
 {
-	char path[PATH_MAX+1], buffer[MD_MAX_SYSFS_SIZE];
+	char path[PATH_MAX] = { 0 };
+	char buffer[MD_MAX_SYSFS_SIZE] = { 0 };
 	FILE *fp;
 	int ret = 0;
 
-	if (_md_sysfs_attribute_snprintf(path, PATH_MAX, dt,
+	if (_md_sysfs_attribute_snprintf(path, sizeof(path), dt,
 					 dev, attribute_name) < 0)
 		return ret;
 
@@ -379,7 +380,7 @@ static int _md_sysfs_attribute_scanf(struct dev_types *dt,
 
 out:
 	if (fclose(fp))
-		log_sys_error("fclose", path);
+		log_sys_debug("fclose", path);
 
 	return ret;
 }

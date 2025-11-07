@@ -67,6 +67,160 @@ do { \
 		syslog(LOG_WARNING, fmt, ##args); \
 } while (0)
 
+/*
+ * Like sscanf, but requires buffer size to be specified
+ * for storing scanned strings, e.g.
+ *
+ * szscanf("%s", sizeof(buf), buf);
+ *
+ * Up to size-1 input bytes will be copied into buf.
+ * A null byte will be written to buf following the
+ * last copied byte.  When nothing is copied to buf,
+ * no terminating null byte is written.
+ *
+ * If an input string matching %s is too long for the
+ * specified buffer size, the characters that would have
+ * been copied are ignored.
+ *
+ * Only recognizes: %d, %u, %s.
+ */
+static int szscanf(const char *input, const char *format, ...)
+{
+	va_list args;
+	const char *fm;
+	const char *in;
+	int matched = 0;
+	int n;
+
+	va_start(args, format);
+	fm = format;
+	in = input;
+
+	while (*fm != '\0') {
+
+		/*
+		 * format is a string containing:
+		 * 1. %d matching int from input
+		 *    %u matching unsigned int from input
+		 *    %s matching non-whitespace characters from input
+		 * 2. whitespace chars matching zero or more whitespace
+		 *    characters from input
+		 * 3. non-whitespace chars matching the same input chars
+		 */
+
+		if (*fm == '%') {
+			/*
+			 * case 1: %u, %d, or %s
+			 */
+
+			/* advance past '%' character, to look for 'u', 'd' or 's' */
+			fm++;
+
+			if (*fm == 'd') {
+				/*
+				 * read an int (%d)
+				 */
+				int *dest = va_arg(args, int *);
+
+				if (sscanf(in, "%d%n", dest, &n) == 1) {
+					in += n;
+					matched++;
+				} else {
+					/* matching failure: no input int */
+					break;
+				}
+
+			} else if (*fm == 'u') {
+				/*
+				 * read an unsigned int (%u)
+				 */
+				unsigned int *dest = va_arg(args, unsigned int *);
+
+				if (sscanf(in, "%u%n", dest, &n) == 1) {
+					in += n;
+					matched++;
+				} else {
+					/* matching failure: no input unsigned int */
+					break;
+				}
+
+			} else if (*fm == 's') {
+				/*
+				 * read a string (%s) into dest buffer with dest_size
+				 * copy up to dest_size-1 characters into dest buffer
+				 * write null byte into dest buffer following the last
+				 * character copied.  When dest_size-1 bytes are copied,
+				 * the null byte is written into the final byte of the
+				 * dest buffer.  input bytes that would have been copied
+				 * but did not fit in the dest buffer are skipped.
+				 */
+				size_t dest_size = va_arg(args, size_t);
+				char *dest = va_arg(args, char *);
+				char *out = dest;
+
+				/* don't copy leading input whitespace to dest */
+				while (isspace((unsigned char)*in))
+					in++;
+
+				/* copy non-whitespace characters from input to dest */
+				n = 0;
+				while (*in != '\0' && !isspace((unsigned char)*in) && (n < (int)dest_size-1)) {
+					*out = *in;
+					out++;
+					in++;
+					n++;
+				}
+				if (n) {
+					dest[n] = '\0';
+					matched++;
+				} else {
+					/* matching failure: no input string chars */
+					break;
+				}
+
+				/* ignore input bytes that would have been copied but didn't fit */
+				while (*in != '\0' && !isspace((unsigned char)*in))
+					in++;
+
+			} else {
+				/* unsupported format specifier */
+				matched = -1;
+				break;
+			}
+
+			/* advance past 'd', 'u', or 's' character */
+			fm++;
+
+		} else if (isspace((unsigned char)*fm)) {
+			/*
+			 * case 2: format whitespace skips zero or more input
+			 * whitespace characters
+			 */
+			while (isspace((unsigned char)*in))
+				in++;
+
+			/* advance past whitespace character */
+			fm++;
+
+		} else if (*fm == *in) {
+			/*
+			 * case 3: literal character match between format and input
+			 */
+			fm++;
+			in++;
+
+		} else {
+			/*
+			 * matching failure: format and input don't match
+			 */
+			break;
+		}
+	}
+
+	va_end(args);
+	return matched;
+}
+
 #define MAX_LINE 512
 
 /* copied from lvmlockd-internal.h */
@@ -97,8 +251,11 @@ static void save_client_info(char *line)
 	uint32_t client_id = 0;
 	char name[MAX_NAME+1] = { 0 };
 
-	(void) sscanf(line, "info=client pid=%u fd=%d pi=%d id=%u name=%s",
-	       &pid, &fd, &pi, &client_id, name);
+	/* info=client pid=%u fd=%d pi=%d id=%u name=%s */
+
+	if (szscanf(line, "info=client pid=%u fd=%d pi=%d id=%u name=%s",
+		    &pid, &fd, &pi, &client_id, sizeof(name), name) < 0)
+		return;
 
 	clients[num_clients].client_id = client_id;
 	clients[num_clients].pid = pid;
@@ -126,20 +283,26 @@ static void format_info_ls(char *line)
 	char ls_name[MAX_NAME+1] = { 0 };
 	char vg_name[MAX_NAME+1] = { 0 };
 	char vg_uuid[MAX_NAME+1] = { 0 };
-	char vg_sysid[MAX_NAME+1] = { 0 };
-	char lock_args[MAX_ARGS+1] = { 0 };
-	char lock_type[MAX_NAME+1] = { 0 };
+	char vg_args[MAX_ARGS+1] = { 0 };
+	char lm_type[MAX_NAME+1] = { 0 };
 
-	(void) sscanf(line, "info=ls ls_name=%s vg_name=%s vg_uuid=%s vg_sysid=%s vg_args=%s lm_type=%s",
-	       ls_name, vg_name, vg_uuid, vg_sysid, lock_args, lock_type);
+	/* info=ls ls_name=%s vg_name=%s vg_uuid=%s vg_args=%s lm_type=%s */
+
+	if (szscanf(line, "info=ls ls_name=%s vg_name=%s vg_uuid=%s vg_args=%s lm_type=%s",
+		    sizeof(ls_name), ls_name,
+		    sizeof(vg_name), vg_name,
+		    sizeof(vg_uuid), vg_uuid,
+		    sizeof(vg_args), vg_args,
+		    sizeof(lm_type), lm_type) < 0)
+		return;
 
 	if (!first_ls)
 		printf("\n");
 	first_ls = 0;
 
-	printf("VG %s lock_type=%s %s\n", vg_name, lock_type, vg_uuid);
+	printf("VG %s lock_type=%s %s\n", vg_name, lm_type, vg_uuid);
 
-	printf("LS %s %s\n", lock_type, ls_name);
+	printf("LS %s %s\n", lm_type, ls_name);
 }
 
 static void format_info_ls_action(char *line)
@@ -151,12 +314,48 @@ static void format_info_ls_action(char *line)
 	uint32_t pid = 0;
 	char cl_name[MAX_NAME+1] = { 0 };
 
-	(void) sscanf(line, "info=ls_action client_id=%u %s %s op=%s",
-	       &client_id, flags, version, op);
+	/* info=ls_action client_id=%u flags=%s version=%u op=%s rt=%s mode=%s lm_type=%s result=%d lm_rv=%d owner_host_id=%u owner_generation=%u */
+
+	if (szscanf(line, "info=ls_action client_id=%u flags=%s version=%s op=%s",
+		    &client_id,
+		    sizeof(flags), flags,
+		    sizeof(version), version,
+		    sizeof(op), op) < 0)
+		return;
 
 	find_client_info(client_id, &pid, cl_name);
 
 	printf("OP %s pid %u (%s)\n", op, pid, cl_name);
+}
+
+static void format_info_ls_fence_history(char *line)
+{
+	char op[MAX_NAME+1] = { 0 };
+	int result = 0;
+	uint32_t msg_id = 0;
+	uint32_t owner_host_id = 0;
+	uint32_t owner_generation = 0;
+	char ourkey_str[MAX_NAME+1] = { 0 };
+	char remkey_str[MAX_NAME+1] = { 0 };
+
+	/* info=ls_fence_history op=%s result=%d msg_id=%u owner_host_id=%u owner_generation=%u ourkey=0x%llx remkey=0x%llx */
+
+	if (szscanf(line, "info=ls_fence_history op=%s result=%d msg_id=%u owner_host_id=%u owner_generation=%u ourkey=%s remkey=%s",
+		    sizeof(op), op,
+		    &result,
+		    &msg_id,
+		    &owner_host_id,
+		    &owner_generation,
+		    sizeof(ourkey_str), ourkey_str,
+		    sizeof(remkey_str), remkey_str) < 0)
+		return;
+
+	if (!strcmp(op, "fence_result"))
+		printf("PR host_id %u generation %u key %s %s\n",
+			owner_host_id, owner_generation, remkey_str, result == 0 ? "removed" : "failed");
+	else if (!strcmp(op, "fence"))
+		printf("PR host_id %u generation %u key %s waiting\n",
+			owner_host_id, owner_generation, remkey_str);
 }
 
 static void format_info_r(char *line, char *r_name_out, char *r_type_out)
@@ -164,11 +363,18 @@ static void format_info_r(char *line, char *r_name_out, char *r_type_out)
 	char r_name[MAX_NAME+1] = { 0 };
 	char r_type[4] = { 0 };
 	char mode[4] = { 0 };
-	char sh_count[MAX_NAME+1] = { 0 };
-	uint32_t ver = 0;
+	int sh_count = 0;
+	unsigned int ver = 0;
 
-	(void) sscanf(line, "info=r name=%s type=%s mode=%s %s version=%u",
-	       r_name, r_type, mode, sh_count, &ver);
+	/* info=r name=%s type=%s mode=%s sh_count=%d version=%s */
+
+	if (szscanf(line, "info=r name=%s type=%s mode=%s sh_count=%d version=%u",
+		    sizeof(r_name), r_name,
+		    sizeof(r_type), r_type,
+		    sizeof(mode), mode,
+		    &sh_count,
+		    &ver) < 0)
+		return;
 
 	strcpy(r_name_out, r_name);
 	strcpy(r_type_out, r_type);
@@ -193,8 +399,8 @@ static void format_info_r(char *line, char *r_name_out, char *r_type_out)
 static void format_info_lk(char *line, char *r_name, char *r_type)
 {
 	char mode[4] = { 0 };
-	uint32_t ver = 0;
 	char flags[MAX_NAME+1] = { 0 };
+	uint32_t ver = 0;
 	uint32_t client_id = 0;
 	uint32_t pid = 0;
 	char cl_name[MAX_NAME+1] = { 0 };
@@ -205,8 +411,14 @@ static void format_info_lk(char *line, char *r_name, char *r_type)
 		return;
 	}
 
-	(void) sscanf(line, "info=lk mode=%s version=%u %s client_id=%u",
-	       mode, &ver, flags, &client_id);
+	/* info=lk mode=%s version=%s flags=%s client_id=%u */
+
+	if (szscanf(line, "info=lk mode=%s version=%u flags=%s client_id=%u",
+		    sizeof(mode), mode,
+		    &ver,
+		    sizeof(flags), flags,
+		    &client_id) < 0)
+		return;
 
 	find_client_info(client_id, &pid, cl_name);
 
@@ -229,9 +441,9 @@ static void format_info_r_action(char *line, char *r_name, char *r_type)
 	char op[MAX_NAME+1] = { 0 };
 	char rt[4] = { 0 };
 	char mode[4] = { 0 };
-	char lm[MAX_NAME+1] = { 0 };
-	char result[MAX_NAME+1] = { 0 };
-	char lm_rv[MAX_NAME+1] = { 0 };
+	char lm_type[MAX_NAME+1] = { 0 };
+	int result = 0;
+	int lm_rv = 0;
 	uint32_t pid = 0;
 	char cl_name[MAX_NAME+1] = { 0 };
 
@@ -241,8 +453,19 @@ static void format_info_r_action(char *line, char *r_name, char *r_type)
 		return;
 	}
 
-	(void) sscanf(line, "info=r_action client_id=%u %s %s op=%s rt=%s mode=%s %s %s %s",
-	       &client_id, flags, version, op, rt, mode, lm, result, lm_rv);
+	/* info=r_action client_id=%u flags=%s version=%s op=%s rt=%s mode=%s lm_type=%s result=%d lm_rv=%d owner_host_id=%u owner_generation=%u */
+
+	if (szscanf(line, "info=r_action client_id=%u flags=%s version=%s op=%s rt=%s mode=%s lm_type=%s result=%d lm_rv=%d",
+		     &client_id,
+		     sizeof(flags), flags,
+		     sizeof(version), version,
+		     sizeof(op), op,
+		     sizeof(rt), rt,
+		     sizeof(mode), mode,
+		     sizeof(lm_type), lm_type,
+		     &result,
+		     &lm_rv) < 0)
+		return;
 
 	find_client_info(client_id, &pid, cl_name);
 
@@ -262,6 +485,62 @@ static void format_info_r_action(char *line, char *r_name, char *r_type)
 	}
 }
 
+static void format_info_r_fence_wait_action(char *line, char *r_name, char *r_type)
+{
+	uint32_t client_id = 0;
+	char flags[MAX_NAME+1] = { 0 };
+	char version[MAX_NAME+1] = { 0 };
+	char op[MAX_NAME+1] = { 0 };
+	char rt[4] = { 0 };
+	char mode[4] = { 0 };
+	char lm_type[MAX_NAME+1] = { 0 };
+	int result = 0;
+	int lm_rv = 0;
+	uint32_t owner_host_id = 0;
+	uint32_t owner_generation = 0;
+	uint32_t pid = 0;
+	char cl_name[MAX_NAME+1] = { 0 };
+
+	if (!r_name[0] || !r_type[0]) {
+		printf("format_info_r_fence_wait_action error r_name %s r_type %s\n", r_name, r_type);
+		printf("%s\n", line);
+		return;
+	}
+
+	/* info=r_fence_wait_action client_id=%u flags=%s version=%s op=%s rt=%s mode=%s lm_type=%s result=%d lm_rv=%d owner_host_id=%u owner_generation=%u */
+
+	if (szscanf(line, "info=r_fence_wait_action client_id=%u flags=%s version=%s op=%s rt=%s mode=%s lm_type=%s result=%d lm_rv=%d owner_host_id=%u owner_generation=%u",
+		     &client_id,
+		     sizeof(flags), flags,
+		     sizeof(version), version,
+		     sizeof(op), op,
+		     sizeof(rt), rt,
+		     sizeof(mode), mode,
+		     sizeof(lm_type), lm_type,
+		     &result,
+		     &lm_rv,
+		     &owner_host_id,
+		     &owner_generation) < 0)
+		return;
+
+	find_client_info(client_id, &pid, cl_name);
+
+	if (strcmp(op, "lock")) {
+		printf("OP %s pid %u (%s)\n", op, pid, cl_name);
+		return;
+	}
+
+	if (!strcmp(r_type, "gl")) {
+		printf("LW GL %s ver %u pid %u (%s) fence_owner %u.%u\n", mode, 0, pid, cl_name, owner_host_id, owner_generation);
+
+	} else if (!strcmp(r_type, "vg")) {
+		printf("LW VG %s ver %u pid %u (%s) fence_owner %u.%u\n", mode, 0, pid, cl_name, owner_host_id, owner_generation);
+
+	} else if (!strcmp(r_type, "lv")) {
+		printf("LW LV %s %s fence_owner %u.%u\n", mode, r_name, owner_host_id, owner_generation);
+	}
+}
+
 static void format_info_line(char *line, char *r_name, char *r_type)
 {
 	if (!strncmp(line, "info=structs ", sizeof("info=structs ") - 1)) {
@@ -275,6 +554,9 @@ static void format_info_line(char *line, char *r_name, char *r_type)
 
 	} else if (!strncmp(line, "info=ls_action ", sizeof("info=ls_action ") - 1)) {
 		format_info_ls_action(line);
+
+	} else if (!strncmp(line, "info=ls_fence_history ", sizeof("info=ls_fence_history ") - 1)) {
+		format_info_ls_fence_history(line);
 
 	} else if (!strncmp(line, "info=r ", sizeof("info=r ") - 1)) {
 		/*
@@ -293,6 +575,11 @@ static void format_info_line(char *line, char *r_name, char *r_type)
 	} else if (!strncmp(line, "info=r_action ", sizeof("info=r_action ") - 1)) {
 		/* will use info from previous r */
 		format_info_r_action(line, r_name, r_type);
+
+	} else if (!strncmp(line, "info=r_fence_wait_action ", sizeof("info=r_fence_wait_action ") - 1)) {
+		/* will use info from previous r */
+		format_info_r_fence_wait_action(line, r_name, r_type);
+
 	} else {
 		printf("UN %s\n", line);
 	}

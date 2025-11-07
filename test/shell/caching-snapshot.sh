@@ -12,9 +12,8 @@
 
 # Test snapshot on cache|writecache
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 lvm segtypes 2>/dev/null | grep writecache$ >/dev/null || {
 	skip 'Writecache is not built-in.'
@@ -59,7 +58,7 @@ test_snap_create() {
 		# For cachevol ensure -cmeta will have 1 line
 		dm_table $vg-fast_cvol-cmeta | tee out
 		test "$(wc -l < out)" = 1 || {
-			die "More then 1 table line for -cmeta device"
+			die "More than 1 table line for -cmeta device"
 		}
 	fi
 	cp pattern1 "$mount_dir/pattern1b"

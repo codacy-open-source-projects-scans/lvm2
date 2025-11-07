@@ -47,7 +47,18 @@ typedef enum {
 } action_t;
 
 /* This list must match lib/misc/lvm-string.c:build_dm_uuid(). */
-static const char * const _uuid_suffix_list[] = { "pool", "cdata", "cmeta", "cvol", "tdata", "tmeta", "vdata", "vpool", "imeta", NULL};
+static const char * const _uuid_suffix_list[] = {
+	"cdata",
+	"cmeta",
+	"cvol",
+	"imeta",
+	"pool",
+	"tdata",
+	"tmeta",
+	"vdata",
+	"vpool",
+	NULL
+};
 
 struct dlid_list {
 	struct dm_list list;
@@ -690,7 +701,7 @@ static int _ignore_frozen_raid(struct device *dev, const char *params)
 
 static int _is_usable_uuid(const struct device *dev, const char *name, const char *uuid, int check_reserved, int check_lv, int *is_lv)
 {
-	char *vgname, *lvname, *layer;
+	char *vgname = NULL, *lvname = NULL, *layer = NULL;
 	char vg_name[NAME_LEN];
 
 	if (!check_reserved && !check_lv)
@@ -902,7 +913,7 @@ int devno_dm_uuid(struct cmd_context *cmd, int major, int minor,
 	const char *uuid;
 	int r = 0;
 
-	if (major != cmd->dev_types->device_mapper_major)
+	if (major != (int) cmd->dev_types->device_mapper_major)
 		return 0;
 
 	if (dm_devs_cache_use()) {
@@ -2014,7 +2025,7 @@ int dev_manager_thin_device_id(struct dev_manager *dm,
 
 	if (dm_get_next_target(dmt, NULL, &start, &length,
 			       &target_type, &params)) {
-		log_error("More then one table line found for %s.",
+		log_error("More than one table line found for %s.",
 			  display_lvname(lv));
 		goto out;
 	}
@@ -2067,7 +2078,7 @@ int dev_manager_vdo_pool_status(struct dev_manager *dm,
 			     display_lvname(lv));
 
 	if (dm_get_next_target(dmt, NULL, &start, &length, &type, &params)) {
-		log_error("More then one table line found for %s.",
+		log_error("More than one table line found for %s.",
 			  display_lvname(lv));
 		goto out;
 	}
@@ -2121,7 +2132,7 @@ int dev_manager_vdo_pool_size_config(struct dev_manager *dm,
 			     display_lvname(lv));
 
 	if (dm_get_next_target(dmt, NULL, &start, &length, &type, &params)) {
-		log_error("More then one table line found for %s.",
+		log_error("More than one table line found for %s.",
 			  display_lvname(lv));
 		goto out;
 	}
@@ -2773,9 +2784,10 @@ static int _add_cvol_subdev_to_dtree(struct dev_manager *dm, struct dm_tree *dtr
 	const struct logical_volume *pool_lv = lvseg->pool_lv;
 	struct dm_info info;
 	char *name ,*dlid;
-	union lvid lvid = { { lv->vg->id, _get_id_for_meta_or_data(lvseg, meta_or_data) } };
+	union lvid lvid = { .id = { lv->vg->id, _get_id_for_meta_or_data(lvseg, meta_or_data) } };
+	lvid.s[sizeof(lvid.id)] = 0;
 
-	if (!(dlid = dm_build_dm_uuid(mem, UUID_PREFIX, (const char *)&lvid.s, layer)))
+	if (!(dlid = dm_build_dm_uuid(mem, UUID_PREFIX, lvid.s, layer)))
 		return_0;
 
 	/* Name is actually not really needed here, but aids debugging... */
@@ -3020,6 +3032,11 @@ static int _add_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 	return 1;
 }
 
+static void _set_optional_uuid_suffixes(struct dm_tree *dtree)
+{
+	dm_tree_set_optional_uuid_suffixes(dtree, (const char**)_uuid_suffix_list);
+}
+
 static struct dm_tree *_create_partial_dtree(struct dev_manager *dm, const struct logical_volume *lv, int origin_only)
 {
 	struct dm_tree *dtree;
@@ -3030,7 +3047,7 @@ static struct dm_tree *_create_partial_dtree(struct dev_manager *dm, const struc
 		return NULL;
 	}
 
-	dm_tree_set_optional_uuid_suffixes(dtree, (const char**)_uuid_suffix_list);
+	_set_optional_uuid_suffixes(dtree);
 
 	if (!_add_lv_to_dtree(dm, dtree, lv, (lv_is_origin(lv) || lv_is_thin_volume(lv) || lv_is_thin_pool(lv)) ? origin_only : 0))
 		goto_bad;
@@ -3426,9 +3443,10 @@ static int _add_new_cvol_subdev_to_dtree(struct dev_manager *dm,
 	const struct logical_volume *pool_lv = lvseg->pool_lv;
 	struct dm_tree_node *dnode;
 	char *dlid, *dlid_pool, *name;
-	union lvid lvid = { { lv->vg->id, _get_id_for_meta_or_data(lvseg, meta_or_data) } };
+	union lvid lvid = { .id = { lv->vg->id, _get_id_for_meta_or_data(lvseg, meta_or_data) } };
+	lvid.s[sizeof(lvid.id)] = 0;
 
-	if (!(dlid = dm_build_dm_uuid(dm->mem, UUID_PREFIX, (const char *)&lvid.s, layer)))
+	if (!(dlid = dm_build_dm_uuid(dm->mem, UUID_PREFIX, lvid.s, layer)))
 		return_0;
 
 	if (!(name = dm_build_dm_name(dm->mem, lv->vg->name, pool_lv->name, layer)))
@@ -3560,6 +3578,70 @@ static int _add_segment_to_dtree(struct dev_manager *dm,
 	return 1;
 }
 
+/*
+ * Check if a visible LV is active but still uses a private "-real" UUID suffix.
+ *
+ * This situation occurs during certain operations like RAID leg splits,
+ * where an LV transitions from being an internal component (with "-real" suffix)
+ * to a public LV, but the device mapper device retains the old private UUID.
+ *
+ * This function detects such inconsistencies by:
+ * 1. Constructing a potential "-real" suffixed UUID for the given LV
+ * 2. Searching for an active device with that UUID but without "-real" in its name
+ * 3. If found, updating UUID parameter to use the private UUID
+ *
+ * Note: Such LVs should be deactivated and reactivated to use the correct public UUID.
+ */
+static int _lv_adjust_real_uuid(struct dev_manager *dm,	struct dm_tree *dtree,
+				const struct logical_volume *lv,
+				char **dlid)
+{
+	struct dm_tree_node *dnode;
+	const struct dm_info *dinfo;
+	const char *s;
+	char *uuid;
+
+	/* Only check visible LVs that are neither origin nor snapshot */
+	if (!lv_is_visible(lv) ||
+	    lv_is_origin(lv) ||
+	    lv_is_external_origin(lv) ||
+	    lv_is_integrity_origin(lv) ||
+	    lv_is_cow(lv))
+		return 1;
+
+	/* Currently only a few LV types can be RAID/mirror orphans, for example:
+	 * legs cannot be cached, however old mirror log can be mirrored */
+	if (!lv_is_linear(lv) &&
+	    !lv_is_striped(lv) &&
+	    !lv_is_mirrored(lv) &&
+	    !lv_is_error(lv) &&
+	    !lv_is_zero(lv))
+		return 1;
+
+	if (!(uuid = build_dm_uuid(dm->mem, lv, "real")))
+		return_0;
+
+	/* Temporarily disable suffix masking. Exact match is required. */
+	dm_tree_set_optional_uuid_suffixes(dtree, NULL);
+
+	if ((dnode = dm_tree_find_node_by_uuid(dtree, uuid)) &&
+	    (dinfo = dm_tree_node_get_info(dnode)) && dinfo->exists) {
+		s = strstr(dm_tree_node_get_name(dnode), "-real");
+		/* Ignore devices whose names end with "-real" suffix */
+		if (!s || s[5]) {
+			log_debug("Adjusting UUID to %s for LV %s active as %s.",
+				  uuid, display_lvname(lv),
+				  dm_tree_node_get_name(dnode));
+			*dlid = uuid;
+		}
+	}
+
+	/* Restore suffix handling. */
+	_set_optional_uuid_suffixes(dtree);
+
+	return 1;
+}
+
 static int _add_new_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 				const struct logical_volume *lv, struct lv_activate_opts *laopts,
 				const char *layer)
@@ -3684,6 +3766,9 @@ static int _add_new_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 	    dm_tree_node_get_context(dnode))
 		return 1;
 
+	/* Use UUID with -real private suffix for such active LV. */
+	if (!layer && !_lv_adjust_real_uuid(dm, dtree, lv, &dlid))
+		return_0;
 	/*
 	 * Add LV to dtree.
 	 * If we're working with precommitted metadata, clear any
@@ -4167,7 +4252,7 @@ int dev_manager_device_uses_vg(struct device *dev,
 		return r;
 	}
 
-	dm_tree_set_optional_uuid_suffixes(dtree, (const char**)_uuid_suffix_list);
+	_set_optional_uuid_suffixes(dtree);
 
 	if (!dm_tree_add_dev(dtree, MAJOR(dev->dev), MINOR(dev->dev))) {
 		log_error("Failed to add device %s (%u:%u) to dtree.",

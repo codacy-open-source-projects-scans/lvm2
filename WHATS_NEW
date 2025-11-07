@@ -1,5 +1,136 @@
-Version 2.03.28 - 
+Version 2.03.37 - 
 ==================
+  Add missing synchronization while converting cachevols.
+  Warn on classic snapshot on raid creation and error on activation + test.
+  Translate udev device paths in lvmdbusd for test environments.
+  Use source='udev' in lvmdbusd to monitor processed udev events.
+  Symlink to /dev nodes when using alternative dev dir to trigger udev.
+  Avoid passing uninitilized buffer in dmeventd to fix valgrind report.
+  Improve lvmdbusd matching of udevd reported device paths.
+
+Version 2.03.36 - 24th October 2025
+===================================
+  Fix uninitialized chunk_size_calc_policy in pool parameter functions.
+  Fix approximate allocation for Raid with insufficient extents.
+  Fix race in dmeventd remonitoring optimization (2.03.35).
+  Use -real suffix for pvmove UUID.
+  Add support pvmove segmentation allocation/pvmove_max_segmentation_size_mb.
+  Allow creating _imeta with multiple segments.
+  Fix driver_version() accepts NULL version buffer pointer.
+  Fix invalid free() call in error path of _add_metadata_area_to_pv().
+  Avoid destroying aio context in forked process.
+  Add lvs -o cache_promotions,cache_promotions fields.
+  Update pvmove logic when moving i.e. raid legs.
+  Display integrity info in lvdisplay.
+  Increase storage size for internal filter chain.
+  Add helper function display_mb_size().
+  Enhance code for adding and removing integrity to RAID volumes.
+  Add code for basic validation of integrity segment.
+  Use -real private suffix for integrity origin and meta volumes.
+  Use -real private suffix for mirror and raid legs.
+  Detect and use existing XFS quota mount options for lvresize --fs resize.
+
+Version 2.03.35 - 09th September 2025
+=====================================
+  Fix unlocking devices file only after all PVs are processed.
+  Avoid creating system.devices when deleting entries.
+  Fix existing issues with persistent reservations.
+  Fix possible report output format inconsistencies while processing PVs.
+  Allow report options for pv/vg/lvdisplay only if used with -C|--columns.
+  Fix vgsplit failing to split a VG with RAID+integrity or cache with cachevol.
+  Fix --lockopt handling in lvmlockd when --nolocking is used.
+  Optimize dmeventd when remonitoring active devices.
+
+Version 2.03.34 - 30th July 2025
+================================
+  Support dmeventd restart when there are no monitored devices.
+  Dmeventd no longer calls 'action commands' on removed devices.
+  Fix reader of VDO metadata on 32bit architecture.
+  Fix lvmdevices --deldev/--delpvid to error out if devices file not writeable.
+  Fix lvresize corruption in LV->crypt->FS stack if near crypt min size limit.
+  Enhanced lvresize -r support for btrfs.
+  Use glibc standard functions htoX, Xtoh functions for endian conversion.
+  Fix structure copying within sanlock's release_rename().
+  Fix autoactivation on top of loop dev PVs to trigger once for change uevents.
+  Add lvmlockd --lockopt repair to reinitialize corrupted sanlock leases.
+  Fix support for lvcreate -T --setautoactivation.
+  Add lvm.conf global/lvresize_fs_helper_executable.
+  Enable lvm to use persistent reservations on a VG.
+
+Version 2.03.33 - 27th June 2025
+================================
+  Various spelling, grammar, formatting, test, and build script improvements.
+  Override LC_NUMERIC locale if unsuitable for json_std report format.
+  Repair raid arrays with transiently lost devices.
+
+Version 2.03.32 - 05th May 2025
+===============================
+  Lvconvert vdopool conversion properly validates acceptable LVs.
+  Accept thin pool data LV as cacheable LV.
+  Allow using zram block devices (likely for testing).
+  Fix lvresize when resizing COW snapshots already covering origin.
+  Fix lvmdbusd read of executed lvm commands output.
+  Fix construction of DM UUID for cachevol _cdata and _cmeta devices.
+  Ignore PV claims from old metadata when then PV belongs to a new VG.
+  Fix integrity metadata rounding.
+  Accept --autobackup option in pvresize.
+
+Version 2.03.31 - 27th February 2025
+====================================
+  Reduce 'mandoc -T lint' reported issues for man pages.
+  Restore support for LVM_SUPPRESS_FD_WARNINGS (2.03.24).
+  Fix uncache and split cache restoring original state of volume.
+  Extend use of lockopt skip to more scenarios.
+  Enhance error path resolving in polling code.
+  Disallow shared activation of LV with CoW snapshot.
+  Fix lvmlockd use in lvremove of CoW snapshot, VDO pool, and uncache.
+  Improve mirror split with opened temporary volumes.
+  Improve pvmove finish with opened temporary volumes.
+  Fix backup limit for devices file, handle over 10,000 files.
+  Ignore reported optimal_io_size not divisible by 4096.
+  Fix busy-loop in config reading when read returned 0.
+  Fix DM cache preserving logic (2.03.28).
+  Improve use of lvmlockd for usecases involving thin volumes and pools.
+
+Version 2.03.30 - 14th January 2025
+===================================
+  Lvresize reports origin vdo volume cannot be resized.
+  Support setting reserved_memory|stack of --config cmdline.
+  Fix support for disabling memory locking (2.03.27).
+  Do not extend an LV if FS resize unsupported and '--fs resize' used.
+  Prevent leftover temporary device when converting in use volume to a pool.
+  lvconvert detects early volume in use when converting it to a pool.
+  Handle NVMe with quirk changed WWID not matching WWID in devices file.
+
+Version 2.03.29 - 09th December 2024
+====================================
+  Configure --enable/disable-sd-notify to control lvmlockd build with sd-notify.
+  Allow test mode when lvmlockd is built without dlm support.
+  Add a note about RAID + integrity synchronization to lvmraid(7) man page.
+  Add a function for running lvconvert --repair on RAID LVs to lvmdbusd.
+  Improve option section of man pages for listing commands ({pv,lv,vg}{s,display}).
+  Fix renaming of raid sub LVs when converting a volume to raid (2.03.28).
+  Fix segfault/VG write error for raid LV lvextend -i|--stripes -I|--stripesize.
+  Revert ignore -i|--stripes, -I|--stripesize for lvextend on raid0 LV (2.03.27).
+
+Version 2.03.28 - 04th November 2024
+====================================
+  Use radix_tree to lookup for UUID within committed metadata.
+  Use radix_tree to lookup LV list entry within VG struct.
+  Introduce setting config/validate_metadata = full | none.
+  Restore fs resize call for lvresize -r on the same size LV (2.03.17).
+  Correct off-by-one devicesfile backup counting.
+  Replace use of dm_hash with radix_tree for lv names and uuids.
+  Refactor vg_validate with uniq_insert and better use of CPU caches.
+  Add radix_tree_uniq_insert.
+  Update DM cache when taking next VG lock instead of dropping it.
+  Generate json string id only for json reporting.
+  For vgsummary use new API call dm_config_parse_only_section().
+  Use radix_tree for PV names mapping.
+  Split check_lv_segment into separate _in/complete_vg variant.
+  Use find_lv instead of find_lv_in_vg when possible.
+  Do a mirror fixup only when mirrors with logs are imported.
+  Add faster crc32 calculation from zlib code for x86_64.
   Fall back to direct zeroing if BLKZEROOUT fails during new LV initialization.
 
 Version 2.03.27 - 02nd October 2024
@@ -158,6 +289,7 @@ Version 2.03.17 - 10th November 2022
   Switch to use mallinfo2 and use it only with glibc.
   Error out in lvm shell if using a cmd argument not supported in the shell.
   Fix lvm shell's lastlog command to report previous pre-command failures.
+  Keep libaio locked in memory in critical section.
   Extend VDO and VDOPOOL without flushing and locking fs.
   Add --valuesonly option to lvmconfig to print only values without keys.
   Updates configure with recent autoconf tooling.

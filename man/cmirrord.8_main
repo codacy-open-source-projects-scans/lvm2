@@ -1,4 +1,18 @@
-.TH CMIRRORD 8 "LVM TOOLS #VERSION#" "Red Hat Inc" \" -*- nroff -*-
+.TH CMIRRORD 8 "LVM TOOLS #VERSION#" "Red Hat, Inc." \" -*- nroff -*-
+.
+.de NSY
+.  ie t .SY \\$1
+.  el \{\
+.    ie \\n(.$>1 \{\
+.      PD 0
+.      TP \\w'\\$1\ 'u
+.    \}
+.    el .TP
+.    B \\$1
+.    nh
+.    na
+.  \}
+..
 .
 .SH NAME
 .
@@ -6,9 +20,13 @@ cmirrord \(em cluster mirror log daemon
 .
 .SH SYNOPSIS
 .
-.B cmirrord
+.NSY cmirrord 1
 .RB [ -f | --foreground ]
 .RB [ -h | --help ]
+.
+.PD
+.ad
+.hy
 .
 .SH DESCRIPTION
 .
@@ -17,7 +35,7 @@ It is specific to device-mapper based mirrors (and by extension, LVM
 cluster mirrors).  Cluster mirrors are not possible without this daemon
 running.
 .P
-This daemon relies on the cluster infrastructure provided by the corosync,
+This daemon relies on the cluster infrastructure provided by corosync,
 which must be set up and running in order for cmirrord to function.
 .P
 Output is logged via \fBsyslog\fP(3). The \fBSIGUSR1 signal\fP(7) can be
@@ -34,13 +52,17 @@ mirror log daemon.
 .TP
 .BR -f | --foreground
 Do not fork and log to the terminal.
+.
 .TP
 .BR -h | --help
 Print usage.
 .
 .SH SEE ALSO
 .
+.nh
+.na
 .BR lvmlockd (8),
 .BR lvm (8),
+.P
 .BR syslog (3),
 .BR signal (7)

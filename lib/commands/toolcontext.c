@@ -82,7 +82,7 @@ const char *system_id_from_string(struct cmd_context *cmd, const char *str)
 	}
 
 	if (!strncmp(system_id, "localhost", 9)) {
-		log_warn("WARNING: system ID may not begin with the string \"localhost\".");
+		log_warn("WARNING: System ID may not begin with the string \"localhost\".");
 		return NULL;
 	}
 
@@ -658,7 +658,7 @@ static int _process_config(struct cmd_context *cmd)
 {
 	mode_t old_umask;
 	const char *dev_ext_info_src = NULL;
-	const char *read_ahead;
+	const char *read_ahead, *validate_metadata;
 	struct stat st;
 	const struct dm_config_node *cn;
 	const struct dm_config_value *cv;
@@ -696,7 +696,7 @@ static int _process_config(struct cmd_context *cmd)
 	if (dev_ext_info_src &&
 	    strcmp(dev_ext_info_src, "none") &&
 	    strcmp(dev_ext_info_src, "udev")) {
-		log_warn("WARNING: unknown external device info source, using none.");
+		log_warn("WARNING: Unknown external device info source, using none.");
 		dev_ext_info_src = NULL;
 	}
 
@@ -704,7 +704,7 @@ static int _process_config(struct cmd_context *cmd)
 		if (udev_init_library_context()) {
 			init_external_device_info_source(DEV_EXT_UDEV);
 		} else {
-			log_warn("WARNING: failed to init udev for external device info, using none.");
+			log_warn("WARNING: Failed to init udev for external device info, using none.");
 			dev_ext_info_src = NULL;
 		}
 	}
@@ -720,7 +720,7 @@ static int _process_config(struct cmd_context *cmd)
 	}
 
 	if (*cmd->proc_dir && !dir_exists(cmd->proc_dir)) {
-		log_warn("WARNING: proc dir %s not found - some checks will be bypassed",
+		log_warn("WARNING: proc dir %s not found - some checks will be bypassed.",
 			 cmd->proc_dir);
 		cmd->proc_dir[0] = '\0';
 	}
@@ -742,6 +742,15 @@ static int _process_config(struct cmd_context *cmd)
 	else {
 		log_error("Invalid readahead specification");
 		return 0;
+	}
+
+	cmd->vg_write_validates_vg = 1;
+	if ((validate_metadata = find_config_tree_str(cmd, config_validate_metadata_CFG, NULL))) {
+		if (!strcasecmp(validate_metadata, "none"))
+			cmd->vg_write_validates_vg = 0;
+		else if (strcasecmp(validate_metadata, "full"))
+			log_warn("WARNING: Ignoring unknown validate_metadata setting: %s.",
+				 validate_metadata);
 	}
 
 	/*
@@ -784,13 +793,13 @@ static int _process_config(struct cmd_context *cmd)
 	else if (strcmp(cmd->stripe_filler, "error") &&
 		 strcmp(cmd->stripe_filler, "zero")) {
 		if (stat(cmd->stripe_filler, &st)) {
-			log_warn("WARNING: activation/missing_stripe_filler = \"%s\" "
+			log_warn("WARNING: activation/missing_stripe_filler = \"%s\"."
 				 "is invalid,", cmd->stripe_filler);
 			log_warn("         stat failed: %s", strerror(errno));
 			log_warn("Falling back to \"error\" missing_stripe_filler.");
 			cmd->stripe_filler = "error";
 		} else if (!S_ISBLK(st.st_mode)) {
-			log_warn("WARNING: activation/missing_stripe_filler = \"%s\" "
+			log_warn("WARNING: activation/missing_stripe_filler = \"%s\"."
 				 "is not a block device.", cmd->stripe_filler);
 			log_warn("Falling back to \"error\" missing_stripe_filler.");
 			cmd->stripe_filler = "error";
@@ -1177,7 +1186,7 @@ static int _init_dev_cache(struct cmd_context *cmd)
 	return 1;
 }
 
-#define MAX_FILTERS 10
+#define MAX_FILTERS 20
 
 static struct dev_filter *_init_filter_chain(struct cmd_context *cmd)
 {
@@ -1428,8 +1437,8 @@ static int _init_segtypes(struct cmd_context *cmd)
 	struct segment_type *segtype;
 	struct segtype_library seglib = { .cmd = cmd, .lib = NULL };
 	struct segment_type *(*init_segtype_array[])(struct cmd_context *cmd) = {
-		init_linear_segtype,
 		init_striped_segtype,
+		init_linear_segtype,
 		init_zero_segtype,
 		init_error_segtype,
 		/* disabled until needed init_free_segtype, */

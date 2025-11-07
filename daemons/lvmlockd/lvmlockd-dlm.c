@@ -13,7 +13,7 @@
 
 #include "tools/tool.h"
 
-#include "daemon-server.h"
+#include "libdaemon/server/daemon-server.h"
 #include "lib/mm/xlate.h"
 
 #include "lvmlockd-internal.h"
@@ -31,7 +31,6 @@
 #include <errno.h>
 #include <endian.h>
 #include <fcntl.h>
-#include <byteswap.h>
 #include <syslog.h>
 #include <dirent.h>
 
@@ -77,7 +76,7 @@ static int check_args_version(char *vg_args)
 	unsigned int major = 0;
 	int rv;
 
-	rv = version_from_args(vg_args, &major, NULL, NULL);
+	rv = lockd_lockargs_get_version(vg_args, &major, NULL, NULL);
 	if (rv < 0) {
 		log_error("check_args_version %s error %d", vg_args, rv);
 		return rv;
@@ -169,8 +168,10 @@ int lm_prepare_lockspace_dlm(struct lockspace *ls)
 	struct lm_dlm *lmd;
 	int rv;
 
-	if (daemon_test)
+	if (daemon_test) {
+		log_debug("lm_prepare_lockspace_dlm test");
 		goto skip_args;
+	}
 
 	memset(sys_clustername, 0, sizeof(sys_clustername));
 	memset(arg_clustername, 0, sizeof(arg_clustername));
@@ -361,7 +362,7 @@ int lm_rem_lockspace_dlm(struct lockspace *ls, int free_vg)
 	return 0;
 }
 
-static int lm_add_resource_dlm(struct lockspace *ls, struct resource *r, int with_lock_nl)
+int lm_add_resource_dlm(struct lockspace *ls, struct resource *r, int with_lock_nl)
 {
 	struct lm_dlm *lmd = (struct lm_dlm *)ls->lm_data;
 	struct rd_dlm *rdd = (struct rd_dlm *)r->lm_data;
@@ -582,9 +583,9 @@ int lm_lock_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 
 	if (daemon_test) {
 		if (rdd->vb) {
-			vb_out->version = le16_to_cpu(rdd->vb->version);
-			vb_out->flags = le16_to_cpu(rdd->vb->flags);
-			vb_out->r_version = le32_to_cpu(rdd->vb->r_version);
+			vb_out->version = le16toh(rdd->vb->version);
+			vb_out->flags = le16toh(rdd->vb->flags);
+			vb_out->r_version = le32toh(rdd->vb->r_version);
 		}
 		return 0;
 	}
@@ -636,9 +637,9 @@ lockrv:
 		memcpy(&vb, lksb->sb_lvbptr, sizeof(struct val_blk));
 		memcpy(rdd->vb, &vb, sizeof(vb));
 
-		vb_out->version = le16_to_cpu(vb.version);
-		vb_out->flags = le16_to_cpu(vb.flags);
-		vb_out->r_version = le32_to_cpu(vb.r_version);
+		vb_out->version = le16toh(vb.version);
+		vb_out->flags = le16toh(vb.flags);
+		vb_out->r_version = le32toh(vb.r_version);
 	}
 out:
 	return 0;
@@ -663,9 +664,9 @@ int lm_convert_dlm(struct lockspace *ls, struct resource *r,
 	if (rdd->vb && r_version && (r->mode == LD_LK_EX)) {
 		if (!rdd->vb->version) {
 			/* first time vb has been written */
-			rdd->vb->version = cpu_to_le16(VAL_BLK_VERSION);
+			rdd->vb->version = htole16(VAL_BLK_VERSION);
 		}
-		rdd->vb->r_version = cpu_to_le32(r_version);
+		rdd->vb->r_version = htole32(r_version);
 		memcpy(lksb->sb_lvbptr, rdd->vb, sizeof(struct val_blk));
 
 		log_debug("%s:%s convert_dlm set r_version %u",
@@ -722,17 +723,17 @@ int lm_unlock_dlm(struct lockspace *ls, struct resource *r,
 		memcpy(&vb_next, rdd->vb, sizeof(struct val_blk));
 
 		if (!vb_prev.version) {
-			vb_next.version = cpu_to_le16(VAL_BLK_VERSION);
+			vb_next.version = htole16(VAL_BLK_VERSION);
 			new_vb = 1;
 		}
 
 		if ((lmu_flags & LMUF_FREE_VG) && (r->type == LD_RT_VG)) {
-			vb_next.flags = cpu_to_le16(VBF_REMOVED);
+			vb_next.flags = htole16(VBF_REMOVED);
 			new_vb = 1;
 		}
 
 		if (r_version) {
-			vb_next.r_version = cpu_to_le32(r_version);
+			vb_next.r_version = htole32(r_version);
 			new_vb = 1;
 		}
 
@@ -742,12 +743,12 @@ int lm_unlock_dlm(struct lockspace *ls, struct resource *r,
 
 			log_debug("%s:%s unlock_dlm vb old %x %x %u new %x %x %u",
 				  ls->name, r->name,
-				  le16_to_cpu(vb_prev.version),
-				  le16_to_cpu(vb_prev.flags),
-				  le32_to_cpu(vb_prev.r_version),
-				  le16_to_cpu(vb_next.version),
-				  le16_to_cpu(vb_next.flags),
-				  le32_to_cpu(vb_next.r_version));
+				  le16toh(vb_prev.version),
+				  le16toh(vb_prev.flags),
+				  le32toh(vb_prev.r_version),
+				  le16toh(vb_next.version),
+				  le16toh(vb_next.flags),
+				  le32toh(vb_next.r_version));
 		} else {
 			log_debug("%s:%s unlock_dlm vb unchanged", ls->name, r->name);
 		}
@@ -795,6 +796,14 @@ int lm_unlock_dlm(struct lockspace *ls, struct resource *r,
  * recreated while others still have the lockspace running
  * for the previous VG.  We'd also want a way to clean up
  * the stale lockspaces on the others eventually.)
+ */
+
+/*
+ * On error, returns < 0
+ *
+ * On success:
+ * If other hosts are found, returns the number.
+ * If no other hosts are found (only ourself), returns 0.
  */
 
 int lm_hosts_dlm(struct lockspace *ls, int notify)

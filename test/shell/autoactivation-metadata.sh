@@ -1,6 +1,16 @@
+#!/usr/bin/env bash
 
-SKIP_WITH_LVMPOLLD=1
-SKIP_WITH_LVMLOCKD=1
+# Copyright (C) 2021 Red Hat, Inc. All rights reserved.
+#
+# This copyrighted material is made available to anyone wishing to use,
+# modify, copy, or redistribute it subject to the terms and conditions
+# of the GNU General Public License v.2.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software Foundation,
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+
 
 RUNDIR="/run"
 test -d "$RUNDIR" || RUNDIR="/var/run"
@@ -16,7 +26,7 @@ _clear_online_files() {
         rm -f "$PVS_LOOKUP_DIR"/*
 }
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld --skip-with-lvmlockd
 
 aux lvmconf "global/event_activation = 1"
 
@@ -335,4 +345,3 @@ vgchange -an $vg
 _clear_online_files
 
 vgremove -y $vg
-

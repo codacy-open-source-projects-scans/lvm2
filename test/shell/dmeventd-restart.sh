@@ -11,9 +11,8 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 _wait_for_dmeventd() {
 	local local=${1-}
@@ -81,7 +80,7 @@ for i in {1..10}; do
 	# wait here for a while until dmeventd dies....
 	# surprisingly it's not instant and we can actually
 	# obtain list of monitored devices...
-	test -z $(ps -p "$pid" -o comm=) && break
+	test -z "$(ps -p "$pid" -o comm=)" && break
 	sleep .1
 done
 rm LOCAL_DMEVENTD debug.log*

@@ -21,6 +21,7 @@
 #include "lvm-version.h"
 #include "lib/locking/lvmlockd.h"
 #include "lib/datastruct/str_list.h"
+#include "lib/mm/memlock.h"
 #include "libdaemon/server/daemon-stray.h"
 
 /* coverity[unnecessary_header] */
@@ -87,6 +88,24 @@ static const struct command_function _command_functions[CMD_COUNT] = {
 	{ vgchange_lockstart_CMD, vgchange_lock_start_stop_cmd },
 	{ vgchange_lockstop_CMD, vgchange_lock_start_stop_cmd },
 	{ vgchange_systemid_CMD, vgchange_systemid_cmd },
+	{ vgchange_setpersist_CMD, vgchange_setpersist_cmd },
+	{ vgchange_persist_CMD, vgchange_persist_cmd },
+	{ vgchange_setlockargs_CMD, vgchange_setlockargs_cmd },
+
+	/* lvdisplay variants */
+	{ lvdisplay_columns_CMD,	lvdisplay_columns_cmd },
+	{ lvdisplay_colon_CMD,		lvdisplay_colon_cmd },
+	{ lvdisplay_general_CMD,	lvdisplay_general_cmd },
+
+	/* pvdisplay variants */
+	{ pvdisplay_columns_CMD,	pvdisplay_columns_cmd },
+	{ pvdisplay_colon_CMD,		pvdisplay_cmd },
+	{ pvdisplay_general_CMD,	pvdisplay_cmd },
+
+	/* vgdisplay variants */
+	{ vgdisplay_columns_CMD,	vgdisplay_columns_cmd },
+	{ vgdisplay_colon_CMD,		vgdisplay_colon_cmd },
+	{ vgdisplay_general_CMD,	vgdisplay_general_cmd },
 
 	/* lvconvert utilities related to repair. */
 	{ lvconvert_repair_CMD,	lvconvert_repair_cmd },
@@ -361,6 +380,21 @@ sign_t arg_sign_value(const struct cmd_context *cmd, int a, const sign_t def)
 percent_type_t arg_percent_value(const struct cmd_context *cmd, int a, const percent_type_t def)
 {
 	return arg_is_set(cmd, a) ? cmd->opt_arg_values[a].percent : def;
+}
+
+force_t arg_force_value(const struct cmd_context *cmd)
+{
+	int f;
+
+	switch ((f = arg_count(cmd, force_ARG))) {
+	case 0: return PROMPT;
+	case 1: return DONT_PROMPT;
+	default:
+		log_debug("Changing force level %d to %d.",
+			  f, DONT_PROMPT_OVERRIDE);
+		/* fall through */
+	case 2: return DONT_PROMPT_OVERRIDE;
+	}
 }
 
 int arg_count_increment(struct cmd_context *cmd, int a)
@@ -1121,6 +1155,15 @@ int headings_arg(struct cmd_context *cmd, struct arg_values *av)
 	return report_headings_str_to_type(av->value) != REPORT_HEADINGS_UNKNOWN;
 }
 
+static int _is_profile_metadataprofile(const char *name)
+{
+	return (!strcmp(name, "lvcreate") ||
+		!strcmp(name, "lvconvert") ||
+		!strcmp(name, "vgcreate") ||
+		!strcmp(name, "lvchange") ||
+		!strcmp(name, "vgchange"));
+}
+
 /*
  * FIXME: there's been a confusing mixup among:
  * resizeable, resizable, allocatable, allocation.
@@ -1171,6 +1214,10 @@ static int _opt_standard_to_synonym(const char *cmd_name, int opt)
 		if (!strncmp(cmd_name, "vg", 2))
 			return metadatacopies_ARG;
 		return 0;
+	case metadataprofile_ARG:
+		if (_is_profile_metadataprofile(cmd_name))
+			return profile_ARG;
+		return 0;
 	}
 	return 0;
 }
@@ -1208,11 +1255,15 @@ static int _opt_synonym_to_standard(const char *cmd_name, int opt)
 		if (!strncmp(cmd_name, "vg", 2))
 			return vgmetadatacopies_ARG;
 		return 0;
+	case profile_ARG:
+		if (_is_profile_metadataprofile(cmd_name))
+			return metadataprofile_ARG;
+		return 0;
 	}
 	return 0;
 }
 
-static void _add_getopt_arg(int arg_enum, char **optstrp, struct option **longoptsp);
+static void _add_getopt_arg(int opt_enum, char **optstrp, struct option **longoptsp);
 
 /*
  * The valid args for a command name in general is a union of
@@ -2229,8 +2280,8 @@ static int _process_command_line(struct cmd_context *cmd, int *argc, char ***arg
 			log_error("Argument%s%c%s%s cannot be used in interactive mode.",
 				  a->short_opt ? " -" : "",
 				  a->short_opt ? : ' ',
-				  (a->short_opt && a->long_opt) ?
-				  "/" : "", a->long_opt ? : "");
+				  (a->short_opt && a->long_opt[0]) ?
+				  "/" : "", a->long_opt[0] ? a->long_opt : "");
 			return 0;
 		}
 
@@ -2262,8 +2313,8 @@ static int _process_command_line(struct cmd_context *cmd, int *argc, char ***arg
 			log_error("Option%s%c%s%s may not be repeated.",
 				  a->short_opt ? " -" : "",
 				  a->short_opt ? : ' ',
-				  (a->short_opt && a->long_opt) ?
-				  "/" : "", a->long_opt ? : "");
+				  (a->short_opt && a->long_opt[0]) ?
+				  "/" : "", a->long_opt[0] ? a->long_opt : "");
 			return 0;
 		}
 
@@ -2645,7 +2696,7 @@ static int _process_common_commands(struct cmd_context *cmd)
 	if (arg_is_set(cmd, help_ARG) ||
 	    arg_is_set(cmd, longhelp_ARG) ||
 	    arg_is_set(cmd, help2_ARG)) {
-		_usage(cmd->name, arg_is_set(cmd, longhelp_ARG), 0);
+		_usage(cmd->name, arg_count(cmd, longhelp_ARG), 0);
 		return ECMD_PROCESSED;
 	}
 
@@ -2694,6 +2745,7 @@ static void _apply_current_settings(struct cmd_context *cmd)
 {
 	_apply_current_output_settings(cmd);
 
+	memlock_init(cmd);
 	init_test(cmd->current_settings.test);
 	init_mirror_in_sync(0);
 	init_dmeventd_monitor(DEFAULT_DMEVENTD_MONITOR);
@@ -2803,11 +2855,7 @@ static int _prepare_profiles(struct cmd_context *cmd)
 		 * it's recognized as shortcut to --metadataprofile.
 		 * The --commandprofile is assumed otherwise.
 		 */
-		if (!strcmp(cmd->command->name, "lvcreate") ||
-		    !strcmp(cmd->command->name, "lvconvert") ||
-		    !strcmp(cmd->command->name, "vgcreate") ||
-		    !strcmp(cmd->command->name, "lvchange") ||
-		    !strcmp(cmd->command->name, "vgchange")) {
+		if (_is_profile_metadataprofile(cmd->command->name)) {
 			if (arg_is_set(cmd, metadataprofile_ARG)) {
 				log_error("Only one of --profile or "
 					  " --metadataprofile allowed.");
@@ -2927,6 +2975,11 @@ static int _init_lvmlockd(struct cmd_context *cmd)
 			log_debug("Ignore lvmlockd for pvscan cache.");
 		return 1;
 	}
+	if (!strcmp(cmd->name, "lvmdevices")) {
+		if (use_lvmlockd)
+			log_debug("Ignore lvmlockd for lvmdevices.");
+		return 1;
+	}
 
 	/*
 	 * Think about when/how to enable hints with lvmlockd.
@@ -2934,29 +2987,25 @@ static int _init_lvmlockd(struct cmd_context *cmd)
 	if (use_lvmlockd)
 		cmd->enable_hints = 0;
 
+	if (arg_is_set(cmd, lockopt_ARG)) {
+		lockd_lockopt_get_flags(arg_str_value(cmd, lockopt_ARG, ""), &cmd->lockopt);
+
+		if (use_lvmlockd) {
+			if (cmd->lockopt & LOCKOPT_SKIPLV)
+				cmd->lockd_lv_disable = 1;
+			if (cmd->lockopt & LOCKOPT_SKIPVG)
+				cmd->lockd_vg_disable = 1;
+			if (cmd->lockopt & LOCKOPT_SKIPGL)
+				cmd->lockd_gl_disable = 1;
+		}
+	}
+
 	if (use_lvmlockd && arg_is_set(cmd, nolocking_ARG)) {
 		/* --nolocking is only allowed with vgs/lvs/pvs commands */
 		cmd->lockd_gl_disable = 1;
 		cmd->lockd_vg_disable = 1;
 		cmd->lockd_lv_disable = 1;
 		return 1;
-	}
-
-	if (use_lvmlockd && arg_is_set(cmd, lockopt_ARG)) {
-		lockd_lockopt_get_flags(arg_str_value(cmd, lockopt_ARG, ""), &cmd->lockopt);
-
-		if (cmd->lockopt & LOCKOPT_SKIPLV) {
-			log_warn("WARNING: skipping LV lock in lvmlockd.");
-			cmd->lockd_lv_disable = 1;
-		}
-		if (cmd->lockopt & LOCKOPT_SKIPVG) {
-			log_warn("WARNING: skipping VG lock in lvmlockd.");
-			cmd->lockd_vg_disable = 1;
-		}
-		if (cmd->lockopt & LOCKOPT_SKIPGL) {
-			log_warn("WARNING: skipping global lock in lvmlockd.");
-			cmd->lockd_gl_disable = 1;
-		}
 	}
 
 	lvmlockd_disconnect(); /* start over when tool context is refreshed */
@@ -3225,7 +3274,7 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	locking_type = find_config_tree_int(cmd, global_locking_type_CFG, NULL);
 
 	if (locking_type == 3)
-		log_warn("WARNING: see lvmlockd(8) for information on using cluster/clvm VGs.");
+		log_warn("WARNING: See lvmlockd(8) for information on using cluster/clvm VGs.");
 
 	if ((locking_type == 0) || (locking_type == 5)) {
 		log_warn("WARNING: locking_type (%d) is deprecated, using --nolocking.", locking_type);
@@ -3577,7 +3626,7 @@ int lvm2_main(int argc, char **argv)
 	if (is_static() && strcmp(base, "lvm.static") &&
 	    path_exists(LVM_PATH) &&
 	    !getenv("LVM_DID_EXEC")) {
-		if (setenv("LVM_DID_EXEC", base, 1))
+		if (setenv("LVM_DID_EXEC", "1", 1))
 			log_sys_error("setenv", "LVM_DID_EXEC");
 		if (execvp(LVM_PATH, argv) == -1)
 			log_sys_error("execvp", LVM_PATH);

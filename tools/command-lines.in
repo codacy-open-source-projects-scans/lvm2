@@ -207,14 +207,19 @@ OO_ALL: --commandprofile String, --config String, --debug,
 --verbose, --version, --yes, --test, --devicesfile String, --devices PV, --nohints --journal String
 
 #
+# options for pvdisplay, lvdisplay, vgdisplay
+#
+OO_REPORTING: --foreign, --ignorelockingfailure, --readonly, --reportformat ReportFmt,
+--shared, --units Units
+
+#
 # options for pvs, lvs, vgs, fullreport
 #
-OO_REPORT: --aligned, --all, --binary, --configreport ConfigReport, --foreign,
---headings HeadingsType --ignorelockingfailure, --logonly,
---nameprefixes, --noheadings, --nosuffix,
---options String, --readonly, --reportformat ReportFmt, --rows,
---select String, --separator String, --shared, --sort String,
---unbuffered, --units Units, --unquoted
+OO_REPORT: OO_REPORTING, --all, --aligned, --binary,
+--configreport ConfigReport, --logonly, --headings HeadingsType,
+--nameprefixes, --noheadings, --nosuffix, --options String,
+--rows, --select String, --separator String, --sort String,
+--unbuffered, --unquoted
 
 #
 # options for config, dumpconfig, lvmconfig
@@ -239,7 +244,7 @@ OO_LVCHANGE: --autobackup Bool, --force, --ignoremonitoring,
 OO_LVCHANGE_META: --addtag Tag, --deltag Tag,
 --alloc Alloc, --contiguous Bool,
 --compression Bool, --deduplication Bool,
---detachprofile, --metadataprofile String, --profile String,
+--detachprofile, --metadataprofile String,
 --permission Permission, --readahead Readahead, --setactivationskip Bool,
 --setautoactivation Bool, --errorwhenfull Bool, --discards Discards, --zero Bool,
 --cachemode CacheMode, --cachepolicy String, --cachesettings String,
@@ -501,7 +506,7 @@ RULE: --poolmetadata not --readahead --stripesize --stripes_long
 
 ---
 
-lvconvert --type cache --cachepool LV LV_linear_striped_raid_thinpool_vdo_vdopool_vdopooldata_thin_error_zero
+lvconvert --type cache --cachepool LV LV_linear_striped_raid_thinpool_thinpooldata_vdo_vdopool_vdopooldata_thin_error_zero
 OO: --cache, OO_LVCONVERT_CACHE, OO_LVCONVERT_POOL, OO_LVCONVERT
 OP: PV ...
 ID: lvconvert_to_cache_with_cachepool
@@ -565,7 +570,7 @@ OO: --stripes_long Number, --stripesize SizeKB,
 OO_LVCONVERT_THINPOOL, OO_LVCONVERT
 OP: PV ...
 ID: lvconvert_to_thinpool
-DESC: Convert LV to type thin-pool.
+DESC: Convert LV to type thin-pool (existing data on LV will be erased).
 RULE: all and lv_is_visible
 RULE: all not lv_is_locked lv_is_origin lv_is_merging_origin lv_is_external_origin lv_is_raid_with_integrity
 RULE: --poolmetadata not --readahead --stripesize --stripes_long
@@ -611,7 +616,7 @@ lvconvert --type cache-pool LV_linear_striped_raid_error_zero
 OO: OO_LVCONVERT_CACHE, OO_LVCONVERT_POOL, OO_LVCONVERT
 OP: PV ...
 ID: lvconvert_to_cachepool
-DESC: Convert LV to type cache-pool.
+DESC: Convert LV to type cache-pool (existing data on LV will be erased).
 RULE: --poolmetadata not --readahead --stripesize --stripes_long
 RULE: all not lv_is_raid_with_integrity
 
@@ -652,8 +657,9 @@ lvconvert --cachepool LV_linear_striped_raid_cachepool_error_zero
 OO: --type cache-pool, OO_LVCONVERT_CACHE, OO_LVCONVERT_POOL, OO_LVCONVERT
 OP: PV ...
 ID: lvconvert_to_cachepool_or_swap_metadata
-DESC: Convert LV to type cache-pool (variant, use --type cache-pool).
-DESC: Swap metadata LV in a cache pool (variant, use --swapmetadata).
+DESC: Convert LV to type cache-pool (variant: use --type cache-pool,
+DESC: existing data on LV will be erased).
+DESC: Swap metadata LV in a cache pool (variant: use --swapmetadata).
 FLAGS: PREVIOUS_SYNTAX
 RULE: all and lv_is_visible
 RULE: all not lv_is_raid_with_integrity
@@ -664,15 +670,16 @@ RULE: --poolmetadata not --readahead --stripesize --stripes_long
 lvconvert --type vdo-pool LV_linear_striped_raid_cache
 OO: --name LV_new, --virtualsize SizeMB, OO_LVCONVERT_VDO_POOL, OO_LVCONVERT
 ID: lvconvert_to_vdopool
-DESC: Convert LV to type vdopool.
+DESC: Convert LV to type vdopool (existing data on LV will be erased).
 RULE: all and lv_is_visible lv_is_writable
 RULE: all not lv_is_locked lv_is_origin lv_is_merging_origin lv_is_external_origin lv_is_virtual lv_is_raid_with_integrity
 
 lvconvert --vdopool LV_linear_striped_raid_cache
-OO: OO_LVCONVERT_VDO_POOL, OO_LVCONVERT, --name LV_new, --virtualsize SizeMB,
+OO: --name LV_new, --virtualsize SizeMB, OO_LVCONVERT_VDO_POOL, OO_LVCONVERT
 ID: lvconvert_to_vdopool_param
-DESC: Convert LV to type vdopool.
-RULE: all and lv_is_visible
+DESC: Convert LV to type vdopool (variant: use --type vdo-pool,
+DESC: existing data on LV will be erased).
+RULE: all and lv_is_visible lv_is_writable
 RULE: all not lv_is_locked lv_is_origin lv_is_merging_origin lv_is_external_origin lv_is_virtual lv_is_raid_with_integrity
 FLAGS: SECONDARY_SYNTAX
 AUTOTYPE: vdo-pool
@@ -966,6 +973,7 @@ OP: PV ...
 IO: --stripes 1
 ID: lvcreate_mirror_or_raid1
 DESC: Create a raid1 or mirror LV.
+DESC: Implicit type is defined by lvm.conf global/mirror_segtype_default.
 AUTOTYPE: raid1
 AUTOTYPE: mirror
 
@@ -1387,15 +1395,25 @@ DESC: new LV to type writecache.
 ---
 
 lvdisplay
-OO: --aligned, --all, --binary, --colon, --columns,
---configreport ConfigReport, --foreign, --history, --ignorelockingfailure,
---logonly, --maps, --noheadings,
---nosuffix, --options String, --sort String, --readonly,
---segments, --select String, --separator String,
---shared, --unbuffered, --units Units
+OO: OO_REPORTING, --all, --history, --segments, --maps
 OP: VG|LV|Tag ...
-IO: --partial, --ignoreskippedcluster, --reportformat ReportFmt
+IO: --partial, --ignoreskippedcluster
 ID: lvdisplay_general
+
+lvdisplay --columns
+OO: OO_REPORT, --history, --segments
+OP: VG|LV|Tag ...
+IO: --partial, --ignoreskippedcluster
+RULE: --noheadings not --headings
+ID: lvdisplay_columns
+DESC: Display output in columns like lvs.
+
+lvdisplay --colon
+OO: OO_REPORTING, --all, --history, --segments
+OP: VG|LV|Tag ...
+IO: --partial, --ignoreskippedcluster
+ID: lvdisplay_colon
+DESC: Generate colon separated output.
 
 ---
 
@@ -1558,7 +1576,7 @@ ID: lvscan_general
 ---
 
 # None of these can function as a required option for pvchange.
-OO_PVCHANGE: --autobackup Bool, --force, --reportformat ReportFmt, --uuid
+OO_PVCHANGE: --autobackup Bool, --force, --reportformat ReportFmt
 
 # Any of these can function as a required option for pvchange.
 OO_PVCHANGE_META: --allocatable Bool, --addtag Tag, --deltag Tag,
@@ -1579,7 +1597,7 @@ DESC: Change properties of specified PVs.
 ---
 
 pvresize PV ...
-OO: --setphysicalvolumesize SizeMB, --reportformat ReportFmt
+OO: --setphysicalvolumesize SizeMB, --reportformat ReportFmt, --autobackup Bool
 ID: pvresize_general
 
 ---
@@ -1623,14 +1641,25 @@ RULE: --bootloaderareasize not --restorefile
 ---
 
 pvdisplay
-OO: --aligned, --all, --binary, --colon, --columns, --configreport ConfigReport,
---foreign, --ignorelockingfailure,
---logonly, --maps, --noheadings, --nosuffix, --options String,
---readonly, --reportformat ReportFmt, --select String, --separator String, --shared,
---short, --sort String, --unbuffered, --units Units
+OO: OO_REPORTING, --maps, --segments, --short
 OP: PV|Tag ...
-IO: --ignoreskippedcluster
+IO: --partial, --ignoreskippedcluster
 ID: pvdisplay_general
+
+pvdisplay --columns
+OO: OO_REPORT, --segments
+OP: PV|Tag ...
+IO: --partial, --ignoreskippedcluster
+RULE: --noheadings not --headings
+ID: pvdisplay_columns
+DESC: Display output in columns like pvs.
+
+pvdisplay --colon
+OO: OO_REPORTING, --segments
+OP: PV|Tag ...
+IO: --partial, --ignoreskippedcluster
+ID: pvdisplay_colon
+DESC: Generate colon separated output.
 
 ---
 
@@ -1757,7 +1786,7 @@ OO_VGCHANGE_META: --addtag Tag, --deltag Tag,
 --logicalvolume Uint32, --maxphysicalvolumes Uint32, --alloc Alloc, --uuid,
 --pvmetadatacopies MetadataCopiesPV, --vgmetadatacopies MetadataCopiesVG,
 --physicalextentsize SizeMB, --resizeable Bool,
---profile String, --detachprofile, --metadataprofile String,
+--detachprofile, --metadataprofile String,
 --setautoactivation Bool
 
 vgchange OO_VGCHANGE_META
@@ -1786,7 +1815,7 @@ DESC: Start or stop processing LV conversions.
 vgchange --activate Active
 OO: --activationmode ActivationMode, --ignoreactivationskip, --partial, --sysinit,
 --readonly, --ignorelockingfailure, --monitor Bool, --poll Bool,
---autoactivation String, OO_VGCHANGE
+--autoactivation String, --persist String, OO_VGCHANGE
 OP: VG|Tag|Select ...
 IO: --ignoreskippedcluster
 ID: vgchange_activate
@@ -1800,23 +1829,39 @@ ID: vgchange_refresh
 DESC: Reactivate LVs using the latest metadata.
 
 vgchange --systemid String VG|Tag|Select
-OO: --select String, --majoritypvs
+OO: --select String, --majoritypvs, --persist String, --removekey String
 ID: vgchange_systemid
 DESC: Change the system ID of a VG.
 
-vgchange --lockstart
+vgchange --setpersist String VG|Tag|Select
+OO: --select String, --persist start
+ID: vgchange_setpersist
+DESC: Set or clear flags to control persistent reservation behavior.
+
+vgchange --persist String VG|Tag|Select
+OO: --select String, --removekey String, --majoritypvs, --force
+ID: vgchange_persist
+DESC: Perform persistent reservation commands on devices.
+
+vgchange --setlockargs String VG|Tag|Select
 OO: --select String
+ID: vgchange_setlockargs
+DESC: Set or clear lock_args flags to control lock manager behavior.
+
+vgchange --lockstart
+OO: --select String, --persist start
 OP: VG|Tag|Select ...
 ID: vgchange_lockstart
 DESC: Start the lockspace of a shared VG in lvmlockd.
 
 vgchange --lockstop
-OO: --select String
+OO: --select String, --persist stop
 OP: VG|Tag|Select ...
 ID: vgchange_lockstop
 DESC: Stop the lockspace of a shared VG in lvmlockd.
 
 vgchange --locktype LockType VG
+OO: --setlockargs String
 ID: vgchange_locktype
 DESC: Change the lock type for a shared VG.
 
@@ -1840,27 +1885,39 @@ OO: --addtag Tag, --alloc Alloc, --autobackup Bool, --clustered Bool, --maxlogic
 --physicalextentsize SizeMB, --force, --zero Bool, --labelsector Number,
 --metadatasize SizeMB, --pvmetadatacopies MetadataCopiesPV, --vgmetadatacopies MetadataCopiesVG,
 --reportformat ReportFmt, --dataalignment SizeKB, --dataalignmentoffset SizeKB,
---shared, --systemid String, --locktype LockType, --setautoactivation Bool
+--shared, --systemid String, --locktype LockType, --setautoactivation Bool,
+--setpersist String, --persist start, --setlockargs String
 ID: vgcreate_general
 
 ---
 
 vgdisplay
-OO: --activevolumegroups, --aligned, --binary, --colon, --columns,
---configreport ConfigReport, --foreign, --ignorelockingfailure,
---logonly, --noheadings, --nosuffix,
---options String, --readonly, --select String,
---shared, --short, --separator String, --sort String, --unbuffered, --units Units
+OO: OO_REPORTING, --short, --activevolumegroups
 OP: VG|Tag ...
-IO: --partial, --ignoreskippedcluster, --reportformat ReportFmt
+IO: --partial, --ignoreskippedcluster
 ID: vgdisplay_general
+
+vgdisplay --columns
+OO: OO_REPORT
+OP: VG|Tag ...
+IO: --partial, --ignoreskippedcluster
+RULE: --noheadings not --headings
+ID: vgdisplay_columns
+DESC: Display output in columns like vgs.
+
+vgdisplay --colon
+OO: OO_REPORTING, --activevolumegroups
+OP: VG|Tag ...
+IO: --partial, --ignoreskippedcluster
+ID: vgdisplay_colon
+DESC: Generate colon separated output.
 
 ---
 
 OO_VGEXPORT: --reportformat ReportFmt
 
 vgexport VG|Tag|Select ...
-OO: --select String, OO_VGEXPORT
+OO: --select String, --persist stop, OO_VGEXPORT
 ID: vgexport_some
 DESC: Export specified VGs.
 
@@ -1884,7 +1941,7 @@ ID: vgextend_general
 OO_VGIMPORT: --force, --reportformat ReportFmt
 
 vgimport VG|Tag|Select ...
-OO: --select String, OO_VGIMPORT
+OO: --select String, --persist start, OO_VGIMPORT
 ID: vgimport_some
 DESC: Import specified VGs.
 

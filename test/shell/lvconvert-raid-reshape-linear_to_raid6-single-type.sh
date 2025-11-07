@@ -10,10 +10,8 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA2110-1301 USA
 
-SKIP_WITH_LVMLOCKD=1
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld --skip-with-lvmlockd
 
 # Ensure expected default region size
 aux lvmconf 'activation/raid_region_size = 512'
@@ -32,7 +30,7 @@ lvcreate -aey -L 16M -n $lv $vg
 check lv_field $vg/$lv segtype "linear"
 check lv_field $vg/$lv stripes 1
 check lv_field $vg/$lv data_stripes 1
-wipefs -a "$DM_DEV_DIR/$vg/$lv"
+aux wipefs_a "$DM_DEV_DIR/$vg/$lv"
 mkfs -t ext4 "$DM_DEV_DIR/$vg/$lv"
 fsck -fn "$DM_DEV_DIR/$vg/$lv"
 

@@ -14,9 +14,8 @@
 # https://bugzilla.redhat.com/1354396
 
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 FSCK=${FSCK-fsck}
 MKFS=${MKFS-mkfs.ext3}
@@ -38,18 +37,18 @@ lvs -a $vg
 
 # this should resolve to resize to same actual size
 not lvreduce -l-100%FREE $vg/$lv1
-not lvreduce -r -f -l-100%FREE $vg/$lv1
+lvreduce -r -f -l-100%FREE $vg/$lv1
 "$FSCK" -n "$lvdev"
 
 # size should remain the same
 # lvresize fails with same result with or without -r
 not lvextend -l+100%FREE $vg/$lv1
-not lvextend -r -f -l+100%FREE $vg/$lv1
+lvextend -r -f -l+100%FREE $vg/$lv1
 "$FSCK" -n "$lvdev"
 
 #lvchange -an $vg/$lv1
 not lvresize -l+100%FREE $vg/$lv1
-not lvresize -r -f -l+100%FREE $vg/$lv1
+lvresize -r -f -l+100%FREE $vg/$lv1
 "$FSCK" -n "$lvdev"
 
 # Check there is really file system resize happening
@@ -60,7 +59,7 @@ grep "20000 blocks" out
 
 SIZE=$(get lv_field $vg/$lv1 size)
 not lvresize -l-100%FREE $vg/$lv1
-not lvresize -r -f -l-100%FREE $vg/$lv1
+lvresize -r -f -l-100%FREE $vg/$lv1
 test "$SIZE" = "$(get lv_field $vg/$lv1 size)"
 
 "$FSCK" -n "$lvdev" | tee out

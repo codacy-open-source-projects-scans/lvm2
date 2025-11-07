@@ -487,7 +487,7 @@ static int _dev_is_mpath_component_sysfs(struct cmd_context *cmd, struct device 
 		 */
 		holder_name = de->d_name;
 
-		if (dm_snprintf(dm_dev_path, sizeof(dm_dev_path), "%s/%s", cmd->dev_dir, holder_name) < 0) {
+		if (dm_snprintf(dm_dev_path, sizeof(dm_dev_path), "%s%s", cmd->dev_dir, holder_name) < 0) {
 			log_warn("dm device path to check mpath is too long.");
 			continue;
 		}
@@ -595,7 +595,7 @@ static int _dev_in_wwid_file(struct cmd_context *cmd, struct device *dev,
 	 */
 lookup:
 	dm_list_iterate_items(dw, &dev->wwids) {
-		if (dw->type == 1 || dw->type == 2 || dw->type == 3)
+		if (dw->scsi_type == 1 || dw->scsi_type == 2 || dw->scsi_type == 3)
 			wwid = &dw->id[4];
 		else
 			wwid = dw->id;
@@ -615,7 +615,7 @@ lookup:
 		goto lookup;
 
 	if (!(dev->flags & DEV_ADDED_SYS_WWID) && dev_read_sys_wwid(cmd, dev, idbuf, sizeof(idbuf), &dw)) {
-		if (dw->type == 1 || dw->type == 2 || dw->type == 3)
+		if (dw->scsi_type == 1 || dw->scsi_type == 2 || dw->scsi_type == 3)
 			wwid = &dw->id[4];
 		else
 			wwid = dw->id;
@@ -642,7 +642,7 @@ int dev_is_mpath_component(struct cmd_context *cmd, struct device *dev, dev_t *h
 	/*
 	 * multipath only uses SCSI or NVME devices
 	 */
-	if (!major_is_scsi_device(dt, MAJOR(dev->dev)) && !dev_is_nvme(dt, dev))
+	if (!major_is_scsi_device(dt, MAJOR(dev->dev)) && !dev_is_nvme(dev))
 		return 0;
 
 	/*

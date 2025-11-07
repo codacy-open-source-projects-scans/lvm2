@@ -14,9 +14,8 @@
 # tests functionality of lvs, pvs, vgs, *display tools
 #
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 aux prepare_devs 5
 get_devs
@@ -108,16 +107,10 @@ vgmknodes --refresh
 lvscan
 lvmdiskscan
 
-invalid pvscan "$dev1"
-invalid pvscan -aay
-invalid pvscan --major 254
-invalid pvscan --minor 0
-invalid pvscan --novolumegroup -e
-invalid vgscan $vg
-invalid lvscan $vg
-
 if aux have_readline; then
 cat <<EOF | lvm
+pvdisplay -c "$dev1"
+pvdisplay -s "$dev1"
 vgdisplay --units k $vg
 vgdisplay -c $vg
 vgdisplay -C $vg
@@ -141,49 +134,6 @@ lvdisplay -C $vg
 lvdisplay -m $vg
 lvdisplay --units g $vg
 fi
-
-pvdisplay -c "$dev1"
-pvdisplay -s "$dev1"
-
-for i in h b s k m g t p e H B S K M G T P E; do
-	pvdisplay --units $i "$dev1"
-done
-
-invalid lvdisplay -C -m $vg
-invalid lvdisplay -c -m $vg
-invalid lvdisplay --aligned $vg
-invalid lvdisplay --noheadings $vg
-invalid lvdisplay --options lv_name $vg
-invalid lvdisplay --separator : $vg
-invalid lvdisplay --sort size $vg
-invalid lvdisplay --unbuffered $vg
-
-invalid vgdisplay -C -A
-invalid vgdisplay -C -c
-invalid vgdisplay -C -s
-invalid vgdisplay -c -s
-invalid vgdisplay --aligned
-invalid vgdisplay --noheadings
-invalid vgdisplay --options
-invalid vgdisplay --separator :
-invalid vgdisplay --sort size
-invalid vgdisplay --unbuffered
-invalid vgdisplay -A $vg1
-
-invalid pvdisplay -C -A
-invalid pvdisplay -C -c
-invalid pvdisplay -C -m
-invalid pvdisplay -C -s
-invalid pvdisplay -c -m
-invalid pvdisplay -c -s
-invalid pvdisplay --aligned
-invalid pvdisplay --all
-invalid pvdisplay --noheadings
-invalid pvdisplay --options
-invalid pvdisplay --separator :
-invalid pvdisplay --sort size
-invalid pvdisplay --unbuffered
-invalid pvdisplay -A $vg1
 
 # Check exported VG listing
 vgchange -an $vg
@@ -215,8 +165,78 @@ vgcreate $SHARED $vg3 "$dev3"
 lvcreate -l1 -an -Zn $vg3
 lvcreate -l1 -an -Zn $vg3
 
-vgdisplay -s -A | grep $vg1
-vgdisplay -s -A | grep $vg2
-vgdisplay -s -A | not grep $vg3
+vgdisplay -s -A |& tee out
+grep $vg1 out
+grep $vg2 out
+not grep $vg3 out
+
+# Don't check these simple commands via length valgrind pass
+unset LVM_VALGRIND
+
+for i in h b s k m g t p e H B S K M G T P E; do
+	pvdisplay --units $i "$dev1"
+done
+
+invalid pvscan "$dev1"
+invalid pvscan -aay
+invalid pvscan --major 254
+invalid pvscan --minor 0
+invalid pvscan --novolumegroup -e
+invalid vgscan $vg
+invalid lvscan $vg
+
+invalid lvdisplay -C -m $vg
+invalid lvdisplay -c -m $vg
+invalid lvdisplay --aligned $vg
+invalid lvdisplay --binary $vg
+invalid lvdisplay --headings 1 $vg
+invalid lvdisplay --nameprefixes $vg
+invalid lvdisplay --noheadings $vg
+invalid lvdisplay --nosuffix $vg
+invalid lvdisplay --options lv_name $vg
+invalid lvdisplay --rows $vg
+invalid lvdisplay --separator : $vg
+invalid lvdisplay --sort size $vg
+invalid lvdisplay --unbuffered $vg
+invalid lvdisplay --unquoted $vg
+
+invalid vgdisplay -C -A
+invalid vgdisplay -C -c
+invalid vgdisplay -C -s
+invalid vgdisplay -c -s
+invalid vgdisplay --aligned
+invalid vgdisplay --binary
+invalid vgdisplay --headings 1
+invalid vgdisplay --nameprefixes
+invalid vgdisplay --noheadings
+invalid vgdisplay --nosuffix
+invalid vgdisplay --options
+invalid vgdisplay --rows
+invalid vgdisplay --separator :
+invalid vgdisplay --sort size
+invalid vgdisplay --unbuffered
+invalid vgdisplay --unquoted
+invalid vgdisplay -A $vg1
+
+invalid pvdisplay -C -A
+invalid pvdisplay -C -c
+invalid pvdisplay -C -m
+invalid pvdisplay -C -s
+invalid pvdisplay -c -m
+invalid pvdisplay -c -s
+invalid pvdisplay --aligned
+invalid pvdisplay --binary
+invalid pvdisplay --headings 1
+invalid pvdisplay --nameprefixes
+invalid pvdisplay --all
+invalid pvdisplay --noheadings
+invalid pvdisplay --nosuffix
+invalid pvdisplay --options
+invalid pvdisplay --rows
+invalid pvdisplay --separator :
+invalid pvdisplay --sort size
+invalid pvdisplay --unbuffered
+invalid pvdisplay --unquoted
+invalid pvdisplay -A $vg1
 
 vgremove -f $vg1 $vg2 $vg3

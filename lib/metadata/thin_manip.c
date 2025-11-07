@@ -354,8 +354,9 @@ int thin_pool_check_overprovisioning(const struct logical_volume *lv)
 	struct cmd_context *cmd = lv->vg->cmd;
 	const char *txt = "";
 	uint64_t thinsum = 0, poolsum = 0, sz = ~0;
-	int threshold, max_threshold = 0;
-	int percent, min_percent = 100;
+	int threshold, def_threshold, max_threshold = 0;
+	int percent, def_percent, min_percent = 100;
+	struct profile *profile;
 	int more_pools = 0;
 
 	/* When passed thin volume, check related pool first */
@@ -373,15 +374,26 @@ int thin_pool_check_overprovisioning(const struct logical_volume *lv)
 			return 1; /* All thins fit into this thin pool */
 	}
 
+	def_threshold = find_config_tree_int(cmd, activation_thin_pool_autoextend_threshold_CFG,
+					     NULL);
+	def_percent = find_config_tree_int(cmd, activation_thin_pool_autoextend_percent_CFG,
+					   NULL);
+
 	/* Sum all thins and all thin pools in VG */
 	dm_list_iterate_items(lvl, &lv->vg->lvs) {
 		if (!lv_is_thin_pool(lvl->lv))
 			continue;
 
-		threshold = find_config_tree_int(cmd, activation_thin_pool_autoextend_threshold_CFG,
-						 lv_config_profile(lvl->lv));
-		percent = find_config_tree_int(cmd, activation_thin_pool_autoextend_percent_CFG,
-					       lv_config_profile(lvl->lv));
+		if ((profile = lv_config_profile(lvl->lv))) {
+			threshold = find_config_tree_int(cmd, activation_thin_pool_autoextend_threshold_CFG,
+							 profile);
+			percent = find_config_tree_int(cmd, activation_thin_pool_autoextend_percent_CFG,
+						       profile);
+		} else {
+			threshold = def_threshold;
+			percent = def_percent;
+		}
+
 		if (threshold > max_threshold)
 			max_threshold = threshold;
 		if (percent < min_percent)
@@ -403,7 +415,7 @@ int thin_pool_check_overprovisioning(const struct logical_volume *lv)
 		/* Thin sum size is above VG size */
 		txt = " and the size of whole volume group";
 	else if ((sz = vg_free(lv->vg)) < thinsum)
-		/* Thin sum size is more then free space in a VG */
+		/* Thin sum size is more than free space in a VG */
 		txt = !sz ? "" : " and the amount of free space in volume group";
 	else if ((max_threshold > 99) || !min_percent)
 		/* There is some free space in VG, but it is not configured
@@ -612,8 +624,8 @@ int update_thin_pool_lv(struct logical_volume *lv, int activate)
 
 	if (activate) {
 		/* If the pool is not active, do activate deactivate */
-		monitored = dmeventd_monitor_mode();
-		init_dmeventd_monitor(DMEVENTD_MONITOR_IGNORE);
+		if (DMEVENTD_MONITOR_IGNORE != (monitored = dmeventd_monitor_mode()))
+			init_dmeventd_monitor(DMEVENTD_MONITOR_IGNORE);
 		if (!lv_is_active(lv)) {
 			/*
 			 * FIXME:
@@ -648,11 +660,10 @@ int update_thin_pool_lv(struct logical_volume *lv, int activate)
 			}
 		}
 
-		if (!sync_local_dev_names(lv->vg->cmd)) {
-			log_error("Failed to sync local devices LV %s.",
-				  display_lvname(lv));
-			ret = 0;
-		}
+		/* Unlock memory if possible */
+		memlock_unlock(lv->vg->cmd);
+
+		sync_local_dev_names(lv->vg->cmd);
 
 		if (activate &&
 		    !deactivate_lv(lv->vg->cmd, lv)) {
@@ -661,11 +672,8 @@ int update_thin_pool_lv(struct logical_volume *lv, int activate)
 		}
 		init_dmeventd_monitor(monitored);
 
-		/* Unlock memory if possible */
-		memlock_unlock(lv->vg->cmd);
-
 		if (!ret)
-			return_0;
+			return 0;
 	}
 
 	dm_list_init(&(first_seg(lv)->thin_messages));
@@ -721,7 +729,7 @@ static uint32_t _estimate_chunk_size(uint32_t data_extents, uint32_t extent_size
 }
 
 int get_default_allocation_thin_pool_chunk_size(struct cmd_context *cmd, struct profile *profile,
-						uint32_t *chunk_size, int *chunk_size_calc_method)
+						uint32_t *chunk_size, unsigned *chunk_size_calc_policy)
 {
 	const char *str;
 
@@ -732,10 +740,10 @@ int get_default_allocation_thin_pool_chunk_size(struct cmd_context *cmd, struct 
 
 	if (!strcasecmp(str, "generic")) {
 		*chunk_size = DEFAULT_THIN_POOL_CHUNK_SIZE * 2;
-		*chunk_size_calc_method = THIN_CHUNK_SIZE_CALC_METHOD_GENERIC;
+		*chunk_size_calc_policy = CHUNK_SIZE_CALC_POLICY_GENERIC;
 	} else if (!strcasecmp(str, "performance")) {
 		*chunk_size = DEFAULT_THIN_POOL_CHUNK_SIZE_PERFORMANCE * 2;
-		*chunk_size_calc_method = THIN_CHUNK_SIZE_CALC_METHOD_PERFORMANCE;
+		*chunk_size_calc_policy = CHUNK_SIZE_CALC_POLICY_PERFORMANCE;
 	} else {
 		log_error("Thin pool chunk size calculation policy \"%s\" is unrecognised.", str);
 		return 0;
@@ -779,14 +787,14 @@ thin_crop_metadata_t get_thin_pool_crop_metadata(struct cmd_context *cmd,
 int thin_pool_set_params(struct lv_segment *seg,
 			 int error_when_full,
 			 thin_crop_metadata_t crop_metadata,
-			 int thin_chunk_size_calc_policy,
+			 unsigned chunk_size_calc_policy,
 			 uint32_t chunk_size,
 			 thin_discards_t discards,
 			 thin_zero_t zero_new_blocks)
 {
 	seg->chunk_size = chunk_size;
 	if (!recalculate_pool_chunk_size_with_dev_hints(seg->lv, seg_lv(seg, 0),
-							thin_chunk_size_calc_policy))
+							chunk_size_calc_policy))
 		return_0;
 
 	if (error_when_full)
@@ -811,7 +819,7 @@ int update_thin_pool_params(struct cmd_context *cmd,
 			    uint32_t *pool_metadata_extents,
 			    struct logical_volume *metadata_lv,
 			    thin_crop_metadata_t *crop_metadata,
-			    int *chunk_size_calc_method, uint32_t *chunk_size,
+			    unsigned *chunk_size_calc_policy, uint32_t *chunk_size,
 			    thin_discards_t *discards, thin_zero_t *zero_new_blocks)
 {
 	uint64_t pool_metadata_size;
@@ -819,6 +827,8 @@ int update_thin_pool_params(struct cmd_context *cmd,
 	uint32_t estimate_chunk_size;
 	uint64_t max_pool_data_size;
 	const char *str;
+
+	*chunk_size_calc_policy = CHUNK_SIZE_CALC_POLICY_UNSELECTED;
 
 	if (!*chunk_size &&
 	    find_config_tree_node(cmd, allocation_thin_pool_chunk_size_CFG, profile))
@@ -851,7 +861,7 @@ int update_thin_pool_params(struct cmd_context *cmd,
 		if (!*chunk_size) {
 			if (!get_default_allocation_thin_pool_chunk_size(cmd, profile,
 									 chunk_size,
-									 chunk_size_calc_method))
+									 chunk_size_calc_policy))
 				return_0;
 
 			pool_metadata_size = _estimate_metadata_size(pool_data_extents, extent_size, *chunk_size);
@@ -910,7 +920,7 @@ int update_thin_pool_params(struct cmd_context *cmd,
 	*crop_metadata = get_thin_pool_crop_metadata(cmd, *crop_metadata, pool_metadata_size);
 
 	if ((max_pool_data_size / extent_size) < pool_data_extents) {
-		log_error("Selected chunk size %s cannot address more then %s of thin pool data space.",
+		log_error("Selected chunk size %s cannot address more than %s of thin pool data space.",
 			  display_size(cmd, *chunk_size), display_size(cmd, max_pool_data_size));
 		return 0;
 	}

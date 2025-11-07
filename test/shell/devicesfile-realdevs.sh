@@ -12,9 +12,8 @@
 
 test_description='devices file with real devs'
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 #
 # To use this test, add two or more devices with real device ids,
@@ -68,7 +67,7 @@ get_real_devs
 
 wipe_all() {
 	for dev in "${REAL_DEVICES[@]}"; do
-		wipefs -a $dev
+		aux wipefs_a $dev
 	done
 }
 

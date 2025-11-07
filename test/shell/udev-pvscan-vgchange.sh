@@ -12,10 +12,8 @@
 
 test_description='udev rule and systemd unit run vgchange'
 
-SKIP_WITH_LVMPOLLD=1
-SKIP_WITH_LVMLOCKD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld --skip-with-lvmlockd
 
 # FIXME: currently test relies on several system properties to be
 # explicitly configure and directly modifies their state
@@ -74,7 +72,7 @@ get_real_devs
 
 wipe_all() {
 	for dev in "${REAL_DEVICES[@]}"; do
-		wipefs -a "$dev"
+		aux wipefs_a "$dev"
 	done
 }
 
@@ -388,8 +386,8 @@ wait_md_create "$mddev"
 vgcreate $vg9 "$mddev"
 lvmdevices --adddev "$mddev" || true
 
-PVIDMD=$(pvs "$mddev" --noheading -o uuid | tr -d - | awk '{print $1}')
-BDEVMD=$(basename "$mddev")
+PVIDMD="$(pvs "$mddev" --noheading -o uuid | tr -d - | awk '{print $1}')"
+BDEVMD="$(basename "$mddev")"
 
 lvcreate -l1 -an -n $lv1 $vg9
 lvcreate -l1 -an -n $lv2 $vg9

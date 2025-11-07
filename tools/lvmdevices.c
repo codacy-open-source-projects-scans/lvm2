@@ -560,6 +560,7 @@ restart4:
 
 int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 {
+	static const char failed_to_write_devices_file_msg[] = "Failed to write devices file.";
 	struct dm_list search_pvids;
 	struct dm_list found_devs;
 	struct dm_list scan_devs;
@@ -589,6 +590,10 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 			return ECMD_FAILED;
 		}
 		if (!devices_file_exists(cmd)) {
+			if (arg_is_set(cmd, deldev_ARG) || arg_is_set(cmd, delpvid_ARG) || arg_is_set(cmd, update_ARG)) {
+				log_error("Devices file does not exist.");
+				return ECMD_FAILED;
+			}
 			if (!devices_file_touch(cmd)) {
 				log_error("Failed to create the devices file.");
 				return ECMD_FAILED;
@@ -725,7 +730,7 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 		 * moved to a new WWID.
 		 */
 		cmd->search_for_devnames = "all";
-		device_ids_search(cmd, &found_devs, arg_is_set(cmd, refresh_ARG), 1, &update_needed);
+		device_ids_search(cmd, &found_devs, arg_count(cmd, refresh_ARG), 1, &update_needed);
 
 		_print_check(cmd);
 
@@ -752,8 +757,10 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 
 		if (arg_is_set(cmd, update_ARG)) {
 			if (update_needed || !dm_list_empty(&found_devs) || cmd->devices_file_hash_mismatch) {
-				if (!device_ids_write(cmd))
+				if (!device_ids_write(cmd)) {
+					log_error(failed_to_write_devices_file_msg);
 					goto_bad;
+				}
 				log_print("Updated devices file to version %s", devices_file_version());
 			} else {
 				log_print("No update for devices file is needed.");
@@ -826,7 +833,7 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 		cmd->filter_deviceid_skip = 1;
 
 		if (!cmd->filter->passes_filter(cmd, cmd->filter, dev, NULL)) {
-			log_warn("WARNING: adding device %s that is excluded: %s.",
+			log_warn("WARNING: Adding device %s that is excluded: %s.",
 				 dev_name(dev), dev_filtered_reason(dev));
 		}
 
@@ -835,8 +842,10 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 
 		if (!device_id_add(cmd, dev, dev->pvid, deviceidtype, NULL, 1))
 			goto_bad;
-		if (!device_ids_write(cmd))
+		if (!device_ids_write(cmd)) {
+			log_error(failed_to_write_devices_file_msg);
 			goto_bad;
+		}
 		goto out;
 	}
 
@@ -884,8 +893,10 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 			if (!device_id_add(cmd, devl->dev, devl->dev->pvid, deviceidtype, NULL, 1))
 				goto_bad;
 		}
-		if (!device_ids_write(cmd))
+		if (!device_ids_write(cmd)) {
+			log_error(failed_to_write_devices_file_msg);
 			goto_bad;
+		}
 		goto out;
 	}
 
@@ -896,7 +907,7 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 			goto_bad;
 
 		if (strncmp(devname, "/dev/", 5))
-			log_warn("WARNING: to remove a device by device id, include --deviceidtype.");
+			log_warn("WARNING: To remove a device by device id, include --deviceidtype.");
 
 		/*
 		 * No filter because we always want to allow removing a device
@@ -908,7 +919,7 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 			 * and sets this flag is so.
 			 */
 			if (dev_is_used_by_active_lv(cmd, dev, NULL, NULL, NULL, NULL)) {
-				if (!arg_count(cmd, yes_ARG) &&
+				if (!arg_is_set(cmd, yes_ARG) &&
 			    	    yes_no_prompt("Device %s is used by an active LV, continue to remove? ", devname) == 'n') {
 					log_error("Device not removed.");
 					goto bad;
@@ -925,7 +936,10 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
  dev_del:
 		dm_list_del(&du->list);
 		free_du(du);
-		device_ids_write(cmd);
+		if (!device_ids_write(cmd)) {
+			log_error(failed_to_write_devices_file_msg);
+			goto_bad;
+		}
 		goto out;
 	}
 
@@ -948,7 +962,7 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 		}
 
 		if (!strncmp(idname, "/dev/", 5))
-			log_warn("WARNING: to remove a device by name, do not include --deviceidtype.");
+			log_warn("WARNING: To remove a device by name, do not include --deviceidtype.");
 
 		if (!(du = get_du_for_device_id(cmd, idtype, idname))) {
 			log_error("No devices file entry with device id %s %s.", idtype_str, idname);
@@ -958,7 +972,7 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 		dev = du->dev;
 
 		if (dev && dev_is_used_by_active_lv(cmd, dev, NULL, NULL, NULL, NULL)) {
-			if (!arg_count(cmd, yes_ARG) &&
+			if (!arg_is_set(cmd, yes_ARG) &&
 			    yes_no_prompt("Device %s is used by an active LV, continue to remove? ", dev_name(dev)) == 'n') {
 				log_error("Device not removed.");
 				goto bad;
@@ -967,7 +981,10 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 
 		dm_list_del(&du->list);
 		free_du(du);
-		device_ids_write(cmd);
+		if (!device_ids_write(cmd)) {
+			log_error(failed_to_write_devices_file_msg);
+			goto_bad;
+		}
 		goto out;
 	}
 
@@ -999,7 +1016,7 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 		if (du->devname && (du->devname[0] != '.')) {
 			if ((dev = dev_cache_get(cmd, du->devname, NULL)) &&
 			    dev_is_used_by_active_lv(cmd, dev, NULL, NULL, NULL, NULL)) {
-				if (!arg_count(cmd, yes_ARG) &&
+				if (!arg_is_set(cmd, yes_ARG) &&
 			    	    yes_no_prompt("Device %s is used by an active LV, continue to remove? ", du->devname) == 'n') {
 					log_error("Device not removed.");
 					goto bad;
@@ -1008,7 +1025,10 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 		}
 
 		free_du(du);
-		device_ids_write(cmd);
+		if (!device_ids_write(cmd)) {
+			log_error(failed_to_write_devices_file_msg);
+			goto_bad;
+		}
 		goto out;
 	}
 

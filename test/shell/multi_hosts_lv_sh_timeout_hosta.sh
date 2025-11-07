@@ -21,9 +21,8 @@
 #     LVM_TEST_BACKING_DEVICE=/dev/sdj3,/dev/sdk3,/dev/sdl3 \
 #     LVM_TEST_MULTI_HOST=1 T=multi_hosts_lv_sh_timeout_hostb.sh
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 [ -z "$LVM_TEST_MULTI_HOST" ] && skip;
 
@@ -37,7 +36,7 @@ aux lvmconf "devices/allow_changes_with_duplicate_pvs = 1"
 
 for d in "${BLKDEVS[@]}"; do
 	dd if=/dev/zero of="$d" bs=32k count=1
-	wipefs -a "$d" 2>/dev/null || true
+	aux wipefs_a "$d" 2>/dev/null || true
 
 	sg_dev=$(sg_map26 "$d")
 	if [ -n "$LVM_TEST_LOCK_TYPE_IDM" ]; then

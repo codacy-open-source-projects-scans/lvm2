@@ -11,9 +11,8 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 aux have_vdo 6 2 0 || skip
 
@@ -49,6 +48,12 @@ lvextend --use-policies "$vg/$lv2"
 # although autoextend is only 1%, it needs to extend at least by slab_size
 # this is corner case where min growth requires 128M + 128k
 check lv_field $vg/$lv2 size "<4.13g"
+lvremove -f $vg
 
+# Resize of VDO origin (not supported)
+lvcreate --vdo -V3G -L4G -n $lv1 $vg/$lv2
+lvcreate -s -L1 $vg/$lv1
+not lvextend -L+2G $vg/$lv1 |& tee out
+grep "not supported" out
 
 vgremove -ff $vg

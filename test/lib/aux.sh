@@ -33,9 +33,10 @@ check_daemon_in_builddir() {
 
 create_corosync_conf() {
 	local COROSYNC_CONF="/etc/corosync/corosync.conf"
-	local COROSYNC_NODE=$(hostname)
+	local COROSYNC_NODE
+	COROSYNC_NODE=$(hostname || true)
 
-	if test -a "$COROSYNC_CONF"; then
+	if test -e "$COROSYNC_CONF"; then
 		if ! grep "created by lvm test suite" "$COROSYNC_CONF"; then
 			rm "$COROSYNC_CONF"
 		else
@@ -50,7 +51,7 @@ create_corosync_conf() {
 create_dlm_conf() {
 	local DLM_CONF="/etc/dlm/dlm.conf"
 
-	if test -a "$DLM_CONF"; then
+	if test -e "$DLM_CONF"; then
 		if ! grep "created by lvm test suite" "$DLM_CONF"; then
 			rm "$DLM_CONF"
 		else
@@ -87,7 +88,7 @@ prepare_dlm() {
 create_sanlock_conf() {
 	local SANLOCK_CONF="/etc/sanlock/sanlock.conf"
 
-	if test -a "$SANLOCK_CONF"; then
+	if test -e "$SANLOCK_CONF"; then
 		if ! grep "created by lvm test suite" "$SANLOCK_CONF"; then
 			rm "$SANLOCK_CONF"
 		else
@@ -101,69 +102,69 @@ create_sanlock_conf() {
 }
 
 prepare_sanlock() {
-	pgrep sanlock && skip "Cannot run while existing sanlock process exists"
+	pgrep sanlock && skip "Cannot run while existing sanlock process exists."
 
 	create_sanlock_conf
 
 	systemctl start sanlock
 	if ! pgrep sanlock; then
-		echo "Failed to start sanlock"
+		echo "Failed to start sanlock."
 		exit 1
 	fi
 }
 
 prepare_idm() {
-	pgrep seagate_ilm && skip "Cannot run while existing seagate_ilm process exists"
+	pgrep seagate_ilm && skip "Cannot run while existing seagate_ilm process exists."
 
 	seagate_ilm -D 0 -l 0 -L 7 -E 7 -S 7
 
 	if ! pgrep seagate_ilm; then
-		echo "Failed to start seagate_ilm"
+		echo "Failed to start seagate_ilm."
 		exit 1
 	fi
 }
 
 prepare_lvmlockd() {
-	pgrep lvmlockd && skip "Cannot run while existing lvmlockd process exists"
+	pgrep lvmlockd && skip "Cannot run while existing lvmlockd process exists."
 
 	if test -n "$LVM_TEST_LOCK_TYPE_SANLOCK"; then
 		# make check_lvmlockd_sanlock
-		echo "starting lvmlockd for sanlock"
+		echo "Starting lvmlockd for sanlock."
 		lvmlockd -o 2
 
 	elif test -n "$LVM_TEST_LOCK_TYPE_DLM"; then
 		# make check_lvmlockd_dlm
-		echo "starting lvmlockd for dlm"
+		echo "Starting lvmlockd for dlm."
 		lvmlockd
 
 	elif test -n "$LVM_TEST_LOCK_TYPE_IDM"; then
 		# make check_lvmlockd_idm
-		echo "starting lvmlockd for idm"
+		echo "Starting lvmlockd for idm."
 		lvmlockd -g idm
 
 	elif test -n "$LVM_TEST_LVMLOCKD_TEST_DLM"; then
 		# make check_lvmlockd_test
-		echo "starting lvmlockd --test (dlm)"
+		echo "Starting lvmlockd --test (dlm)."
 		lvmlockd --test -g dlm
 
 	elif test -n "$LVM_TEST_LVMLOCKD_TEST_SANLOCK"; then
 		# FIXME: add option for this combination of --test and sanlock
-		echo "starting lvmlockd --test (sanlock)"
+		echo "Starting lvmlockd --test (sanlock)."
 		lvmlockd --test -g sanlock -o 2
 
 	elif test -n "$LVM_TEST_LVMLOCKD_TEST_IDM"; then
 		# make check_lvmlockd_test
-		echo "starting lvmlockd --test (idm)"
+		echo "Starting lvmlockd --test (idm)."
 		lvmlockd --test -g idm
 
 	else
-		echo "not starting lvmlockd"
+		echo "Not starting lvmlockd."
 		exit 0
 	fi
 
 	sleep 1
 	if ! pgrep lvmlockd >LOCAL_LVMLOCKD; then
-		echo "Failed to start lvmlockd"
+		echo "Failed to start lvmlockd."
 		exit 1
 	fi
 }
@@ -211,7 +212,7 @@ prepare_dmeventd() {
 	test "${LVM_VALGRIND_DMEVENTD:-0}" -eq 0 || run_valgrind="run_valgrind"
 	echo -n "## preparing dmeventd..."
 #	LVM_LOG_FILE_EPOCH=DMEVENTD $run_valgrind dmeventd -fddddl "$@" 2>&1 &
-	LVM_LOG_FILE_EPOCH=DMEVENTD $run_valgrind dmeventd -fddddl "$@" >debug.log_DMEVENTD_out 2>&1 &
+	LVM_LOG_FILE_EPOCH=DMEVENTD $run_valgrind dmeventd -fddddl -g 2 "$@" >debug.log_DMEVENTD_out 2>&1 &
 	echo $! > LOCAL_DMEVENTD
 
 	# FIXME wait for pipe in /var/run instead
@@ -275,7 +276,7 @@ prepare_lvmdbusd() {
 	# FIXME: This is not correct! Daemon is auto started.
 	echo -n "## checking lvmdbusd is NOT running..."
 	if pgrep -f -l lvmdbusd | grep python3 || pgrep -x -l lvmdbusd ; then
-		skip "Cannot run lvmdbusd while existing lvmdbusd process exists"
+		skip "Cannot run lvmdbusd while existing lvmdbusd process exists."
 	fi
 	echo ok
 
@@ -296,11 +297,11 @@ prepare_lvmdbusd() {
 		daemon=$(which lvmdbusd || :)
 		echo "$daemon"
 	fi
-	test -x "$daemon" || skip "The lvmdbusd daemon is missing"
-	which python3 >/dev/null || skip "Missing python3"
+	test -x "$daemon" || skip "The lvmdbusd daemon is missing."
+	which python3 >/dev/null || skip "Missing python3."
 
-	python3 -c "import pyudev, dbus, gi.repository" || skip "Missing python modules"
-	python3 -c "from json.decoder import JSONDecodeError" || skip "Python json module is missing JSONDecodeError"
+	python3 -c "import pyudev, dbus, gi.repository" || skip "Missing python modules."
+	python3 -c "from json.decoder import JSONDecodeError" || skip "Python json module is missing JSONDecodeError."
 
 	# Copy the needed file to run on the system bus if it doesn't
 	# already exist
@@ -311,7 +312,7 @@ prepare_lvmdbusd() {
 	echo "## preparing lvmdbusd..."
 	lvmconf "global/notify_dbus = 1"
 
-	test "${LVM_DEBUG_LVMDBUS:-0}" != "0" && lvmdbusdebug="--debug"
+	test "${LVM_DEBUG_LVMDBUSD:-0}" != "0" && lvmdbusdebug="--debug"
 
 	# Currently do not interfere with lvmdbusd testing of the file logging
 	unset LVM_LOG_FILE_EPOCH
@@ -325,19 +326,19 @@ prepare_lvmdbusd() {
 	echo -n "## checking lvmdbusd IS running..."
 	if which dbus-send &>/dev/null ; then
 	for i in {100..0}; do
+		test -d "/proc/$pid" || die "lvmdbusd died!"
 		dbus-send --system --dest=org.freedesktop.DBus --type=method_call --print-reply /org/freedesktop/DBus org.freedesktop.DBus.ListNames > dbus_services
 		grep -q com.redhat.lvmdbus1 dbus_services && break
 		sleep .1
 	done
-	else
-		sleep 2
-	fi
-
 	if [ "$i" -eq 0 ] ; then
 		printf "\nFailed to serve lvm dBus service in 10 seconds.\n"
 		sed -e "s,^,## DBUS_SERVICES: ," dbus_services
 		ps aux
 		return 1
+	fi
+	else
+		sleep 2
 	fi
 
 	comm=
@@ -392,7 +393,7 @@ teardown_devs_prefixed() {
 	for dm in $(dm_info name -S "name=~$PREFIX&&suspended=Suspended"); do
 		test "$dm" != "No devices found" || break
 		echo "## resuming: dmsetup resume \"$dm\""
-		dmsetup clear "$dm"
+		dmsetup clear "$dm" &
 		dmsetup resume "$dm" &
 	done
 
@@ -430,8 +431,13 @@ teardown_devs_prefixed() {
 				local force="-f"
 				if test "$i" = 0; then
 					if test "$once" = 1 ; then
+						case "$DM_NAME" in
+						*pv[0-9]*) ;; # do not report removal of our own PVs
+						*)
 						once=0
 						echo "## removing stray mapped devices with names beginning with $prefix: "
+						;;
+						esac
 					fi
 					test "$DM_OPEN" = 0 || break  # stop loop with 1st. opened device
 					force=""
@@ -512,7 +518,9 @@ kill_sleep_kill_() {
 	if test -s "$pidfile" ; then
 		pid=$(< "$pidfile")
 		rm -f "$pidfile"
-		test "$pidfile" = "LOCAL_LVMDBUSD" && killall -9 lvmdbusd || true
+		if test "$pidfile" = "LOCAL_LVMDBUSD"; then
+			killall -9 lvmdbusd || true
+		fi
 		kill -TERM "$pid" 2>/dev/null || return 0
 		for i in {0..10} ; do
 			ps "$pid" >/dev/null || return 0
@@ -607,9 +615,9 @@ teardown() {
 
 	echo -n .
 
-	test -d "$DM_DEV_DIR/mapper" && teardown_devs
+	echo "ok"
 
-	echo -n .
+	test -d "$DM_DEV_DIR/mapper" && teardown_devs
 
 	fi
 
@@ -620,10 +628,9 @@ teardown() {
 	}
 
 	if test "${LVM_TEST_PARALLEL:-0}" = 0 && test -z "$RUNNING_DMEVENTD"; then
+		rm -f debug.log* # no trace of lvm2 command for this case
 		not pgrep dmeventd &>/dev/null # printed in STACKTRACE
 	fi
-
-	echo -n .
 
 	test -n "$TESTDIR" && {
 		cd "$TESTOLDPWD" || die "Failed to enter $TESTOLDPWD"
@@ -632,14 +639,32 @@ teardown() {
 	}
 
 	# Remove any dangling symlink in /dev/disk (our tests can confuse udev)
-	test -d /dev/disk && {
-		find /dev/disk -type l ! -exec /usr/bin/test -e {} \; -print0 | xargs -0 rm -f || true
-	}
+	find /dev/disk -type l -exec test ! -e {} \; -print0 2>/dev/null | xargs -0 rm -f || true
 
 	# Remove any metadata archives and backups from this test on system
 	rm -f /etc/lvm/archive/"${PREFIX}"* /etc/lvm/backup/"${PREFIX}"*
 
-	echo "ok"
+	# Check if this test is leaking some 'symlinks' with our name (udev)
+	LEAKED_LINKS=( $(find /dev -path "/dev/mapper/${PREFIX}*" -type l -exec test ! -e {} \; -print -o \
+		-path "/dev/${PREFIX}*/" -type l -exec test ! -e {} \; -print  2>/dev/null || true) )
+
+	test "${#LEAKED_LINKS[@]}" -eq 0 || echo "## removing stray symlinks the names beginning with ${PREFIX}"
+
+	if test "${LVM_TEST_PARALLEL:-0}" = 0 ; then
+		# for non parallel testing erase any dangling links prefixed with LVMTEST
+		find /dev -path "/dev/mapper/${COMMON_PREFIX}*" -type l -exec test ! -e {} \; -print0 -o \
+			-path "/dev/${COMMON_PREFIX}*" -type l -exec test ! -e {} \; -print0 2>/dev/null | xargs -0 rm -f || true
+		LEAKED_PREFIX=${COMMON_PREFIX}
+	else
+		rm -f "${LEAKED_LINKS[@]}" || true
+		LEAKED_PREFIX=${PREFIX}
+	fi
+
+	# Remove empty dirs with test prefix
+	find /dev -type d -name "${LEAKED_PREFIX}*" -empty -delete 2>/dev/null || true
+
+	# Fail test with leaked links as most likely somewhere is missing synchronization...
+	test "${#LEAKED_LINKS[@]}" -eq 0 || die "Test leaked these symlinks ${LEAKED_LINKS[@]}"
 }
 
 prepare_loop() {
@@ -838,7 +863,7 @@ mdadm_create() {
 
 mdadm_assemble() {
 	STRACE=
-	[ "$DM_DEV_DIR" = "/dev" ] && mdadm -V 2>&1 | grep " v3.2" && {
+	mdadm -V 2>&1 | grep " v3.2" && {
 		# use this 'trick' to slow down mdadm which otherwise
 		# is racing with udev rule since mdadm internally
 		# opens and closes raid leg devices in RW mode and then
@@ -1066,9 +1091,9 @@ prepare_devs() {
 		# then allocate a dedicated backing device for PV; otherwise, rollback
 		# to use single backing device for device-mapper.
 		if [ -n "$LVM_TEST_BACKING_DEVICE" ] && [ "$n" -le ${#BACKING_DEVICE_ARRAY[@]} ]; then
-			table[i]="0 $size linear "${BACKING_DEVICE_ARRAY[i]}" $(( header_shift * 2048 ))"
+			table[i]="0 $size linear ${BACKING_DEVICE_ARRAY[i]} $(( header_shift * 2048 ))"
 		else
-			table[i]="0 $size linear "$BACKING_DEV" $(( i * size + ( header_shift * 2048 ) ))"
+			table[i]="0 $size linear $BACKING_DEV $(( i * size + ( header_shift * 2048 ) ))"
 		fi
 		concise[i]="$name,TEST-$name,,,${table[i]}"
 		echo "${table[i]}" > "$name.table"
@@ -1155,8 +1180,14 @@ common_dev_() {
 	local type
 	local pvdev
 	local offset
+	local err_dev
+	local zero_dev
 
 	read -r pos size type pvdev offset < "$name.table"
+
+	# Cache device values to avoid repeated cat calls in loop
+	test -f ERR_DEV && err_dev=$(< ERR_DEV)
+	test -f ZERO_DEV && zero_dev=$(< ZERO_DEV)
 
 	for fromlen in "${@-0:}"; do
 		from=${fromlen%%:*}
@@ -1178,9 +1209,9 @@ common_dev_() {
 		delay)
 			echo "$from $len delay $pvdev $(( pos + offset )) $read_ms $pvdev $(( pos + offset )) $write_ms" ;;
 		writeerror)
-			echo "$from $len delay $pvdev $(( pos + offset )) 0 $(cat ERR_DEV) 0 0" ;;
+			echo "$from $len delay $pvdev $(( pos + offset )) 0 $err_dev 0 0" ;;
 		delayzero)
-			echo "$from $len delay $(cat ZERO_DEV) 0 $read_ms $(cat ZERO_DEV) 0 $write_ms" ;;
+			echo "$from $len delay $zero_dev 0 $read_ms $zero_dev 0 $write_ms" ;;
 		error|zero)
 			echo "$from $len $tgtype" ;;
 		esac
@@ -1351,6 +1382,21 @@ error_dev() {
 	common_dev_ error "$@"
 }
 
+# New kernels do not allow to create devices bigger the <8EiB
+# This gives 18014398509481983 as maximum usable sectors
+#
+# MAX_DEV_SIZE=18014398509481983
+#
+# Interestingly older kernels (3.X series) do have some strange problems
+# if there is a device of such size  (systemd-udev runs in endless loop:
+#   truncate_inode_pages_range+0x1ed/0x5e0
+#   truncate_inode_pages+0x1f/0x30
+#   kill_bdev+0x26/0x30
+#
+# As we don't really care about couple missing sectors here, just lower
+# the size to the max usable size that is not cause troubles:
+MAX_DEV_SIZE=18014398509481976
+
 #
 # Convert device to device with write errors but normal reads.
 # For this 'delay' dev is used and reroutes 'reads' back to original device
@@ -1365,7 +1411,8 @@ writeerror_dev() {
 			target_at_least dm-delay 1 1 0 || return 0
 			touch HAVE_DM_DELAY
 		fi
-		dmsetup create -u "TEST-$name" "$name" --table "0 4611686018427387904 error"
+		# error device with the size of 8EiB
+		dmsetup create -u "TEST-$name" "$name" --table "0 $MAX_DEV_SIZE error"
 		# Take major:minor of our error device
 		echo "$name" > ERR_DEV_NAME
 		dmsetup info -c  --noheadings -o major,minor "$name" > ERR_DEV
@@ -1388,7 +1435,8 @@ delayzero_dev() {
 			target_at_least dm-delay 1 1 0 || return 0
 			touch HAVE_DM_DELAY
 		fi
-		dmsetup create -u "TEST-$name" "$name" --table "0 4611686018427387904 zero"
+		# error device with the size of 8EiB
+		dmsetup create -u "TEST-$name" "$name" --table "0 $MAX_DEV_SIZE zero"
 		# Take major:minor of our error device
 		echo "$name" > ZERO_DEV_NAME
 		dmsetup info -c  --noheadings -o major,minor "$name" > ZERO_DEV
@@ -1595,6 +1643,7 @@ dmeventd/executable = "$abs_top_builddir/test/lib/dmeventd"
 activation/udev_rules = 1
 activation/udev_sync = 1
 global/fsadm_executable = "$abs_top_builddir/test/lib/fsadm"
+global/lvresize_fs_helper_executable = "$abs_top_builddir/test/lib/lvresize_fs_helper"
 global/library_dir = "$TESTDIR/lib"
 global/locking_dir = "$TESTDIR/var/lock/lvm"
 EOF
@@ -1781,7 +1830,7 @@ wait_for_sync() {
 		sleep .2
 	done
 
-	echo "Sync is taking too long - assume stuck"
+	echo "Sync is taking too long - assume stuck."
 	echo t >/proc/sysrq-trigger 2>/dev/null
 	return 1
 }
@@ -1806,7 +1855,7 @@ wait_recalc() {
 #                dmsetup status "$DM_DEV_DIR/mapper/${checklv/\//-}"
 #		exit
 #	fi
-	echo "Timeout waiting for recalc"
+	echo "Timeout waiting for recalc."
 	dmsetup status "$DM_DEV_DIR/mapper/${checklv/\//-}"
 	return 1
 }
@@ -1949,6 +1998,22 @@ have_raid() {
 	esac
 }
 
+have_raid_resizable() {
+	# Check if the kernel can resize raid volume without killing leg.
+	# MD core has had a bug in handling read-ahead requests.
+	# This results in marking raid with suspended leg as failed.
+	# Bug was fixed from kernel 6.16
+	# Fixing kernel commit: 9f346f7d4ea73692b82f5102ca8698e4040469ea
+	# Patch was backported to most 6.15 releases.
+	# Note: Fixing test for this failure would likely require full raid
+	# array resync, so it's better to skip the test for affected kernels.
+	case "$(uname -r)" in
+	  6.1[34]*) return 1 ;;
+	  5.14.0-6[12]*.el9.*) return 1 ;; # Kernel is missing fixing commit!
+	  6.12.0-12[456]*.el10*) return 1 ;; # -- '' --
+	esac
+}
+
 have_raid4 () {
 	local r=0
 
@@ -2050,7 +2115,7 @@ wait_pvmove_lv_ready() {
 			if test "${#lvid[@]}" -eq "$#" ; then
 				lvmpolld_dump > lvmpolld_dump.txt
 				all=1
-				for l in "${lvid[@]}" ; do
+				for l in "${lvid[@]%-real}" ; do
 					check_lvmpolld_init_rq_count 1 "${l##LVM-}" lvid || all=0
 				done
 				test "$all" = 1 && return
@@ -2107,6 +2172,8 @@ kernel_at_least() {
 test "${LVM_TEST_AUX_TRACE-0}" = "0" || set -x
 
 test -f DEVICES && devs=$(< DEVICES)
+
+unset LVM_VALGRIND
 
 if test "$1" = "dmsetup" ; then
     shift

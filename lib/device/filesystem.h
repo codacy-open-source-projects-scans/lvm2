@@ -15,17 +15,23 @@
 #ifndef _FILESYSTEM_H
 #define _FILESYSTEM_H
 
+#include "lib/commands/toolcontext.h"
+#include "lib/device/device.h"
+
 #define FSTYPE_MAX 16
+#define UUID_LEN 37
 
 struct fs_info {
 	char fstype[FSTYPE_MAX];
 	char mount_dir[PATH_MAX];
+	char uuid[UUID_LEN];
 	char fs_dev_path[PATH_MAX]; /* usually lv dev, can be crypt dev */
 	unsigned int fs_block_size_bytes; /* 512 or 4k */
 	uint64_t fs_last_byte; /* last byte on the device used by the fs */
 	uint32_t crypt_offset_bytes; /* offset in bytes of crypt data on LV */
 	dev_t crypt_devt; /* dm-crypt device between the LV and FS */
 	uint64_t crypt_dev_size_bytes;
+	uint64_t new_size_bytes;
 
 	unsigned nofs:1;
 	unsigned unmounted:1;
@@ -42,12 +48,9 @@ struct fs_info {
 int fs_get_info(struct cmd_context *cmd, struct logical_volume *lv,
                 struct fs_info *fsi, int include_mount);
 
-int fs_extend_script(struct cmd_context *cmd, struct logical_volume *lv, struct fs_info *fsi,
-		uint64_t newsize_bytes, char *fsmode);
-int fs_reduce_script(struct cmd_context *cmd, struct logical_volume *lv, struct fs_info *fsi,
-		uint64_t newsize_bytes, char *fsmode);
-int crypt_resize_script(struct cmd_context *cmd, struct logical_volume *lv, struct fs_info *fsi,
-		uint64_t newsize_bytes_fs);
+int fs_extend_script(struct cmd_context *cmd, struct logical_volume *lv, struct fs_info *fsi, char *fsmode);
+int fs_reduce_script(struct cmd_context *cmd, struct logical_volume *lv, struct fs_info *fsi, char *fsmode);
+int crypt_resize_script(struct cmd_context *cmd, struct logical_volume *lv, struct fs_info *fsi);
 
 int fs_mount_state_is_misnamed(struct cmd_context *cmd, struct logical_volume *lv, char *lv_path, char *fstype);
 int lv_crypt_is_active(struct cmd_context *cmd, char *lv_path);

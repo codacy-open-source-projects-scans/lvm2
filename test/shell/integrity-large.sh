@@ -12,16 +12,15 @@
 
 # Test writecache usage
 
-SKIP_WITH_LVMPOLLD=1
 SKIP_WITH_LOW_SPACE=1100
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 aux have_integrity 1 5 0 || skip
 which mkfs.xfs || skip
 
 mnt="mnt"
-mkdir -p $mnt
+mkdir -p "$mnt"
 
 # raid1 LV needs to be extended to 512MB to test imeta being extended
 aux prepare_devs 4 632

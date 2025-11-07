@@ -11,9 +11,8 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 aux have_raid 1 3 0 || skip
 
@@ -33,8 +32,10 @@ aux disable_dev "$dev1"
 vgreduce --force --removemissing $vg
 check raid_leg_status $vg $lv "DA"
 
-# Conversion to 2 legs must fail on degraded 2-legged raid1 LV
-not lvconvert -y -m1 $vg/$lv
+# Conversion to 2 legs does nothing on degraded 2-legged raid1 LV
+lvconvert -y -m1 $vg/$lv 2>&1 | tee out
+grep "is 2 already" out
+# Check it remains degraded after the successful "conversion"
 check raid_leg_status $vg $lv "DA"
 
 # Repair has to succeed

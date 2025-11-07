@@ -16,8 +16,10 @@
 #ifndef _LVM_DEVICE_H
 #define _LVM_DEVICE_H
 
+#include "base/data-struct/list.h"
 #include "lib/uuid/uuid.h"
 
+#include <stdint.h>
 #include <fcntl.h>
 
 #define DEV_REGULAR		0x00000002	/* Regular file? */
@@ -41,6 +43,8 @@
 #define DEV_MATCHED_USE_ID	0x00080000	/* matched an entry from cmd->use_devices */
 #define DEV_SCAN_FOUND_NOLABEL	0x00100000	/* label_scan read, passed filters, but no lvm label */
 #define DEV_SCAN_NOT_READ	0x00200000	/* label_scan not able to read dev */
+#define DEV_ADDED_NVME_WWIDS	0x00400000	/* wwids have been ready from libnvme */
+#define DEV_UPDATE_USE_ID	0x00800000	/* update system.devices entry to use preferred wwid */
 
 /*
  * Support for external device info.
@@ -70,8 +74,12 @@ struct dev_ext {
 #define DEV_ID_TYPE_WWID_NAA   9
 #define DEV_ID_TYPE_WWID_EUI  10
 #define DEV_ID_TYPE_WWID_T10  11
+/* reserve 12 for "scsi name string" if we decide to add that */
+#define DEV_ID_TYPE_NVME_EUI64 13
+#define DEV_ID_TYPE_NVME_NGUID 14
+#define DEV_ID_TYPE_NVME_UUID  15
 
-/* Max length of WWID_NAA, WWID_EUI, WWID_T10 */
+/* Max length of SCSI or NVME WWID */
 #define DEV_WWID_SIZE 128
 
 /*
@@ -79,12 +87,14 @@ struct dev_ext {
  * /sys/dev/block/%d:%d/device/wwid
  * /sys/dev/block/%d:%d/wwid
  * /sys/dev/block/%d:%d/device/vpd_pg83
+ * or libnvme
  */
 
 struct dev_wwid {
-	struct dm_list list;     /* dev->wwids */
-	int type;                /* 1,2,3 for NAA,EUI,T10 */
-	char id[DEV_WWID_SIZE];  /* includes prefix naa.,eui.,t10. */
+	struct dm_list list;	/* dev->wwids */
+	uint16_t scsi_type;	/* 1,2,3 for SCSI NAA,EUI,T10 */
+	uint16_t nvme_type;	/* 1,2,3 for NVME EUI64,NGUID,UUID */
+	char id[DEV_WWID_SIZE];	/* includes prefix e.g. naa.,eui.,t10. */
 };
 
 /*
@@ -240,6 +250,7 @@ int parse_vpd_serial(const unsigned char *in, char *out, size_t outsize);
 int device_id_list_remove(struct dm_list *devices, struct device *dev);
 struct device_id_list *device_id_list_find_dev(struct dm_list *devices, struct device *dev);
 int device_list_remove(struct dm_list *devices, struct device *dev);
+int device_list_add(struct dm_pool *mem, struct dm_list *devices, struct device *dev);
 struct device_list *device_list_find_dev(struct dm_list *devices, struct device *dev);
 
 char *strdup_pvid(char *pvid);

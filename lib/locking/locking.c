@@ -23,6 +23,7 @@
 #include "lib/mm/memlock.h"
 #include "lib/config/defaults.h"
 #include "lib/cache/lvmcache.h"
+#include "lib/display/display.h"
 #include "lib/misc/lvm-signal.h"
 
 #include <assert.h>
@@ -328,12 +329,10 @@ int vg_write_lock_held(void)
 	return _vg_write_lock_held;
 }
 
-int sync_local_dev_names(struct cmd_context* cmd)
+void sync_local_dev_names(struct cmd_context* cmd)
 {
-	dm_devs_cache_destroy();
 	memlock_unlock(cmd);
 	fs_unlock();
-	return 1;
 }
 
 /*
@@ -408,7 +407,7 @@ int lock_global(struct cmd_context *cmd, const char *mode)
 		return 0;
 
 	if (!lockd_global(cmd, mode)) {
-		lockf_global(cmd, "un");
+		(void) lockf_global(cmd, "un");
 		return 0;
 	}
 

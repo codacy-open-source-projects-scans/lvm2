@@ -829,7 +829,7 @@ int dm_event_get_registered_device(struct dm_event_handler *dmevh, int next)
 	}
 
 	dm_event_handler_set_dso(dmevh, reply_dso);
-	dm_event_handler_set_event_mask(dmevh, reply_mask);
+	dm_event_handler_set_event_mask(dmevh, (enum dm_event_mask) reply_mask);
 
 	free(reply_dso);
 	reply_dso = NULL;
@@ -988,7 +988,7 @@ void dm_event_log(const char *subsys, int level, const char *file,
 			fprintf(stream, "%28s:%4d %s", file, line, indent);
 		vfprintf(stream, _(format), ap);
 		fputc('\n', stream);
-		fflush(stream);
+		(void) fflush(stream);
 	}
 
 	pthread_mutex_unlock(&_log_mutex);

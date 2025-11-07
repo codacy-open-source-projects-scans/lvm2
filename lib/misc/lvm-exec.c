@@ -63,10 +63,7 @@ int exec_cmd(struct cmd_context *cmd, const char *const argv[],
 
 	if (sync_needed)
 		/* Flush ops and reset dm cookie */
-		if (!sync_local_dev_names(cmd)) {
-			log_error("Failed to sync local device names before forking.");
-			return 0;
-		}
+		sync_local_dev_names(cmd);
 
 	log_verbose("Executing:%s", _verbose_args(argv, buf, sizeof(buf)));
 
@@ -77,6 +74,7 @@ int exec_cmd(struct cmd_context *cmd, const char *const argv[],
 
 	if (!pid) {
 		/* Child */
+		init_log_command(find_config_tree_bool(cmd, log_command_names_CFG, NULL), 0);
 		reset_locking();
 		/* FIXME Fix effect of reset_locking on cache then include this */
 		/* destroy_toolcontext(cmd); */
@@ -123,7 +121,7 @@ static int _reopen_fd_to_null(int fd)
 		return 0;
 	}
 
-	if (close(fd)) {
+	if ((null_fd != fd) && close(fd)) {
 		log_sys_error("close", "");
 		goto out;
 	}
@@ -151,10 +149,7 @@ FILE *pipe_open(struct cmd_context *cmd, const char *const argv[],
 
 	if (sync_needed)
 		/* Flush ops and reset dm cookie */
-		if (!sync_local_dev_names(cmd)) {
-			log_error("Failed to sync local device names before forking.");
-			return 0;
-		}
+		sync_local_dev_names(cmd);
 
 	if (pipe(pipefd)) {
 		log_sys_error("pipe", "");
@@ -194,6 +189,8 @@ FILE *pipe_open(struct cmd_context *cmd, const char *const argv[],
 	/* Parent -> reader */
 	if (close(pipefd[1 /*write*/])) {
 		log_sys_error("close", "STDOUT");
+		if (close(pipefd[0 /*read*/]))
+			log_sys_debug("close", "pipe[0]");
 		return NULL;
 	}
 

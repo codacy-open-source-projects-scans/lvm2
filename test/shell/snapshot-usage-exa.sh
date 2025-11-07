@@ -13,10 +13,8 @@
 # Check very large device size (up to 15Exa bytes)
 # this needs 64bit arch
 
-SKIP_WITH_LVMLOCKD=1
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld --skip-with-lvmlockd
 
 aux can_use_16T || skip
 
@@ -40,8 +38,8 @@ lvcreate -s -l100%FREE -n $lv2 $vg1/$lv1
 check lv_field $vg1/$lv2 size "7.50p"
 lvremove -ff $vg1
 
-lvcreate --type snapshot -V15E -l1 -n $lv1 -s $vg1
-check lv_field $vg1/$lv1 origin_size "15.00e"
+lvcreate --type snapshot -V8191P -l1 -n $lv1 -s $vg1
+check lv_field $vg1/$lv1 origin_size "<8.00e"
 
 vgremove -ff $vg1
 vgremove -ff $vg

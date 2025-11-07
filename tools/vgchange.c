@@ -15,6 +15,7 @@
 
 #include "tools.h"
 #include "lib/device/device_id.h"
+#include "lib/device/persist.h"
 #include "lib/label/hints.h"
 
 struct vgchange_params {
@@ -114,7 +115,7 @@ static int _activate_lvs_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 		if (lv_is_vdo_pool(lv))
 			continue;
 
-		if (lv_activation_skip(lv, activate, arg_is_set(cmd, ignoreactivationskip_ARG)))
+		if (lv_activation_skip(lv, activate, arg_count(cmd, ignoreactivationskip_ARG)))
 			continue;
 
 		if ((activate == CHANGE_AAY) &&
@@ -156,10 +157,7 @@ static int _activate_lvs_in_vg(struct cmd_context *cmd, struct volume_group *vg,
 	}
 
 	/* Wait until devices are available */
-	if (!sync_local_dev_names(vg->cmd)) {
-		log_error("Failed to sync local devices for VG %s.", vg->name);
-		r = 0;
-	}
+	sync_local_dev_names(vg->cmd);
 
 	return r;
 }
@@ -204,6 +202,7 @@ int vgchange_activate(struct cmd_context *cmd, struct volume_group *vg,
 	const struct lv_list *lvl;
 	struct pv_list *pvl;
 	int do_activate = is_change_activating(activate);
+	const char *pr_op = NULL;
 
 	/*
 	 * We can get here in the odd case where an LV is already active in
@@ -232,6 +231,24 @@ int vgchange_activate(struct cmd_context *cmd, struct volume_group *vg,
 		}
 	}
 
+	if (arg_is_set(cmd, persist_ARG))
+		pr_op = arg_str_value(cmd, persist_ARG, NULL); 
+
+	/*
+	 * vgchange -ay --persist start
+	 * This command bypasses the persist_is_started check in vg_read (disable_pr_required.)
+	 * It is not permitted for shared VGs, where PR start happens before lockstart.
+	 * For non-shared VGs, require a successful persist_start() here before activating.
+	 */
+	if (do_activate && pr_op && !strcmp(pr_op, "start") && cmd->disable_pr_required) {
+		if (vg_is_shared(vg)) {
+			log_error("Activation with persist start not permitted for shared VG %s.", vg->name);
+			return 0;;
+		}
+		if (!persist_start_include(cmd, vg, (activate == CHANGE_AAY), 0, NULL))
+			return_0;
+	}
+ 
 	/*
 	 * Safe, since we never write out new metadata here. Required for
 	 * partial activation to work.
@@ -278,6 +295,18 @@ int vgchange_activate(struct cmd_context *cmd, struct volume_group *vg,
 	if (!_activate_lvs_in_vg(cmd, vg, activate)) {
 		stack;
 		r = 0;
+	}
+
+	if (!do_activate && pr_op && !strcmp(pr_op, "stop")) {
+		/* For a shared VG, PR stop happens after lockstop. */
+		if (vg_is_shared(vg))
+			log_warn("WARNING: skipping persist stop for shared VG.");
+		else if (lvs_in_vg_activated(vg))
+			log_warn("WARNING: skipping persist stop for incomplete deactivation.");
+		else if (!persist_stop(cmd, vg)) {
+			log_error("Failed to stop persistent reservation.");
+			r = 0;
+		}
 	}
 
 	/*
@@ -549,7 +578,8 @@ static int _vgchange_profile(struct cmd_context *cmd,
  * extra_system_ids list.  This function is not allowed to change the system_id
  * of a foreign VG (VG owned by another host).
  */
-static int _vgchange_system_id(struct cmd_context *cmd, struct volume_group *vg)
+static int _vgchange_system_id(struct cmd_context *cmd, struct volume_group *vg,
+			       int *to_local, int *to_other)
 {
 	const char *system_id;
 	const char *system_id_arg_str = arg_str_value(cmd, systemid_ARG, NULL);
@@ -596,6 +626,9 @@ static int _vgchange_system_id(struct cmd_context *cmd, struct volume_group *vg)
 			log_error("Volume group %s system ID not changed.", vg->name);
 			return 0;
 		}
+		*to_other = 1;
+	} else {
+		*to_local = 1;
 	}
 
 	log_verbose("Changing system ID for VG %s from \"%s\" to \"%s\".",
@@ -674,6 +707,14 @@ static int _vgchange_lock_start(struct cmd_context *cmd, struct volume_group *vg
 	}
 
 do_start:
+	if (!persist_start_include(cmd, vg, 0, auto_opt, NULL))
+		return 0;
+
+	if ((vg->pr & (VG_PR_REQUIRE|VG_PR_AUTOSTART)) && !persist_is_started(cmd, vg, NULL, 0)) {
+		log_error("VG %s PR should be started before locking (vgchange --persist start)", vg->name);
+		return 0;
+	}
+
 	r = lockd_start_vg(cmd, vg, &exists);
 
 	if (r)
@@ -688,7 +729,14 @@ do_start:
 
 static int _vgchange_lock_stop(struct cmd_context *cmd, struct volume_group *vg)
 {
-	return lockd_stop_vg(cmd, vg);
+	if (!lockd_stop_vg(cmd, vg))
+		return_0;
+
+	/* stop is the only --persist value that's accepted */
+	if (arg_is_set(cmd, persist_ARG) && !persist_stop(cmd, vg))
+		log_warn("WARNING: PR stop failed, see lvmpersist stop.");
+
+	return 1;
 }
 
 static int _vgchange_single(struct cmd_context *cmd, const char *vg_name,
@@ -989,6 +1037,7 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 	struct vgchange_params vp = { 0 };
 	struct processing_handle *handle;
 	const char *vgname = NULL;
+	const char *pr_op;
 	uint32_t flags = 0;
 	int ret;
 
@@ -1075,6 +1124,37 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 
 	if (noupdate)
 		cmd->ignore_device_name_mismatch = 1;
+
+	/*
+	 * PR usage with activation/deactivation.
+	 */
+	if (arg_is_set(cmd, activate_ARG)) {
+		int is_activating = is_change_activating((activation_change_t)arg_uint_value(cmd, activate_ARG, CHANGE_AY));
+
+		/* Always allow deactivation without PR being started. */
+		if (!is_activating)
+			cmd->disable_pr_required = 1;
+
+		/* Either "-ay --persist start", or "-an --persist stop". */
+		if ((pr_op = arg_str_value(cmd, persist_ARG, NULL))) {
+			if (strcmp(pr_op, "start") && strcmp(pr_op, "stop")) {
+				log_error("Invalid --persist usage.");
+				return ECMD_FAILED;
+			}
+			if ((!strcmp(pr_op, "start") && !is_activating) ||
+			    (!strcmp(pr_op, "stop") && is_activating)) {
+				log_error("Invalid --persist usage.");
+				return ECMD_FAILED;
+			}
+			/*
+			 * Setting disable_pr_required to bypass the
+			 * persist_is_started check in vg_read requires
+			 * persist_start in vgchange_activate.
+			 */
+			if (!strcmp(pr_op, "start") && is_activating)
+				cmd->disable_pr_required = 1;
+		}
+	}
 
 	/*
 	 * If the devices file includes PVs stacked on LVs, then
@@ -1226,7 +1306,7 @@ static int _vgchange_locktype(struct cmd_context *cmd, struct volume_group *vg, 
 	}
 
 	/* ... to lockd type */
-	if (is_lockd_type(lock_type)) {
+	if (lock_type && is_lockd_type(lock_type)) {
 		/*
 		 * For lock_type dlm, lockd_init_vg() will do a single
 		 * vg_write() that sets lock_type, sets lock_args, clears
@@ -1256,7 +1336,7 @@ static int _vgchange_locktype(struct cmd_context *cmd, struct volume_group *vg, 
 
 		vg->system_id = NULL;
 
-		if (!lockd_init_vg(cmd, vg, lock_type, lv_lock_count)) {
+		if (!lockd_init_vg(cmd, vg, lock_type, lv_lock_count, arg_str_value(cmd, setlockargs_ARG, NULL))) {
 			log_error("Failed to initialize lock args for lock type %s", lock_type);
 			return 0;
 		}
@@ -1273,17 +1353,27 @@ static int _vgchange_locktype(struct cmd_context *cmd, struct volume_group *vg, 
 		 * then sets lock_type, sets lock_args, and clears system_id.
 		 *
 		 * Stage 2:
-		 * We get here, and can now set LV lock_args.  This uses
-		 * the standard code path for allocating LV locks in
-		 * vg_write() by setting LV lock_args to "pending",
-		 * which tells vg_write() to call lockd_init_lv()
-		 * and sets the lv->lock_args value before writing the VG.
+		 * We get here, and can now set LV lock_args.
+		 *
+		 * lockd_init_lv() uses "lp" settings for the new LV to check if
+		 * it should have a lock, and if so calls lockd_init_lv_args to
+		 * do the allocation.
+		 * Here there is no "lp", so here we use lockd_lv_uses_lock() to
+		 * check if the LV should have a lock, if if so call lockd_init_lv_args
+		 * to do the allocation.
 		 */
 		if (!strcmp(lock_type, "sanlock")) {
+			const char *last_args = NULL;
+
 			dm_list_iterate_items(lvl, &vg->lvs) {
 				lv = lvl->lv;
-				if (lockd_lv_uses_lock(lv))
-					lv->lock_args = "pending";
+
+				if (lockd_lv_uses_lock(lv) &&
+				    !lockd_init_lv_args(cmd, vg, lv, vg->lock_type, last_args, &lv->lock_args)) {
+					log_error("Failed to allocate LV lock on disk");
+					return 0;
+				}
+				last_args = lv->lock_args;
 			}
 
 			vg->skip_validate_lock_args = 0;
@@ -1307,7 +1397,15 @@ static int _vgchange_locktype_single(struct cmd_context *cmd, const char *vg_nam
 			             struct volume_group *vg,
 			             struct processing_handle *handle)
 {
+	char *pr_key = NULL;
+	DM_LIST_INIT(pr_devs);
 	int no_change = 0;
+
+	/* New lock type may use different PR key, save current key to stop PR below. */
+	if (vg->pr & VG_PR_REQUIRE) {
+		if (!persist_finish_before(cmd, vg, &pr_devs, &pr_key))
+			return_ECMD_FAILED;
+	}
 
 	if (!_vgchange_locktype(cmd, vg, &no_change))
 		return_ECMD_FAILED;
@@ -1326,14 +1424,13 @@ static int _vgchange_locktype_single(struct cmd_context *cmd, const char *vg_nam
 	 * new leases to lvmlock, so we need to wait until after vg_write to
 	 * deactivate it.
 	 */
-	if (vg->lock_type && !strcmp(vg->lock_type, "sanlock") &&
-	    (cmd->command->command_enum == vgchange_locktype_CMD)) {
-		if (!deactivate_lv(cmd, vg->sanlock_lv)) {
-			log_error("Failed to deactivate %s.",
-				  display_lvname(vg->sanlock_lv));
-			return ECMD_FAILED;
-		}
+	if (vg_is_sanlock(vg)) {
+		if (!deactivate_lv(cmd, vg->sanlock_lv))
+			log_warn("WARNING: Failed to deactivate %s.", display_lvname(vg->sanlock_lv));
 	}
+
+	if (pr_key)
+		persist_finish_after(cmd, vg, &pr_devs, pr_key);
 
 	log_print_unless_silent("Volume group \"%s\" successfully changed.", vg->name);
 
@@ -1398,7 +1495,7 @@ int vgchange_locktype_cmd(struct cmd_context *cmd, int argc, char **argv)
 	 * lock_type.
 	 */
 	if (!lockd_global(cmd, "ex"))
-		return 0;
+		log_warn("WARNING: no global lock held in lvmlockd.");
 
 process:
 	if (!(handle = init_processing_handle(cmd, NULL))) {
@@ -1499,6 +1596,11 @@ static int _vgchange_systemid_single(struct cmd_context *cmd, const char *vg_nam
 			             struct volume_group *vg,
 			             struct processing_handle *handle)
 {
+	int to_local = 0;
+	int to_other = 0;
+	int pr_start = 0;
+	int pr_stop = 0;
+
 	if (arg_is_set(cmd, majoritypvs_ARG)) {
 		struct pv_list *pvl;
 		int missing_pvs = 0;
@@ -1517,11 +1619,58 @@ static int _vgchange_systemid_single(struct cmd_context *cmd, const char *vg_nam
 		}
 	}
 
-	if (!_vgchange_system_id(cmd, vg))
+	if (!_vgchange_system_id(cmd, vg, &to_local, &to_other))
 		return_ECMD_FAILED;
+
+	/*
+	 * To transfer ownership and PR of the VG together,
+	 * combine changing system ID with starting/stopping PR.
+	 *
+	 * a) vgchange --systemid <local_id> --persist start
+	 *    acquire PR, and then set system ID to ourself
+	 *
+	 * b) vgchange --systemid <other_id> --persist stop
+	 *    set system ID to another, and then release PR
+	 *
+	 * cmd->disable_pr_require is set to 1 to implement a),
+	 * which requires bypassing the persist_is_started()
+	 * check in vg_read, to get here to do persist_start().
+	 */
+	if (arg_is_set(cmd, persist_ARG)) {
+		const char *op = arg_str_value(cmd, persist_ARG, NULL);
+		if (op && !strcmp(op, "start"))
+			pr_start = 1;
+		else if (op && !strcmp(op, "stop"))
+			pr_stop = 1;
+		else if (op) {
+			log_error("Invalid --persist option value.");
+			return ECMD_FAILED;
+		}
+		if (!to_local && !to_other) {
+			log_error("Invalid --persist usage.");
+			return ECMD_FAILED;
+		}
+		if (pr_start && to_other) {
+			log_error("Invalid --persist usage.");
+			return ECMD_FAILED;
+		}
+		if (pr_stop && to_local) {
+			log_error("Invalid --persist usage.");
+			return ECMD_FAILED;
+		}
+		if (pr_start && to_local) {
+			if (!persist_start_include(cmd, vg, 0, 0, arg_str_value(cmd, removekey_ARG, NULL)))
+				return ECMD_FAILED;
+		}
+	}
 
 	if (!vg_write(vg) || !vg_commit(vg))
 		return_ECMD_FAILED;
+
+	if (to_other && pr_stop) {
+		if (!persist_stop(cmd, vg))
+			log_warn("WARNING: PR stop failed, see lvmpersist stop.");
+	}
 
 	log_print_unless_silent("Volume group \"%s\" successfully changed.", vg->name);
 
@@ -1541,7 +1690,320 @@ int vgchange_systemid_cmd(struct cmd_context *cmd, int argc, char **argv)
 	if (arg_is_set(cmd, majoritypvs_ARG))
 		cmd->handles_missing_pvs = 1;
 
+	/*
+	 * Bypass the persist_is_started() check in vg_read()
+	 * in order to reach _vgchange_systemid_single() which
+	 * will do persist_start() before changing system ID.
+	 */
+	if (arg_is_set(cmd, persist_ARG)) {
+		const char *op = arg_str_value(cmd, persist_ARG, NULL);
+		if (op && !strcmp(op, "start"))
+			cmd->disable_pr_required = 1;
+	}
+
 	ret = process_each_vg(cmd, argc, argv, NULL, NULL, READ_FOR_UPDATE, 0, handle, &_vgchange_systemid_single);
+
+	destroy_processing_handle(cmd, handle);
+	return ret;
+}
+
+static int _vgchange_persist_single(struct cmd_context *cmd, const char *vg_name,
+			             struct volume_group *vg,
+			             struct processing_handle *handle)
+{
+	const char *op = arg_str_value(cmd, persist_ARG, NULL);
+	const char *remkey = arg_str_value(cmd, removekey_ARG, NULL);
+	int ret = 1;
+
+	if (!op)
+		return ECMD_FAILED;
+
+	if (!strcmp(op, "check")) {
+		ret = persist_check(cmd, vg);
+
+	} else if (!strcmp(op, "read")) {
+		ret = persist_read(cmd, vg);
+
+	} else if (!strcmp(op, "start")) {
+		/*
+		 * Prevent the case where VG locking is started on multiple hosts,
+		 * the VG has not been set to require PR, and a user simply runs
+		 * vgchange --persist start, which would succeed, but would result
+		 * in other hosts suddenly losing device access to an in-use VG.
+		 */
+		if (!(vg->pr & VG_PR_REQUIRE) &&
+		    vg_is_shared(vg) &&
+		    lockd_vg_is_started(cmd, vg, NULL) &&
+		    lockd_vg_is_busy(cmd, vg) &&
+		    !vg_is_registered(cmd, vg, NULL, NULL)) {
+			log_error("VG lockspace should be stopped on all hosts (vgchange --lockstop) before starting PR.");
+			return ECMD_FAILED;
+		}
+
+		/*
+		 * TODO: if another host has removed our key, e.g. to fence us,
+		 * then we can just run vgchange --persist start to immediately
+		 * reregister and get back access.  Should we make an attempt
+		 * to detect and warn/prevent when that might be happening?
+		 * e.g. if lockspace is started and lvs are active, our key file
+		 * generation matches our current sanlock generation, and we have
+		 * no key registered, warn with a confirmation to continue with
+		 * persist_start?
+		 */
+
+		ret = persist_start(cmd, vg, remkey, NULL);
+
+	} else if (!strcmp(op, "stop")) {
+		if (!arg_is_set(cmd, force_ARG) && lvs_in_vg_activated(vg)) {
+			log_error("Deactivate LVs before stopping persistent reservation.");
+			return ECMD_FAILED;
+		}
+		ret = persist_stop(cmd, vg);
+
+	} else if (!strcmp(op, "remove")) {
+		ret = persist_remove(cmd, vg, remkey);
+
+	} else if (!strcmp(op, "clear")) {
+		if (!arg_is_set(cmd, yes_ARG) &&
+		    yes_no_prompt("WARNING: clearing PR may disrupt ongoing activity. Continue? [y/n]: ") == 'n') {
+			log_error("PR not cleared.");
+			return ECMD_FAILED;
+		}
+		ret = persist_clear(cmd, vg);
+
+	} else if (!strcmp(op, "autostart")) {
+		/* start if auto was enabled via --setpersist y|autostart */
+		if (vg->pr & VG_PR_AUTOSTART)
+			ret = persist_start(cmd, vg, NULL, NULL);
+
+	} else {
+		log_error("Unknown persist action.");
+		ret = 0;
+	}
+
+	if (!ret)
+		return ECMD_FAILED;
+	return ECMD_PROCESSED;
+}
+
+int vgchange_persist_cmd(struct cmd_context *cmd, int argc, char **argv)
+{
+	struct processing_handle *handle;
+	const char *op = arg_str_value(cmd, persist_ARG, NULL);
+	int ret;
+
+	if (!(handle = init_processing_handle(cmd, NULL))) {
+		log_error("Failed to initialize processing handle.");
+		return ECMD_FAILED;
+	}
+
+	if (arg_is_set(cmd, majoritypvs_ARG))
+		cmd->handles_missing_pvs = 1;
+
+	if (op && (!strcmp(op, "check") || !strcmp(op, "read")))
+		cmd->include_foreign_vgs = 1;
+
+	/*
+	 * PR comes before locking (with sanlock, locking
+	 * involves reading/writing shared storage.)
+	 * So, we either can't, or it doesn't make a lot
+	 * of sense, to acquire an lvmlockd lock around
+	 * PR operations.
+	 *
+	 * TODO: do we want/need to handle the case of
+	 * vgextend/vgreduce changing the set of devices
+	 * in a VG while there's a concurrent persist
+	 * command doing a PR operations on all PVs?
+	 */
+	cmd->lockd_vg_disable = 1;
+
+	/*
+	 * READ_FOR_PERSIST: makes vg_read() acquire an ex local lock
+	 * on the VG to avoid concurrent PR operations from commands.
+	 */
+	ret = process_each_vg(cmd, argc, argv, NULL, NULL, READ_FOR_PERSIST, 0, handle, &_vgchange_persist_single);
+
+	destroy_processing_handle(cmd, handle);
+	return ret;
+}
+
+static int _vgchange_setpersist_single(struct cmd_context *cmd, const char *vg_name,
+			             struct volume_group *vg,
+			             struct processing_handle *handle)
+{
+	const char *op = arg_str_value(cmd, persist_ARG, NULL);
+	char *root_dm_uuid = NULL;
+	char *local_key;
+	struct pv_list *pvl;
+	struct device *dev;
+	uint32_t set_flags;
+	uint32_t lock_args_flags = 0;
+	int key_count;
+	int local_host_id;
+	int start_done = 0;
+	int on;
+
+	if (!setpersist_arg_flags(arg_str_value(cmd, setpersist_ARG, NULL), &set_flags))
+		return_ECMD_FAILED;
+
+	on = (set_flags & (SETPR_Y | SETPR_REQUIRE | SETPR_AUTOSTART)) ? 1 : 0;
+
+	if (on) {
+		local_key = (char *)find_config_tree_str(cmd, local_pr_key_CFG, NULL);
+		local_host_id = find_config_tree_int(cmd, local_host_id_CFG, NULL);
+
+		if (!local_key && !local_host_id) {
+			log_error("A local pr_key or host_id is required to use PR (see lvmlocal.conf).");
+			return ECMD_FAILED;
+		}
+
+		_get_rootvg_dev(cmd, &root_dm_uuid);
+		if (root_dm_uuid && !memcmp(root_dm_uuid + 4, &vg->id, ID_LEN)) {
+			log_error("PR cannot be automated or required for root VG.");
+			return ECMD_FAILED;
+		}
+
+		/* check if PR can be used on the devs before enabling it */
+		dm_list_iterate_items(pvl, &vg->pvs) {
+			if (!(dev = pvl->pv->dev))
+				continue;
+			if (dm_list_empty(&dev->aliases))
+				continue;
+			if (!dev_find_key(cmd, dev, 1, 0, NULL, 0, NULL, 1, &key_count, NULL)) {
+				log_error("Failed to access persistent reservation on %s.", dev_name(dev));
+				return ECMD_FAILED;
+			}
+		}
+	}
+
+	if (vg->lock_args && !lockd_lockargs_get_meta_flags(vg->lock_args, &lock_args_flags)) {
+		log_error("Cannot change VG when lock_args containing unknown settings.");
+		return ECMD_FAILED;
+	}
+
+	if ((set_flags & (SETPR_N | SETPR_NOREQUIRE)) && (lock_args_flags & LOCKARGS_PERSIST)) {
+		log_error("Cannot remove persist require while lock_args uses persist.");
+		return ECMD_FAILED;
+	}
+
+	/*
+	 * If PR is not being used and hosts have a shared VG started,
+	 * then require the VG to be stopped on other hosts before
+	 * enabling/starting PR, otherwise enabling/starting PR will
+	 * cause i/o to begin failing on those other hosts.
+	 */
+	if (on && vg_is_shared(vg) && !persist_is_started(cmd, vg, NULL, 1) &&
+	    lockd_vg_is_started(cmd, vg, NULL) && lockd_vg_is_busy(cmd, vg)) {
+		log_error("VG lockspace should be stopped on all hosts (vgchange --lockstop) before enabling PR.");
+		return ECMD_FAILED;
+	}
+
+	/* 
+	 * vgchange --setpersist y|require|autostart --persist start 
+	 * will start PR before changing VG.
+	 */
+	if (on && op && strcmp(op, "start")) {
+		if (!persist_start(cmd, vg, NULL, NULL)) {
+			log_error("Failed to start PR, VG not changed.");
+			return_ECMD_FAILED;
+		}
+		start_done = 1;
+	}
+
+	if (set_flags & SETPR_Y)
+		vg->pr = VG_PR_AUTOSTART | VG_PR_REQUIRE;
+	else if (set_flags & SETPR_N)
+		vg->pr = 0;
+	else if (set_flags & SETPR_REQUIRE)
+		vg->pr |= VG_PR_REQUIRE;
+	else if (set_flags & SETPR_NOREQUIRE)
+		vg->pr &= ~VG_PR_REQUIRE;
+	else if (set_flags & SETPR_AUTOSTART)
+		vg->pr |= VG_PR_AUTOSTART;
+	else if (set_flags & SETPR_NOAUTOSTART)
+		vg->pr &= ~VG_PR_AUTOSTART;
+	else if (set_flags & SETPR_PTPL)
+		vg->pr |= VG_PR_PTPL;
+	else if (set_flags & SETPR_NOPTPL)
+		vg->pr &= ~VG_PR_PTPL;
+
+	if (!vg_write(vg) || !vg_commit(vg)) {
+		if (start_done) {
+			if (!persist_stop(cmd, vg))
+				log_error("PR stop failed.");
+		}
+		return_ECMD_FAILED;
+	}
+
+	log_print_unless_silent("Volume group \"%s\" successfully changed.", vg->name);
+
+	return ECMD_PROCESSED;
+}
+
+int vgchange_setpersist_cmd(struct cmd_context *cmd, int argc, char **argv)
+{
+	struct processing_handle *handle;
+	uint32_t flags = READ_FOR_UPDATE;
+	int ret;
+
+	if (!(handle = init_processing_handle(cmd, NULL))) {
+		log_error("Failed to initialize processing handle.");
+		return ECMD_FAILED;
+	}
+
+	cmd->disable_pr_required = 1;
+
+	if (arg_is_set(cmd, persist_ARG))
+		flags |= READ_FOR_PERSIST;
+
+	ret = process_each_vg(cmd, argc, argv, NULL, NULL, flags, 0, handle, &_vgchange_setpersist_single);
+
+	destroy_processing_handle(cmd, handle);
+	return ret;
+}
+
+static int _vgchange_setlockargs_single(struct cmd_context *cmd, const char *vg_name,
+			             struct volume_group *vg,
+			             struct processing_handle *handle)
+{
+	const char *set = arg_str_value(cmd, setlockargs_ARG, NULL);
+	uint64_t our_key_held = 0;
+
+	if (!set)
+		return_ECMD_FAILED;
+
+	/*
+	 * lockd_setlockargs gets exclusive PR (if the VG is using PR),
+	 * stops the lockspace, and sets new vg->lock_args that are
+	 * written below.  If lockd_setlockargs got the ex PR, then
+	 * persist_upgrade_stop releases the PR.
+	 */
+	if (!lockd_setlockargs(cmd, vg, set, &our_key_held))
+		return_ECMD_FAILED;
+
+	if (!vg_write(vg) || !vg_commit(vg))
+		return_ECMD_FAILED;
+
+	if (our_key_held && !persist_upgrade_stop(cmd, vg, our_key_held))
+		log_warn("Failed to stop PR.");
+
+	log_print_unless_silent("Volume group \"%s\" successfully changed.", vg->name);
+
+	return ECMD_PROCESSED;
+}
+
+int vgchange_setlockargs_cmd(struct cmd_context *cmd, int argc, char **argv)
+{
+	struct processing_handle *handle;
+	uint32_t flags = READ_FOR_UPDATE;
+	int ret;
+
+	if (!(handle = init_processing_handle(cmd, NULL))) {
+		log_error("Failed to initialize processing handle.");
+		return ECMD_FAILED;
+	}
+
+	ret = process_each_vg(cmd, argc, argv, NULL, NULL, flags, 0, handle, &_vgchange_setlockargs_single);
 
 	destroy_processing_handle(cmd, handle);
 	return ret;

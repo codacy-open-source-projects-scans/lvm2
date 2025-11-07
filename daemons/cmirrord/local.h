@@ -12,9 +12,11 @@
 #ifndef _LVM_CLOG_LOCAL_H
 #define _LVM_CLOG_LOCAL_H
 
+struct dm_ulog_request;
+
 int init_local(void);
 void cleanup_local(void);
 
-int kernel_send(struct dm_ulog_request *rq);
+int kernel_send(void *data);
 
 #endif /* _LVM_CLOG_LOCAL_H */

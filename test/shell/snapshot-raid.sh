@@ -12,9 +12,8 @@
 
 # Test snapshots of raid
 
-SKIP_WITH_LVMPOLLD=1
 
-. lib/inittest
+. lib/inittest --skip-with-lvmpolld
 
 aux have_raid 1 3 0 || skip
 which mkfs.ext4 || skip
@@ -262,7 +261,7 @@ test_merge_snap()
 	umount "$mount_dir"
 
 	for i in $(seq 1 10); do
-		# Wait tiil snapshot is surely merged
+		# Wait until snapshot is surely merged
 		dmsetup info $vg-snap || break
 		sleep 0.1
 	done

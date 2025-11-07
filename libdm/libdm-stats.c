@@ -319,6 +319,9 @@ static uint64_t _stats_region_is_grouped(const struct dm_stats* dms,
 	if (region_id == DM_STATS_GROUP_NOT_PRESENT)
 		return 0;
 
+	if (!dms->regions)
+		return 0;
+
 	if (!_stats_region_present(&dms->regions[region_id]))
 		return 0;
 
@@ -995,7 +998,7 @@ static int _stats_parse_list_region(struct dm_stats *dms,
 {
 	char string_data[STATS_ROW_BUF_LEN] = { 0 };
 	char *p, *program_id, *aux_data, *stats_args;
-	int r;
+	int r, consumed;
 
 	/*
 	 * Parse fixed fields, line format:
@@ -1004,13 +1007,17 @@ static int _stats_parse_list_region(struct dm_stats *dms,
 	 *
 	 * Maximum string data size is 4096 - 1 bytes.
 	 */
-	r = sscanf(line, FMTu64 ": " FMTu64 "+" FMTu64 " " FMTu64 " %4095c",
+	r = sscanf(line, FMTu64 ": " FMTu64 "+" FMTu64 " " FMTu64 " %n",
 		   &region->region_id, &region->start, &region->len,
-		   &region->step, string_data);
+		   &region->step, &consumed);
 
-	if (r != 5) {
+	if (r != 4) {
 		return 0;
 	}
+
+	/* Copy string data after the parsed numeric fields */
+	if (!dm_strncpy(string_data, line + consumed, sizeof(string_data)))
+		return_0;
 
 	if (!_stats_parse_string_data(string_data, &program_id, &aux_data, &stats_args)) {
 		return_0;
@@ -1856,11 +1863,13 @@ bad:
 static size_t _stats_group_tag_len(const struct dm_stats *dms,
 				   dm_bitset_t regions)
 {
-	int64_t i, j, next, nr_regions = 0;
+	int i, j, next;
+	int64_t nr_regions = 0;
 	size_t buflen = 0, id_len = 0;
 
 	/* check region ids and find last set bit */
 	i = dm_bit_get_first(regions);
+	/* coverity[overflow_sink] - only positive 'i & j' is used */
 	for (; i >= 0; i = dm_bit_get_next(regions, i)) {
 		/* length of region_id or range start in characters */
 		id_len = (i) ? 1 + (size_t) log10(i) : 1;
@@ -2121,11 +2130,11 @@ out:
 static void _stats_clear_group_regions(struct dm_stats *dms, uint64_t group_id)
 {
 	struct dm_stats_group *group;
-	uint64_t i;
+	int i;
 
 	group = &dms->groups[group_id];
 	for (i = dm_bit_get_first(group->regions);
-	     i != DM_STATS_GROUP_NOT_PRESENT;
+	     i != (int)DM_STATS_GROUP_NOT_PRESENT;
 	     i = dm_bit_get_next(group->regions, i))
 		dms->regions[i].group_id = DM_STATS_GROUP_NOT_PRESENT;
 }
@@ -2496,7 +2505,7 @@ void dm_stats_destroy(struct dm_stats *dms)
  * i is a variable of type int that holds the current area_id.
  */
 #define _foreach_region_area(dms, rid, i)				\
-for ((i) = 0; (i) < _nr_areas_region(&dms->regions[(rid)]); (i)++)	\
+for ((i) = 0; (int)(i) < (int)_nr_areas_region(&dms->regions[(rid)]); (i)++)	\
 
 /*
  * Walk each region that is a member of group_id gid.
@@ -2504,7 +2513,7 @@ for ((i) = 0; (i) < _nr_areas_region(&dms->regions[(rid)]); (i)++)	\
  */
 #define _foreach_group_region(dms, gid, i)			\
 for ((i) = dm_bit_get_first((dms)->groups[(gid)].regions);	\
-     (i) != DM_STATS_GROUP_NOT_PRESENT;				\
+     (int)(i) != (int)DM_STATS_GROUP_NOT_PRESENT;		\
      (i) = dm_bit_get_next((dms)->groups[(gid)].regions, (i)))	\
 
 /*
@@ -2559,8 +2568,8 @@ uint64_t dm_stats_get_counter(const struct dm_stats *dms,
 			      dm_stats_counter_t counter,
 			      uint64_t region_id, uint64_t area_id)
 {
-	uint64_t i, j, sum = 0; /* aggregation */
-	int sum_regions = 0;
+	uint64_t sum = 0; /* aggregation */
+	int i, j, sum_regions = 0;
 	struct dm_stats_region *region;
 	struct dm_stats_counters *area;
 
@@ -2589,17 +2598,20 @@ uint64_t dm_stats_get_counter(const struct dm_stats *dms,
 		/* group */
 		if (area_id & DM_STATS_WALK_GROUP)
 			_foreach_group_area(dms, region->group_id, i, j) {
+				/* coverity[overflow_sink] - only positive 'i & j' is used */
 				area = &dms->regions[i].counters[j];
 				sum += _stats_get_counter(dms, area, counter);
 			}
 		else
 			_foreach_group_region(dms, region->group_id, i) {
+				/* coverity[overflow_sink] - only positive 'i & j' is used */
 				area = &dms->regions[i].counters[area_id];
 				sum += _stats_get_counter(dms, area, counter);
 			}
 	} else if (area_id == DM_STATS_WALK_REGION) {
 		/* aggregate region */
 		_foreach_region_area(dms, region_id, j) {
+			/* coverity[overflow_sink] - only positive 'j' is used */
 			area = &dms->regions[region_id].counters[j];
 			sum += _stats_get_counter(dms, area, counter);
 		}
@@ -3126,7 +3138,7 @@ int dm_stats_get_region_start(const struct dm_stats *dms, uint64_t *start,
 int dm_stats_get_region_len(const struct dm_stats *dms, uint64_t *len,
 			    uint64_t region_id)
 {
-	uint64_t i;
+	int i;
 	if (!dms || !dms->regions)
 		return_0;
 
@@ -3146,6 +3158,7 @@ int dm_stats_get_region_len(const struct dm_stats *dms, uint64_t *len,
 		/* use sum of region sizes as group size */
 		if (_stats_region_is_grouped(dms, region_id))
 			_foreach_group_region(dms, dms->cur_group, i)
+				/* coverity[overflow_sink] - only positive 'i' is used */
 				*len += dms->regions[i].len;
 		else {
 			log_error("Group ID " FMTu64 " does not exist",
@@ -3186,9 +3199,9 @@ int dm_stats_get_current_region_len(const struct dm_stats *dms,
 }
 
 int dm_stats_get_current_region_area_len(const struct dm_stats *dms,
-					 uint64_t *step)
+					 uint64_t *area_len)
 {
-	return dm_stats_get_region_area_len(dms, step, dms->cur_region);
+	return dm_stats_get_region_area_len(dms, area_len, dms->cur_region);
 }
 
 int dm_stats_get_area_start(const struct dm_stats *dms, uint64_t *start,
@@ -3967,11 +3980,15 @@ static int _stats_create_group(struct dm_stats *dms, dm_bitset_t regions,
 			       const char *alias, uint64_t *group_id)
 {
 	struct dm_stats_group *group;
-	*group_id = dm_bit_get_first(regions);
+	int i = dm_bit_get_first(regions);
 
-	/* group has no regions? */
-	if (*group_id == DM_STATS_GROUP_NOT_PRESENT)
+	if (i < 0) {
+		/* group has no regions? */
+		*group_id = DM_STATS_GROUP_NOT_PRESENT;
 		return_0;
+	}
+
+	*group_id = (uint64_t)i;
 
 	group = &dms->groups[*group_id];
 
@@ -4047,7 +4064,7 @@ merge:
 			continue;
 
 		if (_extents_overlap(ext, next)) {
-			log_warn("WARNING: region IDs " FMTu64 " and "
+			log_warn("WARNING: Region IDs " FMTu64 " and "
 				 FMTu64 " overlap. Some events will be "
 				 "counted twice.", ext->id, next->id);
 			/* merge larger extent into smaller */
@@ -4400,8 +4417,11 @@ static uint64_t _stats_map_extents(int fd, struct dm_pool *mem,
 				   uint64_t next_extent,
 				   int *eof)
 {
-	uint64_t expected = 0, nr_extents = next_extent;
+	uint64_t expected, nr_extents = next_extent;
 	unsigned int i;
+
+	if (!fiemap->fm_mapped_extents)
+		return 0;
 
 	/*
 	 * Loop over the returned extents adding the fm_pending extent
@@ -4753,8 +4773,7 @@ static uint64_t *_stats_map_file_regions(struct dm_stats *dms, int fd,
 
 	if (!(extents = _stats_get_extents_for_file(extent_mem, fd, count))) {
 		log_very_verbose("No extents found in fd %d", fd);
-		if (!update)
-			goto out;
+		goto out;
 	}
 
 	if (update) {

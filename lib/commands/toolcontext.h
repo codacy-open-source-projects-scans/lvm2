@@ -19,6 +19,8 @@
 #include "lib/device/dev-cache.h"
 #include "lib/device/dev-type.h"
 #include "lib/commands/cmd_enum.h"
+#include "lib/log/lvm-logging.h"
+#include "lib/misc/lvm-string.h"
 
 #include <limits.h>
 
@@ -71,7 +73,8 @@ struct cmd_context_initialized_parts {
 };
 
 struct cmd_report {
-	int log_only;
+	unsigned log_only:1;
+	unsigned lc_numeric_override:1;
 	dm_report_group_type_t report_group_type;
 	struct dm_report_group *report_group;
 	struct dm_report *log_rh;
@@ -163,6 +166,10 @@ struct cmd_context {
 	unsigned vg_read_print_access_error:1;	/* print access errors from vg_read */
 	unsigned allow_mixed_block_sizes:1;
 	unsigned force_access_clustered:1;
+	unsigned lockd_creating_thin_pool:1;
+	unsigned lockd_creating_thin_volume:1;
+	unsigned lockd_created_thin_pool:1;
+	unsigned lockd_created_thin_volume:1;
 	unsigned lockd_gl_disable:1;
 	unsigned lockd_vg_disable:1;
 	unsigned lockd_lv_disable:1;
@@ -218,6 +225,8 @@ struct cmd_context {
 	unsigned device_ids_invalid:1;
 	unsigned device_ids_auto_import:1;
 	unsigned get_vgname_from_options:1;     /* used by lvconvert */
+	unsigned vg_write_validates_vg:1;
+	unsigned disable_pr_required:1;
 
 	/*
 	 * Devices and filtering.

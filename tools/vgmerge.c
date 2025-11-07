@@ -20,7 +20,7 @@ static struct volume_group *_vgmerge_vg_read(struct cmd_context *cmd,
 {
 	struct volume_group *vg;
 	log_verbose("Checking for volume group \"%s\"", vg_name);
-	vg = vg_read_for_update(cmd, vg_name, NULL, 0, 0);
+	vg = vg_read_for_update(cmd, vg_name, NULL, 0);
 	if (!vg)
 		return NULL;
 
@@ -109,6 +109,13 @@ static int _vgmerge_single(struct cmd_context *cmd, const char *vg_name_to,
 				return_ECMD_FAILED;
 	}
 
+	if (vg_from->pr != vg_to->pr) {
+		log_error("VGs must have the same PR settings to merge.");
+		unlock_and_release_vg(cmd, vg_from, vg_name_from);
+		unlock_and_release_vg(cmd, vg_to, vg_name_to);
+		return ECMD_FAILED;
+	}
+
 	if (!vgs_are_compatible(cmd, vg_from, vg_to))
 		goto_bad;
 
@@ -156,7 +163,8 @@ static int _vgmerge_single(struct cmd_context *cmd, const char *vg_name_to,
 	}
 
 	dm_list_iterate_items(lvl1, &vg_from->lvs) {
-		lvl1->lv->vg = vg_to;
+		if (!lv_set_vg(lvl1->lv, vg_to))
+			goto_bad;
 		lvl1->lv->lvid.id[0] = lvl1->lv->vg->id;
 	}
 
@@ -188,7 +196,8 @@ static int _vgmerge_single(struct cmd_context *cmd, const char *vg_name_to,
 	/* Flag up that some PVs have moved from another VG */
 	vg_to->old_name = vg_from->name;
 
-        /* Check whether size of pmspare is big enough now for merged VG */
+	/* Check whether size of pmspare is big enough now for merged VG */
+	/* coverity[format_string_injection] pool_metadata_spare_lv name is validated */
 	if (!handle_pool_metadata_spare(vg_to, 0, &vg_to->pvs, poolmetadataspare))
 		goto_bad;
 
