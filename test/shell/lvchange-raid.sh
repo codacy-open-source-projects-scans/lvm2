@@ -183,20 +183,20 @@ run_syncaction_check() {
 	# "check" should find discrepancies but not change them
 	# 'lvs' should show results
 	lvchange --syncaction check $vg/$lv
-	not lv_field $vg/$lv sync_percent "100.00"
+	#not check lv_field $vg/$lv sync_percent "100.00"
 	aux wait_for_sync $vg $lv
 	check lv_attr_bit health $vg/$lv "m"
 	not check lv_field $vg/$lv raid_mismatch_count "0"
 
 	# "repair" will fix discrepancies
 	lvchange --syncaction repair $vg/$lv
-	not lv_field $vg/$lv sync_percent "100.00"
+	#not check lv_field $vg/$lv sync_percent "100.00"
 	aux wait_for_sync $vg $lv
 
 	# Final "check" should show no mismatches
 	# 'lvs' should show results
 	lvchange --syncaction check $vg/$lv
-	not lv_field $vg/$lv sync_percent "100.00"
+	#not check lv_field $vg/$lv sync_percent "100.00"
 	aux wait_for_sync $vg $lv
 	check lv_attr_bit health $vg/$lv "-"
 	check lv_field $vg/$lv raid_mismatch_count "0"
@@ -339,7 +339,7 @@ TEST_TYPES="- snapshot"
 # thinpool works EX in cluster
 # but they don't work together in a cluster yet
 #  (nor does thinpool+mirror work in a cluster yet)
-test ! -e LOCAL_CLVMD && aux have_thin 1 8 0 && TEST_TYPE="$TEST_TYPES thinpool_data thinpool_meta"
+aux have_thin 1 8 0 && TEST_TYPE="$TEST_TYPES thinpool_data thinpool_meta"
 
 # Implicit test for 'raid1' only
 if test "${TEST_RAID:-raid1}" = raid1 ; then

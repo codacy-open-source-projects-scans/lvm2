@@ -25,8 +25,10 @@ fill() {
 
 cleanup_tail()
 {
-	test -z "${SLEEP_PID-}" || kill $SLEEP_PID || true
-	wait
+	if test -n "${SLEEP_PID-}"; then
+		kill $SLEEP_PID || true
+		wait "$SLEEP_PID" || true
+	fi
 	vgremove -ff $vg1 || true
 	vgremove -ff $vg
 	aux teardown
@@ -99,36 +101,19 @@ fill 64k $vg1/snap50
 lvcreate -s -l 25%ORIGIN -n snap25 $vg1/$lv
 fill 32k $vg1/snap25
 
-# Check we do not provide too much extra space
-not fill 33k $vg1/snap25
+# This feature works properly only with newer targets
+if aux target_at_least dm-snapshot 1 10 0 ; then
+	# Check we do not provide too much extra space
+	fill 33k $vg1/snap25 && die "Snapshot should not be able to fit 33k!"
+fi
 
 lvs -a $vg1
 lvremove -f $vg1
 
 # Test virtual snapshot over /dev/zero
 lvcreate --type snapshot -V50 -L10 -n $lv1 -s $vg1
-CHECK_ACTIVE="active"
-test ! -e LOCAL_CLVMD || CHECK_ACTIVE="local exclusive"
-check lv_field $vg1/$lv1 lv_active "$CHECK_ACTIVE"
+check lv_field $vg1/$lv1 lv_active "active"
 lvchange -an $vg1
-
-# On cluster snapshot gets exclusive activation
-lvchange -ay $vg1
-check lv_field $vg1/$lv1 lv_active "$CHECK_ACTIVE"
-
-# Test removal of opened (but unmounted) snapshot (device busy) for a while
-SLEEP_PID=$(aux hold_device_open $vg1 $lv1 60)
-
-# Opened virtual snapshot device is not removable
-# it should retry device removal for a few seconds
-not lvremove -f $vg1/$lv1
-
-kill $SLEEP_PID
-SLEEP_PID=
-# Wait for killed task, so there is no device holder
-wait
-
-lvremove -f $vg1/$lv1
 check lv_not_exists $vg1 $lv1
 
 # Check border size
@@ -180,10 +165,19 @@ lvremove -f $vg1
 # This test expects extent size 1K
 aux lvmconf "allocation/wipe_signatures_when_zeroing_new_lvs = 1"
 lvcreate -aey -L4 -n $lv $vg1
+$MKFS "$DM_DEV_DIR/$vg1/$lv"
+
 lvcreate -c 8 -s -L1 -n snap $vg1/$lv
 # Populate snapshot
 #dd if=/dev/urandom of="$DM_DEV_DIR/$vg1/$lv" bs=4096 count=10
-$MKFS "$DM_DEV_DIR/$vg1/$lv"
+
+mkdir mnt
+mount "$DM_DEV_DIR/$vg1/snap" mnt
+# Opened virtual snapshot device is not removable
+# it should retry device removal for a few seconds
+not lvremove -f $vg1/snap
+umount mnt
+
 lvremove -f $vg1/snap
 
 # Undeleted header would trigger attempt to access

@@ -823,9 +823,22 @@ char *device_id_system_read(struct cmd_context *cmd, struct device *dev, uint16_
 		_dev_read_sys_serial(cmd, dev, sysbuf, sizeof(sysbuf));
                 break;
 	case DEV_ID_TYPE_MPATH_UUID:
+		if (!dev_dm_uuid(cmd, dev, sysbuf, sizeof(sysbuf)))
+			stack;
+		if (sysbuf[0] && !dm_uuid_has_prefix(sysbuf, "mpath-"))
+			sysbuf[0] = '\0';
+                break;
 	case DEV_ID_TYPE_CRYPT_UUID:
+		if (!dev_dm_uuid(cmd, dev, sysbuf, sizeof(sysbuf)))
+			stack;
+		if (sysbuf[0] && !dm_uuid_has_prefix(sysbuf, "CRYPT-"))
+			sysbuf[0] = '\0';
+                break;
 	case DEV_ID_TYPE_LVMLV_UUID:
-		(void)dev_dm_uuid(cmd, dev, sysbuf, sizeof(sysbuf));
+		if (!dev_dm_uuid(cmd, dev, sysbuf, sizeof(sysbuf)))
+			stack;
+		if (sysbuf[0] && !dm_uuid_has_prefix(sysbuf, "LVM-"))
+			sysbuf[0] = '\0';
                 break;
 	case DEV_ID_TYPE_MD_UUID:
 		read_sys_block(cmd, dev, "md/uuid", sysbuf, sizeof(sysbuf));
@@ -861,6 +874,8 @@ char *device_id_system_read(struct cmd_context *cmd, struct device *dev, uint16_
 			if (idtype_to_nvme_type(idtype) == dw->nvme_type)
 				return strdup(dw->id);
 		}
+		return NULL;
+	case DEV_ID_TYPE_UNUSED:
 		return NULL;
 	}
 
@@ -1095,6 +1110,7 @@ static const char _dev_id_types[][16] = {
 	[DEV_ID_TYPE_WWID_NAA]	 = "wwid_naa",
 	[DEV_ID_TYPE_WWID_EUI]	 = "wwid_eui",
 	[DEV_ID_TYPE_WWID_T10]	 = "wwid_t10",
+	[DEV_ID_TYPE_UNUSED]	 = "unused",
 	[DEV_ID_TYPE_NVME_EUI64] = "nvme_eui64",
 	[DEV_ID_TYPE_NVME_NGUID] = "nvme_nguid",
 	[DEV_ID_TYPE_NVME_UUID]	 = "nvme_uuid",
@@ -1115,6 +1131,9 @@ const char *idtype_to_str(uint16_t idtype)
 uint16_t idtype_from_str(const char *str)
 {
 	uint16_t i;
+
+	if (!str)
+		return 0;
 
 	for (i = 1; i < DM_ARRAY_SIZE(_dev_id_types); ++i)
 		if (!strcmp(str, _dev_id_types[i]))
@@ -2503,6 +2522,33 @@ static int _match_dm_names(struct cmd_context *cmd, char *idname, struct device 
 	return 0;
 }
 
+static void _replace_incorrect_dm_idtype(struct dev_use *du)
+{
+	/* Previous bug let one of these types be swapped for another
+	   because they all read their value from sysfs file dm/uuid. */
+	if (du->idtype != DEV_ID_TYPE_MPATH_UUID &&
+	    du->idtype != DEV_ID_TYPE_CRYPT_UUID &&
+	    du->idtype != DEV_ID_TYPE_LVMLV_UUID)
+		return;
+
+	/* Use the IDNAME value to determine the correct IDTYPE. */
+	if (dm_uuid_has_prefix(du->idname, "mpath-") && (du->idtype != DEV_ID_TYPE_MPATH_UUID)) {
+		log_debug("replace incorrect mpath device id type for %u %s", du->idtype, du->idname);
+		du->idtype = DEV_ID_TYPE_MPATH_UUID;
+		return;
+	}
+	if (dm_uuid_has_prefix(du->idname, "CRYPT-") && (du->idtype != DEV_ID_TYPE_CRYPT_UUID)) {
+		log_debug("replace incorrect crypt device id type for %u %s", du->idtype, du->idname);
+		du->idtype = DEV_ID_TYPE_CRYPT_UUID;
+		return;
+	}
+	if (dm_uuid_has_prefix(du->idname, "LVM-") && (du->idtype != DEV_ID_TYPE_LVMLV_UUID)) {
+		log_debug("replace incorrect lvmlv device id type for %u %s", du->idtype, du->idname);
+		du->idtype = DEV_ID_TYPE_LVMLV_UUID;
+		return;
+	}
+}
+
 /*
  * du is a devices file entry.  dev is any device on the system.
  * check if du is for dev by comparing the device's ids to du->idname.
@@ -2612,6 +2658,18 @@ static int _match_du_to_dev(struct cmd_context *cmd, struct dev_use *du, struct 
 		if (du->idtype == DEV_ID_TYPE_SYS_WWID && !strncmp(du_idname, "t10", 3) && strstr(du_idname, "__"))
 			_reduce_repeating_underscores(du_idname, sizeof(du_idname));
 	}
+
+	/*
+	 * A past bug allowed mpath, crypt, or lvm devices to be added to
+	 * system.devices using any of the dm id types, and they could be
+	 * used normally.  Accept an old system.devices with that mistake
+	 * by updating du->idtype to have the correct idtype based on the
+	 * idname dm prefix.
+	 */
+	if (((du->idtype == DEV_ID_TYPE_MPATH_UUID) && !dm_uuid_has_prefix(du->idname, "mpath-")) ||
+	    ((du->idtype == DEV_ID_TYPE_CRYPT_UUID) && !dm_uuid_has_prefix(du->idname, "CRYPT-")) ||
+	    ((du->idtype == DEV_ID_TYPE_LVMLV_UUID) && !dm_uuid_has_prefix(du->idname, "LVM")))
+		_replace_incorrect_dm_idtype(du);
 
 	/*
 	 * Try to match du with ids that have already been read for the dev
@@ -3033,6 +3091,80 @@ static void _get_devs_with_serial_numbers(struct cmd_context *cmd, struct dm_lis
 		continue;
 	}
 	dev_iter_destroy(iter);
+}
+
+struct device *device_id_system_find(struct cmd_context *cmd, const char *find_idname, uint16_t find_idtype)
+{
+	struct dev_iter *iter;
+	struct device *dev;
+	struct device *dev_found = NULL;
+	struct dev_id *id;
+	const char *idname;
+
+	if (!(iter = dev_iter_create(NULL, 0)))
+		return NULL;
+	while ((dev = dev_iter_get(cmd, iter))) {
+		dm_list_iterate_items(id, &dev->ids) {
+			if (id->idtype == find_idtype) {
+				if (!id->idname)
+					goto next_dev;
+				if (!strcmp(id->idname, find_idname)) {
+					dev_found = dev;
+					goto out;
+				}
+			}
+		}
+
+		/* just copying the no-data filters in similar device_ids_search */
+		if (!cmd->filter->passes_filter(cmd, cmd->filter, dev, "sysfs"))
+			continue;
+		if (!cmd->filter->passes_filter(cmd, cmd->filter, dev, "type"))
+			continue;
+		if (!cmd->filter->passes_filter(cmd, cmd->filter, dev, "usable"))
+			continue;
+		if (!cmd->filter->passes_filter(cmd, cmd->filter, dev, "mpath"))
+			continue;
+
+		if ((idname = device_id_system_read(cmd, dev, find_idtype))) {
+			if (!strcmp(idname, find_idname)) {
+				free((char *)idname);
+				dev_found = dev;
+				goto out;
+			}
+			free((char *)idname);
+		}
+ next_dev:
+		continue;
+	}
+ out:
+	dev_iter_destroy(iter);
+	return dev_found;
+}
+
+int device_id_system_list(struct cmd_context *cmd, struct device *dev, uint16_t check_idtype)
+{
+	char *idname;
+	uint16_t idtype;
+	int found = 0;
+
+	for (idtype = 1; idtype <= DEV_ID_TYPE_LAST; idtype++) {
+		if (check_idtype && (check_idtype != idtype))
+			continue;
+		if ((idname = device_id_system_read(cmd, dev, idtype))) {
+			if (check_idtype)
+				log_print("%s", idname);
+			else
+				log_print("%-16s %s", idtype_to_str(idtype), idname);
+			free(idname);
+			found++;
+		}
+	}
+
+	if (check_idtype && !found) {
+		log_error("deviceidtype %s not found for %s", idtype_to_str(check_idtype), dev_name(dev));
+		return 0;
+	}
+	return 1;
 }
 
 /*

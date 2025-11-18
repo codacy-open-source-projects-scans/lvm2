@@ -13,8 +13,7 @@
 # Check pvmove --abort behaviour for all VGs and PVs
 
 
-# Ignore known failure when clvmd is processing sequences of commands for two VGs in parallel - 2015/07/17 agk
-# CLVMD: ioctl/libdm-iface.c:1940   Internal error: Performing unsafe table load while 3 device(s) are known to be suspended:  (253:19) 
+# Allow internal errors during this test (historically needed for some edge cases)
 export DM_ABORT_ON_INTERNAL_ERRORS=0
 
 . lib/inittest --skip-with-lvmlockd
@@ -57,9 +56,12 @@ cmd3=(pvmove -i1 $backgroundarg $mode -n $vg1/$lv1 "$dev4" "$dev6")
 
 if test -z "$backgroundarg" ; then
 	"${cmd1[@]}" &
+	PVMOVE1_PID=$!
 	aux wait_pvmove_lv_ready "$vg-pvmove0"
 	"${cmd2[@]}" &
+	PVMOVE2_PID=$!
 	"${cmd3[@]}" &
+	PVMOVE3_PID=$!
 	aux wait_pvmove_lv_ready "$vg-pvmove1" "$vg1-pvmove0"
 else
 	LVM_TEST_TAG="kill_me_$PREFIX" "${cmd1[@]}"
@@ -78,7 +80,7 @@ not grep "^\[pvmove" out
 
 lvremove -ff $vg $vg1
 
-wait
+test -z "$backgroundarg" && wait "$PVMOVE1_PID" "$PVMOVE2_PID" "$PVMOVE3_PID" || true
 aux kill_tagged_processes
 done
 done

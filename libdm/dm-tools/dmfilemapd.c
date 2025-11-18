@@ -15,6 +15,7 @@
  */
 
 #include "libdm/misc/dm-logging.h"
+#include "libdaemon/server/daemon-stray.h" /* daemon_close_stray_fds() from libdaemon */
 #include "util.h"
 
 #ifdef __linux__
@@ -439,7 +440,7 @@ static int _filemap_monitor_reopen_fd(struct filemap_monitor *fm)
 	 *
 	 * FIXME: stat file and skip if inode is unchanged.
 	 */
-	if (fm->fd > 0)
+	if (fm->fd >= 0)
 		log_error("Filemap file descriptor already open.");
 
 	while ((fm->fd < 0) && --tries)
@@ -533,7 +534,7 @@ out:
 
 static void _filemap_monitor_destroy(struct filemap_monitor *fm)
 {
-	if (fm->fd > 0) {
+	if (fm->fd >= 0) {
 		_filemap_monitor_end_notify(fm);
 		_filemap_monitor_close_fd(fm);
 	}
@@ -629,7 +630,9 @@ check_unlinked:
 static int _daemonize(struct filemap_monitor *fm)
 {
 	pid_t pid = 0;
-	int fd, ffd;
+	int fd;
+	/* Close stray file descriptors, preserving fm->fd */
+	struct custom_fds custom_fds = { .out = fm->fd };
 
 	if (!setsid()) {
 		_early_log("setsid failed.");
@@ -658,24 +661,22 @@ static int _daemonize(struct filemap_monitor *fm)
 			return 0;
 		}
 
-		if ((dup2(fd, STDIN_FILENO) == -1) ||
-		    (dup2(fd, STDOUT_FILENO) == -1) ||
-		    (dup2(fd, STDERR_FILENO) == -1)) {
+		if (((fd != STDIN_FILENO) && (dup2(fd, STDIN_FILENO) == -1)) ||
+		    ((fd != STDOUT_FILENO) && (dup2(fd, STDOUT_FILENO) == -1)) ||
+		    ((fd != STDERR_FILENO) && (dup2(fd, STDERR_FILENO) == -1))) {
 			if (fd > STDERR_FILENO)
 				(void) close(fd);
 			_early_log("Error redirecting stdin/out/err to null.");
-			/* coverity[leaked_handle] no leak */
+			/* coverity[leaked_handle] fd is stdin/stdout/stderr */
 			return 0;
 		}
 		if (fd > STDERR_FILENO)
 			(void) close(fd);
 	}
-	/* TODO: Use libdaemon/server/daemon-server.c _daemonize() */
-	for (ffd = (int) sysconf(_SC_OPEN_MAX) - 1; ffd > STDERR_FILENO; --ffd)
-		if (ffd != fm->fd)
-			(void) close(ffd);
 
-	/* coverity[leaked_handle] no leak */
+	daemon_close_stray_fds("dmfilemapd", 1, STDERR_FILENO, &custom_fds);
+
+	/* coverity[leaked_handle] fd is stdin/stdout/stderr */
 	return 1;
 }
 
@@ -814,7 +815,7 @@ static const char _mode_names[][8] = {
  */
 int main(int argc, char **argv)
 {
-	struct filemap_monitor fm = { .fd = 0 };
+	struct filemap_monitor fm = { .fd = -1 };
 
 	if (!_parse_args(argc, argv, &fm)) {
 		free(fm.path);

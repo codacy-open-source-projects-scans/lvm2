@@ -1477,7 +1477,7 @@ OO: --refresh
 DESC: Check the devices file and report incorrect values.
 
 lvmdevices --update
-OO: --delnotfound, --refresh
+OO: --delnotfound, --refresh, --force
 ID: lvmdevices_update
 DESC: Update the devices file to fix incorrect values.
 
@@ -1499,6 +1499,19 @@ DESC: Find the device with the given PVID and add it to the devices file.
 lvmdevices --delpvid String
 ID: lvmdevices_edit
 DESC: Remove the devices file entry for the given PVID.
+
+lvmdevices --addid String --deviceidtype String
+ID: lvmdevices_edit
+DESC: Find the device with the given device_id and add it to the devices file.
+
+lvmdevices --delid String --deviceidtype String
+ID: lvmdevices_edit
+DESC: Remove the devices file entry with the given device_id.
+
+lvmdevices --listids PV
+ID: lvmdevices_edit
+OO: --deviceidtype String
+DESC: Print device_id types and values available for the device.
 
 ---
 

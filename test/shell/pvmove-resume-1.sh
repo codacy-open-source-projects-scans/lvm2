@@ -15,7 +15,6 @@
 
 # 2 pvmove LVs in 2 VGs (1 per VG)
 
-SKIP_WITH_CLVMD=1
 
 . lib/inittest --skip-with-lvmlockd
 
@@ -38,39 +37,22 @@ test_pvmove_resume() {
 	aux delay_dev "$dev4" 0 30 "$(get first_extent_sector "$dev4"):"
 
 	pvmove -i5 "$dev1" &
-	PVMOVE=$!
+	PVMOVE1_PID=$!
 	aux wait_pvmove_lv_ready "$vg-pvmove0"
-	kill $PVMOVE
+	kill $PVMOVE1_PID
 	test -e LOCAL_LVMPOLLD && aux prepare_lvmpolld
 
 	pvmove -i5 "$dev2" &
-	PVMOVE=$!
+	PVMOVE2_PID=$!
 	aux wait_pvmove_lv_ready "$vg1-pvmove0"
-	kill $PVMOVE
+	kill $PVMOVE2_PID
 	test -e LOCAL_LVMPOLLD && aux prepare_lvmpolld
-	wait
+	wait "$PVMOVE1_PID" "$PVMOVE2_PID" || true
 
 	aux remove_dm_devs "$vg-$lv1" "$vg1-$lv1" "$vg-pvmove0" "$vg1-pvmove0"
 
 	check lv_attr_bit type $vg/pvmove0 "p"
 	check lv_attr_bit type $vg1/pvmove0 "p"
-
-	if test -e LOCAL_CLVMD ; then
-		# giveup all clvmd locks (faster then restarting clvmd)
-		# no deactivation happen, nodes are already removed
-		#vgchange -an $vg
-		# FIXME: However above solution has one big problem
-		# as clvmd starts to abort on internal errors on various
-		# errors, based on the fact pvmove is killed -9
-		# Restart clvmd
-		kill "$(< LOCAL_CLVMD)"
-		for i in $(seq 1 100) ; do
-			test $i -eq 100 && die "Shutdown of clvmd is too slow."
-			test -e "$CLVMD_PIDFILE" || break
-			sleep .1
-		done # wait for the pid removal
-		aux prepare_clvmd
-	fi
 
 	# call resume function (see below)
 	# with expected number of spawned

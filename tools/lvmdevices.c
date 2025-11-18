@@ -574,6 +574,36 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 	dm_list_init(&found_devs);
 	dm_list_init(&scan_devs);
 
+	/*
+	 * listids does not use the devices file at all, it just reads
+	 * all the device IDs available for a device on the system.
+	 */
+	if (arg_is_set(cmd, listids_ARG)) {
+		const char *devname;
+		uint16_t idtype = 0;
+
+		if (!(devname = arg_str_value(cmd, listids_ARG, NULL)))
+			return ECMD_FAILED;
+
+		dev_cache_scan(cmd);
+
+		if (!(dev = dev_cache_get(cmd, devname, NULL))) {
+			log_error("No device found for %s.", devname);
+			return ECMD_FAILED;
+		}
+
+		if ((deviceidtype = arg_str_value(cmd, deviceidtype_ARG, NULL))) {
+			if (!(idtype = idtype_from_str(deviceidtype))) {
+				log_error("Unknown deviceidtype.");
+				return ECMD_FAILED;
+			}
+		}
+
+		if (!device_id_system_list(cmd, dev, idtype))
+			return ECMD_FAILED;
+		return ECMD_PROCESSED;
+	}
+
 	if (!setup_devices_file(cmd))
 		return ECMD_FAILED;
 
@@ -584,7 +614,8 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 
 	if (arg_is_set(cmd, update_ARG) ||
 	    arg_is_set(cmd, adddev_ARG) || arg_is_set(cmd, deldev_ARG) ||
-	    arg_is_set(cmd, addpvid_ARG) || arg_is_set(cmd, delpvid_ARG)) {
+	    arg_is_set(cmd, addpvid_ARG) || arg_is_set(cmd, delpvid_ARG) ||
+	    arg_is_set(cmd, addid_ARG)) {
 		if (!lock_devices_file(cmd, LOCK_EX)) {
 			log_error("Failed to lock the devices file to create.");
 			return ECMD_FAILED;
@@ -756,7 +787,7 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 		}
 
 		if (arg_is_set(cmd, update_ARG)) {
-			if (update_needed || !dm_list_empty(&found_devs) || cmd->devices_file_hash_mismatch) {
+			if (update_needed || !dm_list_empty(&found_devs) || cmd->devices_file_hash_mismatch || arg_is_set(cmd, force_ARG)) {
 				if (!device_ids_write(cmd)) {
 					log_error(failed_to_write_devices_file_msg);
 					goto_bad;
@@ -900,6 +931,43 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 		goto out;
 	}
 
+	if (arg_is_set(cmd, addid_ARG) && arg_is_set(cmd, deviceidtype_ARG)) {
+		const char *idname = arg_str_value(cmd, addid_ARG, NULL);
+		uint16_t idtype;
+
+		deviceidtype = arg_str_value(cmd, deviceidtype_ARG, NULL);
+
+		if (!(idtype = idtype_from_str(deviceidtype))) {
+			log_error("Unknown device_id type %s", deviceidtype);
+			goto bad;
+		}
+
+		if ((du = get_du_for_device_id(cmd, idtype, idname))) {
+			log_print("The device_id is already added for %s.", dev_name(du->dev));
+			goto out;
+		}
+
+		if (!(dev = device_id_system_find(cmd, idname, idtype))) {
+			log_error("No device found with the specified device_id.");
+			goto bad;
+		}
+
+		label_scan_setup_bcache();
+		if (!label_read_pvid(dev, NULL))
+			log_warn("WARNING: failed to read PVID from %s", dev_name(dev));
+
+		if (!device_id_add(cmd, dev, dev->pvid, deviceidtype, NULL, 1))
+			goto_bad;
+
+		if (!device_ids_write(cmd)) {
+			log_error(failed_to_write_devices_file_msg);
+			goto_bad;
+		}
+
+		log_print_unless_silent("Added device %s", dev_name(dev));
+		goto out;
+	}
+
 	if (arg_is_set(cmd, deldev_ARG) && !arg_is_set(cmd, deviceidtype_ARG)) {
 		const char *devname;
 
@@ -944,14 +1012,26 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 	}
 
 	/*
-	 * By itself, --deldev <devname> specifies a device name to remove.
-	 * With an id type specified, --deldev specifies a device id to remove:
-	 * --deldev <idname> --deviceidtype <idtype>
+	 * --delid <idname> --deviceidtype <idtype> removes an entry by idname.
+	 *
+	 * --deldev <idname> --deviceidtype <idtype> is an old way to remove by idname.
+	 *
+	 * (--deldev and --adddev normally accept <devname>, but an old special case
+	 * allowed deldev to replace <devname> with <idname> only when --deviceidtype
+	 * was set.)
 	 */
-	if (arg_is_set(cmd, deldev_ARG) && arg_is_set(cmd, deviceidtype_ARG)) {
+	if (arg_is_set(cmd, delid_ARG) ||
+	    (arg_is_set(cmd, deldev_ARG) && arg_is_set(cmd, deviceidtype_ARG))) {
 		const char *idtype_str = arg_str_value(cmd, deviceidtype_ARG, NULL);
-		const char *idname = arg_str_value(cmd, deldev_ARG, NULL);
+		const char *idname;
 		int idtype;
+
+		if (arg_is_set(cmd, delid_ARG) && idtype_str)
+			idname = arg_str_value(cmd, delid_ARG, NULL);
+		else if (arg_is_set(cmd, deldev_ARG) && idtype_str)
+			idname = arg_str_value(cmd, deldev_ARG, NULL);
+		else
+			goto_bad;
 
 		if (!idtype_str || !idname || !strlen(idname) || !strlen(idtype_str))
 			goto_bad;
@@ -962,7 +1042,7 @@ int lvmdevices(struct cmd_context *cmd, int argc, char **argv)
 		}
 
 		if (!strncmp(idname, "/dev/", 5))
-			log_warn("WARNING: To remove a device by name, do not include --deviceidtype.");
+			log_warn("WARNING: To remove a device by name, use --deldev without --deviceidtype.");
 
 		if (!(du = get_du_for_device_id(cmd, idtype, idname))) {
 			log_error("No devices file entry with device id %s %s.", idtype_str, idname);

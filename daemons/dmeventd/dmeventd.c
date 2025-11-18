@@ -215,8 +215,9 @@ struct message_data {
 /* There are three states a thread can attain. */
 enum {
 	DM_THREAD_REGISTERING,	/* Registering, transitions to RUNNING */
-	DM_THREAD_RUNNING,	/* Working on events, transitions to GRACE or DONE */
+	DM_THREAD_RUNNING,	/* Working on events, transitions to GRACE or TERMINATING */
 	DM_THREAD_GRACE_PERIOD,	/* Thread awaits reuse for a grace period */
+	DM_THREAD_TERMINATING,	/* Thread transitions to DONE */
 	DM_THREAD_DONE		/* Terminated and cleanup is pending */
 };
 
@@ -803,7 +804,7 @@ static struct thread_status *_lookup_thread_status(struct message_data *data)
 	/* Find active threads (not in grace period) */
 	dm_list_iterate_items(thread, &_thread_registry) {
 		_lock_thread(thread);
-		if ((thread->status != DM_THREAD_GRACE_PERIOD) &&
+		if ((thread->status < DM_THREAD_GRACE_PERIOD) &&
 		    !strcmp(data->device_uuid, thread->device.uuid))
 			return thread; /* Return with both mutexes held */
 		_unlock_thread(thread);
@@ -1233,6 +1234,7 @@ static void _monitor_unregister(void *arg)
 	thread->pending = 0;	/* Event pending resolved */
 	thread->processing = 1;	/* Process unregistering */
 	status = thread->status;
+	thread->status = DM_THREAD_TERMINATING;
 	_unlock_thread(thread);
 
 	/* Move to unused registry */
@@ -1778,8 +1780,8 @@ static int _get_registered_dev(struct message_data *message_data, int next)
 	dm_list_iterate_items(thread, &_thread_registry) {
 		_lock_thread(thread);
 
-		/* Skip threads in grace period */
-		if (thread->status != DM_THREAD_GRACE_PERIOD) {
+		/* Skip threads in grace period or terminating */
+		if (thread->status < DM_THREAD_GRACE_PERIOD) {
 			if (found_start) {
 				/* Ready to accept a match */
 				if (_want_registered_device(message_data->dso_name,
@@ -2476,17 +2478,21 @@ static void _daemonize(void)
 	if ((null_fd = open("/dev/null", O_RDWR)) < 0)
 		exit(EXIT_DESC_OPEN_FAILURE);
 
-	if ((dup2(null_fd, STDIN_FILENO) == -1) ||
-	    (dup2(null_fd, STDOUT_FILENO) == -1) ||
-	    (dup2(null_fd, STDERR_FILENO) == -1))
+	if (((null_fd != STDIN_FILENO) && (dup2(null_fd, STDIN_FILENO) == -1)) ||
+	    ((null_fd != STDOUT_FILENO) && (dup2(null_fd, STDOUT_FILENO) == -1)) ||
+	    ((null_fd != STDERR_FILENO) && (dup2(null_fd, STDERR_FILENO) == -1))) {
+		if (null_fd > STDERR_FILENO)
+			(void) close(null_fd);
+		/* coverity[leaked_handle] null_fd is stdin/stdout/stderr */
 		exit(EXIT_DESC_OPEN_FAILURE);
+	}
 
 	if ((null_fd > STDERR_FILENO) && close(null_fd))
 		exit(EXIT_DESC_CLOSE_FAILURE);
 
 	setsid();
 
-	/* coverity[leaked_handle] 'null_fd' handle is not leaking */
+	/* coverity[leaked_handle] 'null_fd' is stdin/stdout/stderr */
 }
 
 static int _reinstate_registrations(struct dm_event_fifos *fifos)
@@ -2723,11 +2729,11 @@ bad:
 static void _usage(char *prog, FILE *file)
 {
 	fprintf(file, "Usage:\n"
-		"%s [-d [-d [-d]]] [-e path] [-g seconds] [-f] [-h] [i] [-l] [-R] [-V] [-?]\n\n"
+		"%s [-d [-d [-d]]] [-e path] [-f] [-g seconds] [-h] [i] [-l] [-R] [-V] [-?]\n\n"
 		"   -d       Log debug messages to syslog (-d, -dd, -ddd)\n"
 		"   -e       Select a file path checked on exit\n"
-		"   -g       Grace period for thread cleanup (0-300 seconds, default: %d)\n"
 		"   -f       Don't fork, run in the foreground\n"
+		"   -g       Grace period for thread cleanup (0-300 seconds, default: %d)\n"
 		"   -h       Show this help information\n"
 		"   -i       Query running instance of dmeventd for info\n"
 		"   -l       Log to stdout,stderr instead of syslog\n"
@@ -2756,17 +2762,8 @@ int main(int argc, char *argv[])
 	optarg = (char*) "";
 	while ((opt = getopt(argc, argv, ":?e:g:fhiVdlR")) != EOF) {
 		switch (opt) {
-		case 'h':
-			_usage(argv[0], stdout);
-			return EXIT_SUCCESS;
-		case '?':
-			_usage(argv[0], stderr);
-			return EXIT_SUCCESS;
-		case 'i':
-			info++;
-			break;
-		case 'R':
-			restart++;
+		case 'd':
+			debug_level++;
 			break;
 		case 'e':
 			if (strchr(optarg, '"')) {
@@ -2775,6 +2772,9 @@ int main(int argc, char *argv[])
 			}
 			_exit_on=optarg;
 			break;
+		case 'f':
+			_foreground++;
+			break;
 		case 'g':
 			_grace_period = atoi(optarg);
 			if (_grace_period < 0 || _grace_period > 300) {
@@ -2782,14 +2782,21 @@ int main(int argc, char *argv[])
 				return EXIT_FAILURE;
 			}
 			break;
-		case 'f':
-			_foreground++;
-			break;
-		case 'd':
-			debug_level++;
+		case 'h':
+			_usage(argv[0], stdout);
+			return EXIT_SUCCESS;
+		case 'i':
+			info++;
 			break;
 		case 'l':
 			use_syslog = 0;
+			break;
+		case '?':
+			/* getopt() returns '?' for unknown option */
+			_usage(argv[0], stderr);
+			return EXIT_SUCCESS;
+		case 'R':
+			restart++;
 			break;
 		case 'V':
 			printf("dmeventd version: %s\n", DM_LIB_VERSION);
@@ -2931,12 +2938,15 @@ int main(int argc, char *argv[])
 	}
 
 	/* Terminate timeout thread if it exists */
-	if (_timeout_thread_id) {
+	pthread_mutex_lock(&_timeout_mutex);
+	if (!_timeout_thread_id)
+		pthread_mutex_unlock(&_timeout_mutex);
+	else {
+		pthread_t thread_id = _timeout_thread_id;
 		_exit_now = DM_EXITING;
-		pthread_mutex_lock(&_timeout_mutex);
 		pthread_cond_signal(&_timeout_cond);  /* Wake it up to check exit */
 		pthread_mutex_unlock(&_timeout_mutex);
-		if (pthread_join(_timeout_thread_id, NULL))
+		if (pthread_join(thread_id, NULL))
 			log_sys_debug("pthread_join", "timeout thread");
 	}
 

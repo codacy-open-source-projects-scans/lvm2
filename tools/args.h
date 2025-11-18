@@ -43,6 +43,9 @@ arg(activationmode_ARG, '\0', "activationmode", activationmode_VAL, 0, 0,
 arg(adddev_ARG, '\0', "adddev", pv_VAL, 0, 0,
     "Add a device to the devices file.\n")
 
+arg(addid_ARG, '\0', "addid", string_VAL, 0, 0,
+    "Find the device with the given device_id and add it to the devices file.\n")
+
 arg(addpvid_ARG, '\0', "addpvid", string_VAL, 0, 0,
     "Find a device with the PVID and add the device to the devices file.\n")
 
@@ -213,6 +216,9 @@ arg(deldev_ARG, '\0', "deldev", string_VAL, 0, 0,
     "When used alone, --deldev specifies a device name.\n"
     "When used with --deviceidtype, --deldev specifies a device id.\n")
 
+arg(delid_ARG, '\0', "delid", string_VAL, 0, 0,
+    "Remove the device with the specified device ID from the devices file.\n")
+
 arg(delnotfound_ARG, '\0', "delnotfound", 0, 0, 0,
     "Remove devices file entries with no matching device.\n")
 
@@ -380,6 +386,9 @@ arg(labelsector_ARG, '\0', "labelsector", number_VAL, 0, 0,
     "sector (sector 1). This lets you use a different sector near the\n"
     "start of the disk (between 0 and 3 inclusive - see LABEL_SCAN_SECTORS\n"
     "in the source). Use with care.\n")
+
+arg(listids_ARG, '\0', "listids", pv_VAL, 0, 0,
+    "Print a list of device IDs available for the device.\n")
 
 arg(listlvs_ARG, '\0', "listlvs", 0, 0, 0,
     "Print a list of LVs that use the device.\n")
@@ -1511,8 +1520,8 @@ arg(list_ARG, 'l', "list", 0, 0, 0,
     "#lvmconfig\n"
     "#dumpconfig\n"
     "#config\n"
-    "List config settings with summarizing comment. This is the same as using\n"
-    "options --typeconfig list --withsummary.\n"
+    "Print a list of config settings instead of structured config settings tree.\n"
+    "If used without other options, this is the same as --typeconfig list --withsummary.\n"
     "#vgcfgrestore\n"
     "List metadata backup and archive files pertaining to the VG.\n"
     "May be used with --file. Does not restore the VG.\n"

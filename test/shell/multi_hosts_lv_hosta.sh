@@ -23,9 +23,8 @@
 #     LVM_TEST_MULTI_HOST=1 T=multi_hosts_lv_hostb.sh
 
 
-. lib/inittest --skip-with-lvmpolld
+. lib/inittest --skip-with-lvmpolld --with-multi-host
 
-[ -z "$LVM_TEST_MULTI_HOST" ] && skip;
 
 IFS=',' read -r -a BLKDEVS <<< "$LVM_TEST_BACKING_DEVICE"
 
@@ -42,7 +41,7 @@ for d in "${BLKDEVS[@]}"; do
 	aux wipefs_a "$d" 2>/dev/null || true
 
 	sg_dev=$(sg_map26 "$d")
-	if [ -n "$LVM_TEST_LOCK_TYPE_IDM" ]; then
+	if [[ "${LVM_TEST_LOCK_TYPE_IDM:-0}" != 0 ]]; then
 		echo "Cleanup IDM context for drive ${d} ($sg_dev)"
 		sg_raw -v -r 512 -o idm_tmp_data.bin "$sg_dev" \
 			88 00 01 00 00 00 00 20 FF 01 00 00 00 01 00 00

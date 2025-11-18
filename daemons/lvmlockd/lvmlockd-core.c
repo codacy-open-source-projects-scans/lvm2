@@ -1186,7 +1186,7 @@ static int lm_prepare_lockspace(struct lockspace *ls, struct action *act, int re
 	} else if (ls->lm_type == LD_LM_SANLOCK) {
 		rv = lm_prepare_lockspace_sanlock(ls, &prev_generation, repair);
 		/* borrowing action.owner to avoid adding another action field */
-		if (!rv)
+		if (!rv && act)
 			act->owner.generation = (uint32_t)prev_generation;
 	} else if (ls->lm_type == LD_LM_IDM) {
 		rv = lm_prepare_lockspace_idm(ls);
@@ -3471,7 +3471,7 @@ static int add_lockspace_thread(const char *ls_name,
 	int rv;
 
 	log_debug("add_lockspace_thread %s %s version %u vg_args %s",
-		  lm_str(lm_type), ls_name, act ? act->version : 0, vg_args);
+		  lm_str(lm_type), ls_name, act ? act->version : 0, vg_args ?: "");
 
 	if (!(ls = alloc_lockspace()))
 		return -ENOMEM;
@@ -3479,7 +3479,8 @@ static int add_lockspace_thread(const char *ls_name,
 	strncpy(ls->name, ls_name, MAX_NAME);
 	ls->lm_type = lm_type;
 
-	if (lockd_lockargs_get_meta_flags(vg_args, &ls->lock_args_flags) < 0) {
+	if (vg_args && strlen(vg_args) && (lm_type == LD_LM_SANLOCK) &&
+	    lockd_lockargs_get_meta_flags(vg_args, &ls->lock_args_flags) < 0) {
 		log_error("add_lockspace_thread %s lock_args invalid %s", ls->name, vg_args);
 		free(ls);
 		return -EARGS;
@@ -4183,7 +4184,7 @@ static void work_fence(struct action *act, int *retry)
 	struct action *ah;
 	struct owner ah_owner;
 	uint32_t new_msg_id;
-	int ah_result;
+	int ah_result = 0;
 	int found_busy = 0;
 	int found_done = 0;
 	int rv;

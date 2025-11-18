@@ -18,7 +18,7 @@
 aux prepare_devs 5
 get_devs
 
-if test -n "$LVM_TEST_LVM1" ; then
+if [[ "${LVM_TEST_LVM1:-0}" != 0 ]] ; then
 mdatypes='1 2'
 else
 mdatypes='2'
@@ -146,21 +146,9 @@ vgchange -an $vg1
 not vgsplit $vg1 $vg2 "$dev3" 2>err;
 vgremove -f $vg2 $vg1
 
-# Restart clvm because using the same
-# devs as lvm1 and then lvm2 causes problems.
-if test -e LOCAL_CLVMD ; then
-	kill "$(< LOCAL_CLVMD)"
-	for i in $(seq 1 100) ; do
-		test $i -eq 100 && die "Shutdown of clvmd is too slow."
-		pgrep clvmd || break
-		sleep .1
-	done # wait for the pid removal
-	aux prepare_clvmd
-fi
-
 done
 
-if test -z "$LVM_TEST_LVM1" ; then
+if [[ "${LVM_TEST_LVM1:-0}" = 0 ]] ; then
 # ONLY LVM2 metadata
 # setup PVs" '
 pvcreate --metadatacopies 0 "$dev5"
@@ -175,7 +163,7 @@ check pvlv_counts $vg1 2 1 0
 vgremove -f $vg1
 
 # vgsplit rejects split because metadata types differ
-if test -n "$LVM_TEST_LVM1" ; then
+if [[ "${LVM_TEST_LVM1:-0}" != 0 ]] ; then
 pvcreate -ff -M1 "$dev3" "$dev4"
 pvcreate -ff "$dev1" "$dev2"
 vgcreate -M1 $vg1 "$dev3" "$dev4"

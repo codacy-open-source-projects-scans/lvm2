@@ -14,6 +14,25 @@
 %global rhel 0
 %endif
 
+# SPDX license identifiers (required in Fedora 37+)
+%if 0%{?fedora} >= 37
+%global license_gpl GPL-2.0-only
+%global license_lgpl LGPL-2.0-only
+%else
+%global license_gpl GPLv2
+%global license_lgpl LGPLv2
+%endif
+
+# ldconfig scriptlets (deprecated in Fedora 28+, RHEL 8+)
+%if 0%{?fedora} < 28 && 0%{?rhel} < 8
+%global ldconfig_scriptlets(n:) \
+%%post %%{-n:-n %%{-n*}} %%{?1} -p /sbin/ldconfig \
+\
+%%postun %%{-n:-n %%{-n*}} %%{?1} -p /sbin/ldconfig
+%else
+%global ldconfig_scriptlets(n:) %{nil}
+%endif
+
 %global enableif() \
 %%global configure_flags %%{?configure_flags} --%%(if test %%1 -gt 0; then echo enable-%%2; else echo disable-%%2; fi)
 

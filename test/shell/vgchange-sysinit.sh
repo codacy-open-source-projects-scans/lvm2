@@ -10,7 +10,6 @@
 # along with this program; if not, write to the Free Software Foundation,
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 
-SKIP_WITH_CLVMD=1
 
 . lib/inittest --skip-with-lvmpolld
 
@@ -54,7 +53,7 @@ test ! -b "$DM_DEV_DIR/$vg2/$lv2"
 
 vgchange --ignorelockingfailure -ay $vg2
 
-if test -n "$LVM_TEST_LVMLOCKD"; then
+if [[ "${LVM_TEST_LVMLOCKD:-0}" != 0 ]]; then
 vgremove --config 'global{locking_type=0}' -ff $vg2
 else
 # TODO maybe also support --ignorelockingfailure ??

@@ -47,6 +47,7 @@
 # NOTE: Required by fedora 38+, maybe older
 %global buildreq_udev systemd-devel, systemd-units
 %global req_udev udev >= 181-1
+%global systemd_version 219
 
 
 %if %{fedora} >= 35 || %{rhel} >= 9
@@ -161,10 +162,9 @@ Summary: Userland logical volume management tools
 Name: lvm2
 Version: 2.02.120
 Release: 1%{?dist}
-License: GPLv2
-Group: System Environment/Base
-URL: http://sources.redhat.com/lvm2
-Source0: ftp://sources.redhat.com/pub/lvm2/LVM2.%{version}.tgz
+License: %{license_gpl}
+URL: https://sourceware.org/lvm2
+Source0: https://sourceware.org/pub/lvm2/releases/LVM2.%{version}.tgz
 Source91: source.inc
 Source92: build.inc
 Source93: packages.inc
@@ -204,6 +204,10 @@ BuildRequires: libblkid-devel
 %maybe BuildRequires: %{?buildreq_python3_setuptools}
 %maybe BuildRequires: %{?buildreq_python3_dbus}
 %maybe BuildRequires: %{?buildreq_python3_pyudev}
+# systemd-rpm-macros needed for systemd macros (Fedora 30+, RHEL 8+)
+%if 0%{?fedora} >= 30 || 0%{?rhel} >= 8
+BuildRequires: systemd-rpm-macros
+%endif
 
 %description
 LVM2 includes all of the support for handling read/write operations on
