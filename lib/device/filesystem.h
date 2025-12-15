@@ -15,8 +15,12 @@
 #ifndef _FILESYSTEM_H
 #define _FILESYSTEM_H
 
-#include "lib/commands/toolcontext.h"
 #include "lib/device/device.h"
+
+#include <linux/limits.h> /* PATH_MAX */
+
+struct cmd_context;
+struct logical_volume;
 
 #define FSTYPE_MAX 16
 #define UUID_LEN 37
@@ -45,8 +49,7 @@ struct fs_info {
 	unsigned needs_crypt:1;
 };
 
-int fs_get_info(struct cmd_context *cmd, struct logical_volume *lv,
-                struct fs_info *fsi, int include_mount);
+int fs_get_info(struct cmd_context *cmd, struct logical_volume *lv, struct fs_info *fsi);
 
 int fs_extend_script(struct cmd_context *cmd, struct logical_volume *lv, struct fs_info *fsi, char *fsmode);
 int fs_reduce_script(struct cmd_context *cmd, struct logical_volume *lv, struct fs_info *fsi, char *fsmode);
@@ -54,5 +57,9 @@ int crypt_resize_script(struct cmd_context *cmd, struct logical_volume *lv, stru
 
 int fs_mount_state_is_misnamed(struct cmd_context *cmd, struct logical_volume *lv, char *lv_path, char *fstype);
 int lv_crypt_is_active(struct cmd_context *cmd, char *lv_path);
+
+/* filesystem_xfs.c */
+int fs_xfs_update_size_mounted(struct cmd_context *cmd, struct logical_volume *lv,
+			       char *lv_path, struct fs_info *fsi);
 
 #endif

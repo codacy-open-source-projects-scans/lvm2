@@ -3364,25 +3364,20 @@ static int _lvconvert_to_pool(struct cmd_context *cmd,
 							use_pvh)))
 			goto_bad;
 	} else {
+		/* Catch if there is still any existing user of this LV */
 		if (!deactivate_lv(cmd, metadata_lv)) {
 			log_error("Aborting. Failed to deactivate %s.",
 				  display_lvname(metadata_lv));
 			goto bad;
 		}
 
-		if (zero_metadata || to_thin) {
-			metadata_lv->status |= LV_ACTIVATION_SKIP;
-			if (!activate_lv(cmd, metadata_lv)) {
-				log_error("Aborting. Failed to activate metadata lv.");
-				goto bad;
-			}
-			metadata_lv->status &= ~LV_ACTIVATION_SKIP;
+		/* Wait for synchronization before wiping activation */
+		sync_local_dev_names(cmd);
 
-			if (!wipe_lv(metadata_lv, (struct wipe_params) {
-						  .do_wipe_signatures = 1,
-						  .is_metadata = 1,
-						  .yes = arg_count(cmd, yes_ARG),
-						  .force = arg_force_value(cmd) } )) {
+		if (zero_metadata || to_thin) {
+			if (!activate_and_wipe_lv(metadata_lv, WIPE_MODE_METADATA,
+						  arg_count(cmd, yes_ARG),
+						  arg_force_value(cmd))) {
 				log_error("Aborting. Failed to wipe metadata lv.");
 				goto bad;
 			}
@@ -3438,6 +3433,12 @@ static int _lvconvert_to_pool(struct cmd_context *cmd,
 
 		pool_lv = lv;
 	}
+
+	/* For pool skipping activation has slightly different meaning
+	 * so by default we create a regular pool with standard activation
+	 * User may use 'lvchange --setactivationskip' to use pool
+	 * with skipped activation */
+	pool_lv->status &= ~LV_ACTIVATION_SKIP;
 
 	/*
 	 * starts with pool_lv foo (not a pool yet)

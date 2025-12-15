@@ -13,14 +13,13 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include "lib/id/id.h"
 #include "lib/misc/lib.h"
-#include "lib/uuid/uuid.h"
 #include "lib/misc/lvm-wrappers.h"
 
 #include <assert.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <ctype.h>
 
 static const char _c[] =
     "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!#";
@@ -33,22 +32,6 @@ int lvid_create(union lvid *lvid, struct id *vgid)
 	memcpy(lvid->id, vgid, sizeof(*lvid->id));
 	return id_create(&lvid->id[1]);
 }
-
-int lvid_in_restricted_range(union lvid *lvid)
-{
-	int i;
-
-	for (i = 0; i < ID_LEN - 3; i++)
-		if (lvid->id[1].uuid[i] != '0')
-			return 0;
-
-	for (i = ID_LEN - 3; i < ID_LEN; i++)
-		if (!isdigit(lvid->id[1].uuid[i]))
-			return 0;
-
-	return 1;
-}
-
 
 int id_create(struct id *id)
 {

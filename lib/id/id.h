@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
- * Copyright (C) 2004-2006 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2004-2025 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_UUID_H
-#define _LVM_UUID_H
+#ifndef _LVM_ID_H
+#define _LVM_ID_H
 
 #define ID_LEN 32
 
@@ -34,8 +34,6 @@ union lvid {
 	struct id id[2];
 	char s[2 * sizeof(struct id) + 1 + 7];
 };
-
-int lvid_in_restricted_range(union lvid *lvid);
 
 int lvid_create(union lvid *lvid, struct id *vgid);
 int id_create(struct id *id);
