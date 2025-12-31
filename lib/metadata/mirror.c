@@ -70,6 +70,35 @@ struct logical_volume *find_temporary_mirror(const struct logical_volume *lv)
 }
 
 /*
+ * cluster_mirror_is_available
+ *
+ * Check if the proper kernel module and log daemon are running.
+ * Caller should check for 'vg_is_clustered(lv->vg)' before making
+ * this call.
+ *
+ * Returns: 1 if available, 0 otherwise
+ */
+int cluster_mirror_is_available(struct cmd_context *cmd)
+{
+       unsigned attr = 0;
+       const struct segment_type *segtype;
+
+       if (!(segtype = get_segtype_from_string(cmd, SEG_TYPE_NAME_MIRROR)))
+               return_0;
+
+       if (!segtype->ops->target_present)
+               return_0;
+
+       if (!segtype->ops->target_present(cmd, NULL, &attr))
+               return_0;
+
+       if (!(attr & MIRROR_LOG_CLUSTERED))
+               return 0;
+
+       return 1;
+}
+
+/*
  * Returns the number of mirrors of the LV
  */
 uint32_t lv_mirror_count(const struct logical_volume *lv)
@@ -173,7 +202,7 @@ uint32_t adjusted_mirror_region_size(struct cmd_context *cmd,
  * So, any time we want to move areas to the end to be removed, use
  * this function.
  */
-static int _shift_mirror_images(struct lv_segment *mirrored_seg, unsigned mimage)
+int shift_mirror_images(struct lv_segment *mirrored_seg, unsigned mimage)
 {
 	unsigned i;
 	struct lv_segment_area area;
@@ -349,43 +378,10 @@ revert_new_lv:
 	return 0;
 }
 
-const struct logical_volume *find_active_pvmoved_lv(const struct logical_volume *pvmoved_lv)
-{
-	const struct logical_volume *lv;
-
-	lv = lv_lock_holder(pvmoved_lv);
-	if (lv_is_active(lv))
-		return lv;
-
-	if ((pvmoved_lv != lv) && lv_is_active(pvmoved_lv))
-		return pvmoved_lv;
-
-	return NULL;
-}
-
-int activate_pvmoved_lvs(const struct dm_list *lvs)
-{
-	const struct logical_volume *lv;
-	struct lv_list *lvl;
-	int r = 1;
-
-	dm_list_iterate_items(lvl, lvs) {
-		if (!(lv = find_active_pvmoved_lv(lvl->lv)))
-			continue;
-
-		if (!activate_lv(lv->vg->cmd, lv)) {
-			log_error("Failed to activate %s.", display_lvname(lv));
-			r = 0;
-		}
-	}
-
-	return r;
-}
-
 /*
  * Activate an LV similarly (i.e. SH or EX) to a given "model" LV
  */
-static int _activate_lv_like_model(const struct logical_volume *model,
+static int _activate_lv_like_model(struct logical_volume *model,
 				   struct logical_volume *lv)
 {
 	/* FIXME: run all cases through lv_active_change when clvm variants are gone. */
@@ -629,7 +625,7 @@ static int _move_removable_mimages_to_end(struct logical_volume *lv,
 
 		if (!is_temporary_mirror_layer(sub_lv) &&
 		    is_mirror_image_removable(sub_lv, removable_pvs)) {
-			if (!_shift_mirror_images(mirrored_seg, i))
+			if (!shift_mirror_images(mirrored_seg, i))
 				return_0;
 			count--;
 		}
@@ -874,49 +870,6 @@ static int _split_mirror_images(struct logical_volume *lv,
 	return 1;
 }
 
-static int _remove_pvmove_layer(struct logical_volume *lv, struct dm_list *parent_lvs)
-{
-	struct seg_list *sl, *sl2;
-	struct lv_segment *pvmove_seg;
-	struct logical_volume *parent_lv;
-
-	log_debug_metadata("Removing pvmove layer for %s.", display_lvname(lv));
-
-	/* Iterate through a copy of the list since we'll be modifying it */
-	dm_list_iterate_items_safe(sl, sl2, &lv->segs_using_this_lv) {
-		parent_lv = sl->seg->lv;
-
-		/*
-		 * Redirect all segments in this parent LV that point to the pvmove LV.
-		 * This will move the segments to point to the underlying device instead.
-		 */
-		if (!remove_layers_for_segments(lv->vg->cmd, parent_lv, lv,
-						PVMOVE, parent_lvs)) {
-			log_error("Failed to redirect segments from %s.",
-				  display_lvname(parent_lv));
-			return 0;
-		}
-	}
-
-	/*
-	 * After remove_layer_from_lv(), the pvmove LV has been stripped to underlying segments
-	 * (error segments with 0 areas). All parents have been redirected.
-	 * Clear the PVMOVE status - this LV is no longer functioning as a pvmove, it's just
-	 * orphan error segments waiting to be cleaned up in pvmove_finish().
-	 */
-	lv->status &= ~(PVMOVE | LOCKED);
-	dm_list_iterate_items(pvmove_seg, &lv->segments)
-		pvmove_seg->status &= ~PVMOVE;
-
-	/* Merge all 'error' segments into one */
-	if (!lv_merge_segments(lv))
-		return_0;
-
-	lv_set_visible(lv);
-
-	return 1;
-}
-
 /*
  * Remove num_removed images from mirrored_seg
  *
@@ -960,7 +913,6 @@ static int _remove_mirror_images(struct logical_volume *lv,
 	struct lv_list *lvl;
 	struct dm_list tmp_orphan_lvs;
 	uint32_t orig_removed = num_removed;
-	DM_LIST_INIT(lvs_changed);
 
 	if (removed)
 		*removed = 0;
@@ -1000,7 +952,7 @@ static int _remove_mirror_images(struct logical_volume *lv,
 					  "%s is not in-sync.", display_lvname(lv));
 				return 0;
 			}
-			if (!_shift_mirror_images(mirrored_seg, s))
+			if (!shift_mirror_images(mirrored_seg, s))
 				return_0;
 			--new_area_count;
 			++num_removed;
@@ -1107,22 +1059,11 @@ static int _remove_mirror_images(struct logical_volume *lv,
 		return_0;
 
 	/*
-	 * For pvmove with incrementally redirect parent segments
-	 * away from the pvmove LV to maintain consistent metadata at each commit.
-	 */
-	if (lv_is_pvmove(lv) &&
-	    !_remove_pvmove_layer(lv, &lvs_changed))
-		return_0;
-
-	/*
 	 * To successfully remove these unwanted LVs we need to
 	 * remove the LVs from the mirror set, commit that metadata
 	 * then deactivate and remove them fully.
 	 */
 	if (!lv_update_and_reload_origin(mirrored_seg->lv))
-		return_0;
-
-	if (!activate_pvmoved_lvs(&lvs_changed))
 		return_0;
 
 	/* Save or delete the 'orphan' LVs */
@@ -1140,9 +1081,9 @@ static int _remove_mirror_images(struct logical_volume *lv,
 		if (detached_log_lv &&
 		    !_activate_lv_like_model(lv, detached_log_lv))
 			return_0;
-	}
 
-	sync_local_dev_names(lv->vg->cmd);
+		sync_local_dev_names(lv->vg->cmd);
+	}
 
 	if (!collapse) {
 		dm_list_iterate_items(lvl, &tmp_orphan_lvs)
@@ -1385,10 +1326,9 @@ static int _validate_mirror_segments(struct logical_volume *lv,
  * If 'status_mask' is non-zero, the removal happens only when all segments
  * has the status bits on.
  */
-static int _remove_mirrors_from_segments(struct logical_volume *lv,
-					 uint32_t new_mirrors, uint64_t status_mask)
+int remove_mirrors_from_segments(struct logical_volume *lv,
+				 uint32_t new_mirrors, uint64_t status_mask)
 {
-	DM_LIST_INIT(lvs_changed);
 	struct lv_segment *seg;
 	uint32_t s;
 
@@ -1412,10 +1352,6 @@ static int _remove_mirrors_from_segments(struct logical_volume *lv,
 		if (!new_mirrors)
 			seg->segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_STRIPED);
 	}
-
-	if (lv_is_pvmove(lv) &&
-	    !_remove_pvmove_layer(lv, &lvs_changed))
-		return_0;
 
 	return 1;
 }
@@ -1447,39 +1383,25 @@ const char *get_pvmove_pvname_from_lv_mirr(const struct logical_volume *lv_mirr)
 
 /*
  * Find first pvmove LV referenced by a segment of an LV.
- * Recursively searches sub-LVs (e.g., for RAID rimages).
  */
-/*
- * Callback for for_each_sub_lv to find pvmove LV
- */
-static int _find_pvmove_lv_cb(struct logical_volume *lv, void *data)
-{
-	const struct logical_volume **pvmove_lv_ptr = data;
-
-	if (lv_is_pvmove(lv)) {
-		log_debug("Found pvmove LV %s.", display_lvname(lv));
-		*pvmove_lv_ptr = lv;
-		return 0; /* Stop iteration */
-	}
-
-	return 1; /* Continue iteration */
-}
-
 const struct logical_volume *find_pvmove_lv_in_lv(const struct logical_volume *lv)
 {
-	const struct logical_volume *pvmove_lv = NULL;
+	const struct lv_segment *seg;
+	uint32_t s;
 
 	if (lv_is_pvmove(lv))
 		return lv;
 
-	/*
-	 * Use for_each_sub_lv to recursively search ALL sub-LVs.
-	 * This is more thorough than manually iterating seg->area_count
-	 * because it also checks pool_lv, metadata_lv, external_lv, etc.
-	 */
-	(void) for_each_sub_lv((struct logical_volume *)lv, _find_pvmove_lv_cb, (void *)&pvmove_lv);
+	dm_list_iterate_items(seg, &lv->segments) {
+		for (s = 0; s < seg->area_count; s++) {
+			if (seg_type(seg, s) != AREA_LV)
+				continue;
+			if (lv_is_pvmove(seg_lv(seg, s)))
+				return seg_lv(seg, s);
+		}
+	}
 
-	return pvmove_lv;
+	return NULL;
 }
 
 const char *get_pvmove_pvname_from_lv(const struct logical_volume *lv)
@@ -1638,6 +1560,18 @@ static int _add_mirrors_that_preserve_segments(struct logical_volume *lv,
 	}
 	alloc_destroy(ah);
 	return r;
+}
+
+/*
+ * Add mirrors to "linear" or "mirror" segments
+ */
+int add_mirrors_to_segments(struct cmd_context *cmd, struct logical_volume *lv,
+			    uint32_t mirrors, uint32_t region_size,
+			    struct dm_list *allocatable_pvs, alloc_policy_t alloc)
+{
+	return _add_mirrors_that_preserve_segments(lv, MIRROR_BY_SEG,
+						   mirrors, region_size,
+						   allocatable_pvs, alloc);
 }
 
 /*
@@ -1966,11 +1900,11 @@ out:
 /*
  * Convert "linear" LV to "mirror".
  */
-static int _add_mirror_images(struct cmd_context *cmd, struct logical_volume *lv,
-			      uint32_t mirrors, uint32_t stripes,
-			      uint32_t stripe_size, uint32_t region_size,
-			      struct dm_list *allocatable_pvs, alloc_policy_t alloc,
-			      uint32_t log_count)
+int add_mirror_images(struct cmd_context *cmd, struct logical_volume *lv,
+		      uint32_t mirrors, uint32_t stripes,
+		      uint32_t stripe_size, uint32_t region_size,
+		      struct dm_list *allocatable_pvs, alloc_policy_t alloc,
+		      uint32_t log_count)
 {
 	struct alloc_handle *ah;
 	const struct segment_type *segtype;
@@ -2092,9 +2026,9 @@ int lv_add_mirrors(struct cmd_context *cmd, struct logical_volume *lv,
 		if (!mirrors)
 			return add_mirror_log(cmd, lv, log_count,
 					      region_size, pvs, alloc);
-		return _add_mirror_images(cmd, lv, mirrors,
-					  stripes, stripe_size, region_size,
-					  pvs, alloc, log_count);
+		return add_mirror_images(cmd, lv, mirrors,
+					 stripes, stripe_size, region_size,
+					 pvs, alloc, log_count);
 	}
 
 	log_error("Unsupported mirror conversion type.");
@@ -2183,7 +2117,7 @@ int lv_remove_mirrors(struct cmd_context *cmd __attribute__((unused)),
 			  "segment-by-segment mirroring.");
 		return 0;
 	}
-	return _remove_mirrors_from_segments(lv, new_mirrors, status_mask);
+	return remove_mirrors_from_segments(lv, new_mirrors, status_mask);
 }
 
 int set_mirror_log_count(int *log_count, const char *mirrorlog)

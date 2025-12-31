@@ -1,29 +1,9 @@
-Version 2.03.39 - 
+Version 2.03.37 - 
 ==================
-
-Version 2.03.38 - 15th December 2025
-====================================
-  Synchronize with udev after creating pool metadata spare volume.
-  Conversion to thin-pool removes activation skipping from converted LVs.
-  Configure now checks for xfs/xfs.h.
-  Workaround for libblkid returning old FSLASTBLOCK immediately after resize.
-  Enhance pvmove activation and deactivation.
-  LV locks whole device tree using such locked LV.
-
-Version 2.03.37 - 21st November 2025
-====================================
-  Remove unsupported --blockdevice option from lvscan.
   Support output in list mode for all lvmconfig --typeconfig types with --list.
   Enhance shutdown performance of daemons using libdaemon.
-  Update lvmdevices(8).
-  Add --force option for lvmdevices --update.
-  Add --listids, --delid, --addid options for manipulation by device_id to lvmdevices.
-  Add missing synchronization for vdopool.
-  Fix deadlock in lvmdbusd on SIGINT in lvm shell mode.
-  Add VG attr character and pr field for persistent reservation status to vgs.
-  Fix persistent reservations setting handling in vgmerge, vgsplit and vgimportclone.
   Add missing synchronization while converting cachevols.
-  Warn on classic snapshot on raid creation and error on activation if missing.
+  Warn on classic snapshot on raid creation and error on activation + test.
   Translate udev device paths in lvmdbusd for test environments.
   Use source='udev' in lvmdbusd to monitor processed udev events.
   Symlink to /dev nodes when using alternative dev dir to trigger udev.

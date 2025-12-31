@@ -1581,8 +1581,9 @@ RULE: --noheadings not --headings
 ---
 
 lvscan
-OO: --all, --ignorelockingfailure, --readonly, --reportformat ReportFmt
-IO: --partial, --cache_long, --blockdevice
+OO: --all, --blockdevice, --ignorelockingfailure,
+--readonly, --reportformat ReportFmt
+IO: --partial, --cache_long
 ID: lvscan_general
 
 ---

@@ -441,6 +441,7 @@ teardown_devs_prefixed() {
 
 			[[ "$progress" = 1 ]] || break
 
+			sleep .1
 			udev_wait
 			wait
 			progress=0
@@ -1636,7 +1637,7 @@ generate_config() {
 		for s in $(cut -f1 -d/ "$config_values" | sort -u); do
 			echo "$s {"
 			local k
-			# $(grep ^"$s"/ "$config_values" | cut -f1 -d= | sed -e 's, *$,,' | sort -u)
+			# $(grep ^"$s"/ "$config_values" | cut -f1 -d= | sed -e 's, *$,,' | sort | uniq)
 			for k in $(awk -F= -v s="$s" '$0 ~ "^" s "/" {sub(/ *$/, "", $1); print $1}' "$config_values" | sort -u); do
 				# grep "^${k}[ \t=]" "$config_values" | tail -n 1 | sed -e "s,^$s/,	 ," || true
 				# single command with '|' as delimiter
@@ -2027,7 +2028,7 @@ have_cache() {
 # if passed 'skip' keyword - print
 have_fsinfo() {
 	local r
-	r=$(lvresize --fs checksize -L+1 $vg/unknownlvname 2>&1) && die "lvresize must fail!"
+	r=$(not lvresize --fs checksize -L+1 $vg/unknownlvname 2>&1) || die "lvresize must fail!"
 
 	case "$r" in
 	*"Unknown --fs value"*) return 1 ;;
@@ -2065,10 +2066,9 @@ awk_parse_init_count_in_lvmpolld_dump() {
 	$'BEGINFILE { x=0; answ=0 }' \
 	$'{' \
 		$'if (/.*{$/) { x++ }' \
-		$'else if (/.*}$/) { x--; if (x == 1) { finished=-1; found=0 } }' \
-		$'else if ( x == 2 && $1 ~ "[[:space:]]*"vkey) { value=substr($2, 2); value=substr(value, 1, length(value) - 1); if (value == vvalue) found=1 }' \
-		$'else if ( x == 2 && found == 1 && $1 ~ /[[:space:]]*polling_finished/) { finished=$2 }' \
-		$'if ( x == 2 && found == 1 && finished == 0 && $1 ~ /[[:space:]]*init_requests_count/) { answ=$2 }' \
+		$'else if (/.*}$/) { x-- }' \
+		$'else if ( x == 2 && $1 ~ "[[:space:]]*"vkey) { value=substr($2, 2); value=substr(value, 1, length(value) - 1); }' \
+		$'if ( x == 2 && value == vvalue && $1 ~ /[[:space:]]*init_requests_count/) { answ=$2 }' \
 		$'if (answ > 0) { exit 0 }' \
 	$'}' \
 	$'END { printf "%d", answ }'
@@ -2093,7 +2093,6 @@ wait_pvmove_lv_ready() {
 				lvmpolld_dump > lvmpolld_dump.txt
 				all=1
 				for l in "${lvid[@]%-real}" ; do
-					# check_lvmpolld_init_rq_count now ignores finished entries
 					check_lvmpolld_init_rq_count 1 "${l##LVM-}" lvid || all=0
 				done
 				[[ "$all" = 1 ]] && return

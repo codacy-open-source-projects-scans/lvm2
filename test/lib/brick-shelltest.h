@@ -473,15 +473,18 @@ struct TimedBuffer {
     }
 
     void push( const std::string &buf ) {
-        for ( std::string::const_iterator e, b = buf.begin() ; b != buf.end(); b = e ) {
+        Timespec now;
+        if ( stamp )
+            now.gettime();
+        std::string::const_iterator b = buf.begin(), e = buf.begin();
+
+        while ( e != buf.end() )
+        {
             e = std::find( b, buf.end(), '\n' );
-
-            // Only update timestamp when we receive actual content ( b != e )
-            // and we start a new line.
-            if ( stamp && ( b != e ) && incomplete.second.empty() )
-                    incomplete.first.gettime();
-
             incomplete.second += std::string( b, e );
+
+            if ( incomplete.first.is_zero() )
+                incomplete.first = now;
 
             if ( e != buf.end() ) {
                 incomplete.second += "\n";
@@ -491,14 +494,16 @@ struct TimedBuffer {
                     if (incomplete.second.find("# 0 STACKTRACE", 1) != std::string::npos ||
                         incomplete.second.find("# timing off", 1) != std::string::npos) {
                         stamp = false;
+                        now = 0;
                     } else if (incomplete.second.find("# teardown", 1) != std::string::npos ||
                                incomplete.second.find("# timing on", 1) != std::string::npos) {
                         stamp = true;
+                        now.gettime();
                     }
                 }
-                incomplete = std::make_pair( Timespec(), "" );
-                ++e;
+                incomplete = std::make_pair( now, "" );
             }
+            b = (e == buf.end() ? e : e + 1);
         }
     }
 

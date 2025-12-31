@@ -102,9 +102,8 @@ _verify_data_on_lv() {
 # Usage: _wait_for_repair dev1 [dev2 ...]
 _wait_for_repair() {
 	local dev
-	touch "$mnt/touch"
 	sync
-	for i in {1..13}; do
+	for i in {1..11}; do
 		sleep 1
 		lvs -a -o+devices $vg > out 2>&1 || true
 		for dev in "$@"; do

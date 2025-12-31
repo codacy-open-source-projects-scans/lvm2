@@ -47,7 +47,7 @@ lv_field() {
 
 lv_first_seg_field() {
 	local r
-	read -r r < <(lvs --config 'log{prefix=""}' --unbuffered --noheadings -o "$2" "${@:3}" "$1")
+	r=$(head -1 < <(lvs --config 'log{prefix=""}' --unbuffered --noheadings -o "$2" "${@:3}" "$1"))
 	trim_ "$r"
 }
 
@@ -87,9 +87,8 @@ lv_tree_devices_() {
 		local log
 		log=$(lv_field_lv_ "$lv" mirror_log)
 		test -z "$log" || lv_tree_devices_ "$1" "$log"
-		for i in $(lv_devices "$lv"); do
-			lv_tree_devices_ "$1" "$i"
-		done
+		for i in $(lv_devices "$lv")
+			do lv_tree_devices_ "$1" "$i"; done
 		;;
 	thin)
 		lv_tree_devices_ "$1" "$(lv_field_lv_ "$lv" pool_lv)"
@@ -109,7 +108,7 @@ lv_tree_devices_() {
 }
 
 lv_tree_devices() {
-	lv_tree_devices_ "$@" | sort -u
+	lv_tree_devices_ "$@" | sort | uniq
 }
 
 first_extent_sector() {

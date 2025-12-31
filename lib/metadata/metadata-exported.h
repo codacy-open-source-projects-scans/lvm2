@@ -21,7 +21,7 @@
 #ifndef _LVM_METADATA_EXPORTED_H
 #define _LVM_METADATA_EXPORTED_H
 
-#include "lib/id/id.h"
+#include "lib/uuid/uuid.h"
 #include "lib/metadata/pv.h"
 #include "lib/metadata/vg.h"
 #include "lib/metadata/lv.h"
@@ -219,7 +219,7 @@
 
 #define vg_is_archived(vg)	(((vg)->status & ARCHIVED_VG) ? 1 : 0)
 
-/* lv_is_locked() is now a function in lv.c to check sub-LVs too */
+#define lv_is_locked(lv)	(((lv)->status & LOCKED) ? 1 : 0)
 #define lv_is_partial(lv)	(((lv)->status & PARTIAL_LV) ? 1 : 0)
 #define lv_is_virtual(lv)	(((lv)->status & VIRTUAL) ? 1 : 0)
 #define lv_is_writable(lv)	(((lv)->status & LVM_WRITE) ? 1 : 0)
@@ -280,6 +280,9 @@
 
 #define lv_is_removed(lv)	(((lv)->status & LV_REMOVED) ? 1 : 0)
 
+#define lv_is_zero(lv) 		((dm_list_size(&lv->segments) == 1) && seg_is_zero(first_seg(lv)))
+#define lv_is_error(lv)		((dm_list_size(&lv->segments) == 1) && seg_is_error(first_seg(lv)))
+
 /* Recognize component LV (matching lib/misc/lvm-string.c _lvname_has_reserved_component_string()) */
 #define lv_is_component(lv) (lv_is_cache_origin(lv) || \
 			     lv_is_writecache_origin(lv) || \
@@ -302,10 +305,6 @@ int lv_layout_and_role(struct dm_pool *mem, const struct logical_volume *lv,
 
 int lv_is_linear(const struct logical_volume *lv);
 int lv_is_striped(const struct logical_volume *lv);
-int lv_is_locked(const struct logical_volume *lv);
-int lv_is_error(const struct logical_volume *lv);
-int lv_is_zero(const struct logical_volume *lv);
-int lv_is_orphan_pvmove(const struct logical_volume *lv);
 
 /* Ordered list - see lv_manip.c */
 typedef enum {
@@ -950,6 +949,7 @@ int add_metadata_to_pool(struct lv_segment *pool_seg,
 			 struct logical_volume *metadata_lv);
 int handle_pool_metadata_spare(struct volume_group *vg, uint32_t extents,
 			       struct dm_list *pvh, int poolmetadataspare);
+int vg_set_pool_metadata_spare(struct logical_volume *lv);
 int vg_remove_pool_metadata_spare(struct volume_group *vg);
 
 struct logical_volume *data_lv_from_thin_pool(struct logical_volume *pool_lv);
@@ -1110,6 +1110,10 @@ int remove_layers_for_segments(struct cmd_context *cmd,
 			       struct logical_volume *lv,
 			       struct logical_volume *layer_lv,
 			       uint64_t status_mask, struct dm_list *lvs_changed);
+int remove_layers_for_segments_all(struct cmd_context *cmd,
+				   struct logical_volume *layer_lv,
+				   uint64_t status_mask,
+				   struct dm_list *lvs_changed);
 int split_parent_segments_for_layer(struct cmd_context *cmd,
 				    struct logical_volume *layer_lv);
 int remove_layer_from_lv(struct logical_volume *lv,
@@ -1239,6 +1243,7 @@ int lv_remove_mirrors(struct cmd_context *cmd, struct logical_volume *lv,
 const char *get_mirror_log_name(int log_count);
 int set_mirror_log_count(int *log_count, const char *mirrorlog);
 
+int cluster_mirror_is_available(struct cmd_context *cmd);
 int is_temporary_mirror_layer(const struct logical_volume *lv);
 struct logical_volume * find_temporary_mirror(const struct logical_volume *lv);
 uint32_t lv_mirror_count(const struct logical_volume *lv);
@@ -1247,9 +1252,19 @@ uint32_t adjusted_mirror_region_size(struct cmd_context *cmd,
 				     uint32_t extent_size, uint32_t extents,
 				     uint32_t region_size, int internal, int clustered);
 
+int remove_mirrors_from_segments(struct logical_volume *lv,
+				 uint32_t new_mirrors, uint64_t status_mask);
+int add_mirrors_to_segments(struct cmd_context *cmd, struct logical_volume *lv,
+			    uint32_t mirrors, uint32_t region_size,
+			    struct dm_list *allocatable_pvs, alloc_policy_t alloc);
+
 int remove_mirror_images(struct logical_volume *lv, uint32_t num_mirrors,
 			 int (*is_removable)(struct logical_volume *, void *),
 			 void *removable_baton, unsigned remove_log);
+int add_mirror_images(struct cmd_context *cmd, struct logical_volume *lv,
+		      uint32_t mirrors, uint32_t stripes, uint32_t stripe_size, uint32_t region_size,
+		      struct dm_list *allocatable_pvs, alloc_policy_t alloc,
+		      uint32_t log_count);
 struct logical_volume *detach_mirror_log(struct lv_segment *mirrored_seg);
 int attach_mirror_log(struct lv_segment *seg, struct logical_volume *log_lv);
 int remove_mirror_log(struct cmd_context *cmd, struct logical_volume *lv,
@@ -1268,9 +1283,7 @@ int reconfigure_mirror_images(struct lv_segment *mirrored_seg, uint32_t num_mirr
 			      struct dm_list *removable_pvs, unsigned remove_log);
 #endif
 int collapse_mirrored_lv(struct logical_volume *lv);
-
-const struct logical_volume *find_active_pvmoved_lv(const struct logical_volume *pvmoved_lv);
-int activate_pvmoved_lvs(const struct dm_list *lvs);
+int shift_mirror_images(struct lv_segment *mirrored_seg, unsigned mimage);
 
 /* ++  metadata/raid_manip.c */
 struct lv_status_raid {

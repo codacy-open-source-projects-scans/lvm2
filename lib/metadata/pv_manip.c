@@ -61,6 +61,23 @@ int alloc_pv_segment_whole_pv(struct dm_pool *mem, struct physical_volume *pv)
 	return 1;
 }
 
+int peg_dup(struct dm_pool *mem, struct dm_list *peg_new, struct dm_list *peg_old)
+{
+	struct pv_segment *peg, *pego;
+
+	dm_list_init(peg_new);
+
+	dm_list_iterate_items(pego, peg_old) {
+		if (!(peg = _alloc_pv_segment(mem, pego->pv, pego->pe,
+					      pego->len, pego->lvseg,
+					      pego->lv_area)))
+			return_0;
+		dm_list_add(peg_new, &peg->list);
+	}
+
+	return 1;
+}
+
 /* Find segment at a given physical extent in a PV */
 static struct pv_segment *_find_peg_by_pe(const struct physical_volume *pv,
 					  uint32_t pe)
@@ -79,10 +96,10 @@ static struct pv_segment *_find_peg_by_pe(const struct physical_volume *pv,
  * Split peg at given extent.
  * Second part is always not allocated to a LV and returned.
  */
-static struct pv_segment *_add_pv_split_segment(struct dm_pool *mem,
-						struct physical_volume *pv,
-						struct pv_segment *peg,
-						uint32_t pe)
+static struct pv_segment *_pv_split_segment(struct dm_pool *mem,
+					    struct physical_volume *pv,
+					    struct pv_segment *peg,
+					    uint32_t pe)
 {
 	struct pv_segment *peg_new;
 
@@ -106,9 +123,9 @@ static struct pv_segment *_add_pv_split_segment(struct dm_pool *mem,
 /*
  * Ensure there is a PV segment boundary at the given extent.
  */
-static int _pv_split_segment(struct dm_pool *mem,
-			     struct physical_volume *pv, uint32_t pe,
-			     struct pv_segment **pvseg_allocated)
+int pv_split_segment(struct dm_pool *mem,
+		     struct physical_volume *pv, uint32_t pe,
+		     struct pv_segment **pvseg_allocated)
 {
 	struct pv_segment *pvseg, *pvseg_new = NULL;
 
@@ -127,7 +144,7 @@ static int _pv_split_segment(struct dm_pool *mem,
 		goto out;
 	}
 
-	if (!(pvseg_new = _add_pv_split_segment(mem, pv, pvseg, pe)))
+	if (!(pvseg_new = _pv_split_segment(mem, pv, pvseg, pe)))
 		return_0;
 out:
 	if (pvseg_allocated)
@@ -152,8 +169,8 @@ struct pv_segment *assign_peg_to_lvseg(struct physical_volume *pv,
 	if (!pv)
 		return &_null_pv_segment;
 
-	if (!_pv_split_segment(seg->lv->vg->vgmem, pv, pe, &peg) ||
-	    !_pv_split_segment(seg->lv->vg->vgmem, pv, pe + area_len, NULL))
+	if (!pv_split_segment(seg->lv->vg->vgmem, pv, pe, &peg) ||
+	    !pv_split_segment(seg->lv->vg->vgmem, pv, pe + area_len, NULL))
 		return_NULL;
 
 	if (!peg) {
@@ -300,9 +317,9 @@ int release_pv_segment(struct pv_segment *peg, uint32_t area_reduction)
 		return _merge_free_pv_segment(peg);
 	}
 
-	if (!_pv_split_segment(peg->lvseg->lv->vg->vgmem,
-			       peg->pv, peg->pe + peg->lvseg->area_len -
-			       area_reduction, NULL))
+	if (!pv_split_segment(peg->lvseg->lv->vg->vgmem,
+			      peg->pv, peg->pe + peg->lvseg->area_len -
+			      area_reduction, NULL))
 		return_0;
 
 	/* The segment after 'peg' now holds free space, try to merge it */
@@ -488,7 +505,7 @@ static int _reduce_pv(struct physical_volume *pv, struct volume_group *vg,
 		}
 	}
 
-	if (!_pv_split_segment(vg->vgmem, pv, new_pe_count, NULL))
+	if (!pv_split_segment(vg->vgmem, pv, new_pe_count, NULL))
 		return_0;
 
 	dm_list_iterate_items_safe(peg, pegt, &pv->segments) {

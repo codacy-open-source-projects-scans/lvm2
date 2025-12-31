@@ -38,7 +38,6 @@ int attach_pool_metadata_lv(struct lv_segment *pool_seg,
 		return 0;
 	}
 	pool_seg->metadata_lv = metadata_lv;
-	metadata_lv->status &= ~LV_ACTIVATION_SKIP; /* Internal volume does not use skip */
 	metadata_lv->status |= seg_is_thin_pool(pool_seg) ?
 		THIN_POOL_METADATA : CACHE_POOL_METADATA;
 	lv_set_hidden(metadata_lv);
@@ -81,8 +80,6 @@ int attach_pool_data_lv(struct lv_segment *pool_seg,
 				    THIN_POOL_DATA : CACHE_POOL_DATA))
 		return_0;
 
-	pool_data_lv->status &= ~LV_ACTIVATION_SKIP;
-	pool_seg->lv->status &= ~LV_ACTIVATION_SKIP;
 	pool_seg->lv->status |= seg_is_thin_pool(pool_seg) ?
 		THIN_POOL : CACHE_POOL;
 	lv_set_hidden(pool_data_lv);
@@ -672,36 +669,6 @@ int add_metadata_to_pool(struct lv_segment *pool_seg,
 	return 1;
 }
 
-static int _vg_set_pool_metadata_spare(struct logical_volume *lv)
-{
-	char new_name[NAME_LEN];
-	struct volume_group *vg = lv->vg;
-
-	if (vg->pool_metadata_spare_lv) {
-		if (vg->pool_metadata_spare_lv == lv)
-			return 1;
-		if (!vg_remove_pool_metadata_spare(vg))
-			return_0;
-	}
-
-	if (dm_snprintf(new_name, sizeof(new_name), "%s_pmspare", lv->name) < 0) {
-		log_error("Can't create pool metadata spare. Name of pool LV "
-			  "%s is too long.", lv->name);
-		return 0;
-	}
-
-	log_verbose("Renaming %s as pool metadata spare volume %s.", lv->name, new_name);
-	if (!lv_rename_update(vg->cmd, lv, new_name, 0))
-		return_0;
-
-	lv_set_hidden(lv);
-	lv->status |= POOL_METADATA_SPARE;
-	vg->pool_metadata_spare_lv = lv;
-
-	return 1;
-}
-
-
 static struct logical_volume *_alloc_pool_metadata_spare(struct volume_group *vg,
 							 uint32_t extents,
 							 struct dm_list *pvh)
@@ -740,9 +707,7 @@ static struct logical_volume *_alloc_pool_metadata_spare(struct volume_group *vg
 		return 0;
 	}
 
-	sync_local_dev_names(vg->cmd);
-
-	if (!_vg_set_pool_metadata_spare(lv))
+	if (!vg_set_pool_metadata_spare(lv))
 		return_0;
 
 	return lv;
@@ -866,6 +831,35 @@ int update_pool_metadata_min_max(struct cmd_context *cmd,
 
 	if (!(*metadata_extents = extents_from_size(cmd, *metadata_size, extent_size)))
 		return_0;
+
+	return 1;
+}
+
+int vg_set_pool_metadata_spare(struct logical_volume *lv)
+{
+	char new_name[NAME_LEN];
+	struct volume_group *vg = lv->vg;
+
+	if (vg->pool_metadata_spare_lv) {
+		if (vg->pool_metadata_spare_lv == lv)
+			return 1;
+		if (!vg_remove_pool_metadata_spare(vg))
+			return_0;
+	}
+
+	if (dm_snprintf(new_name, sizeof(new_name), "%s_pmspare", lv->name) < 0) {
+		log_error("Can't create pool metadata spare. Name of pool LV "
+			  "%s is too long.", lv->name);
+		return 0;
+	}
+
+	log_verbose("Renaming %s as pool metadata spare volume %s.", lv->name, new_name);
+	if (!lv_rename_update(vg->cmd, lv, new_name, 0))
+		return_0;
+
+	lv_set_hidden(lv);
+	lv->status |= POOL_METADATA_SPARE;
+	vg->pool_metadata_spare_lv = lv;
 
 	return 1;
 }

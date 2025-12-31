@@ -19,12 +19,10 @@
 #include "lib/display/display.h"
 #include "lib/misc/lvm-exec.h"
 #include "lib/activate/dev_manager.h"
-#include "lib/commands/toolcontext.h"
 
 #include <dirent.h>
 #include <mntent.h>
 #include <sys/ioctl.h>
-#include <linux/types.h>
 
 static const char *_get_lvresize_fs_helper_path(struct cmd_context *cmd)
 {
@@ -255,8 +253,8 @@ static int _btrfs_get_mnt(struct fs_info *fsi, dev_t lv_devt)
 	return ret;
 }
 
-
-int fs_get_info(struct cmd_context *cmd, struct logical_volume *lv, struct fs_info *fsi)
+int fs_get_info(struct cmd_context *cmd, struct logical_volume *lv,
+		struct fs_info *fsi, int include_mount)
 {
 	char lv_path[PATH_MAX];
 	char crypt_path[PATH_MAX] = { 0 };
@@ -342,16 +340,13 @@ int fs_get_info(struct cmd_context *cmd, struct logical_volume *lv, struct fs_in
 		st_top = st_lv;
 	}
 
+	if (!include_mount)
+		return 1;
+
 	if (!strcmp(fsi->fstype, "btrfs"))
 		ret = _btrfs_get_mnt(fsi, st_lv.st_rdev);
 	else
 		ret = _fs_get_mnt(fsi, st_top.st_rdev);
-
-	/* blkid FSLASTBLOCK may be incorrect for mounted xfs */
-	if (fsi->mounted && !strcmp(fsi->fstype, "xfs")) {
-		if (!(ret = fs_xfs_update_size_mounted(cmd, lv, lv_path, fsi)))
-			stack;
-	}
 
 	fsi->unmounted = !fsi->mounted;
 	return ret;

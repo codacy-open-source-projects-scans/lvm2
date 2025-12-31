@@ -18,7 +18,7 @@
 
 #include "lib/device/dev-cache.h"
 #include "lib/device/dev-type.h"
-#include "lib/id/id.h"
+#include "lib/uuid/uuid.h"
 #include "lib/label/label.h"
 #include "lib/locking/locking.h"
 
@@ -190,6 +190,7 @@ void lvmcache_save_metadata_size(uint64_t val);
 
 bool lvmcache_has_old_metadata(struct cmd_context *cmd, const char *vgname, const char *vgid, struct device *dev);
 
+int lvmcache_verify_pv_in_vg(struct volume_group *vg, struct physical_volume *pv);
 int lvmcache_verify_info_in_vg(struct volume_group *vg, struct lvmcache_info *info);
 
 void lvmcache_get_outdated_devs(struct cmd_context *cmd,

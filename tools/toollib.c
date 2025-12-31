@@ -75,7 +75,7 @@ int become_daemon(struct cmd_context *cmd, int skip_lvm)
 		return 0;
 
 	/* Child */
-	init_log_command(find_config_tree_bool(cmd, log_command_names_CFG, NULL) ? 1 : 0, 0);
+	init_log_command(find_config_tree_bool(cmd, log_command_names_CFG, NULL), 0);
 
 	if (setsid() == -1)
 		log_error("Background process failed to setsid: %s",
@@ -398,7 +398,7 @@ static const char *_extract_vgname(struct cmd_context *cmd, const char *lv_name,
 				   const char **after)
 {
 	const char *vg_name = lv_name;
-	const char *st, *pos;
+	char *st, *pos;
 
 	/* Strip dev_dir (optional) */
 	if (!(vg_name = skip_dev_dir(cmd, vg_name, NULL)))
