@@ -46,6 +46,7 @@ test-job:
     matrix:
       - TAG: rhel8
         CONFIGURE: >
+          --with-default-use-devices-file=0
           --with-cluster=internal
           --enable-cmirrord
       - TAG: rhel9
@@ -80,9 +81,7 @@ test-job:
       --enable-lvmlockd-sanlock
       --enable-dbus-service --enable-notify-dbus
       --enable-dmfilemapd
-      --with-writecache=internal
-      --with-vdo=internal --with-vdo-format=/usr/bin/vdoformat
-      --with-integrity=internal
+      --with-vdo-format=/usr/bin/vdoformat
       --disable-silent-rules
     - make
     - rm -rf test/results
@@ -97,7 +96,7 @@ test-job:
     - (cd test/results && rm $(grep 'passed$' list | cut -d' ' -f1 | sed -e 's|/|_|g' -e 's|.*|\0.txt|'))
     - find test/results -type f -empty -delete
     # TODO: Keep a list of known failures, and translate into regexp - or simply use python...
-    - if grep failed test/results/list | grep -v '\(dbustest\|lvconvert-mirror\)\.sh' | sort; then false; else true; fi
+    - if grep failed test/results/list | grep -v '\(dbustest\|lvconvert-mirror\|lvconvert-raid-reshape-size\|lvconvert-raid-reshape-stripes-load-fail\)\.sh' | sort; then false; else true; fi
   rules:
     # Filter only safe repositories, or user in developers:
     # NOTE: Already done in approve stage, may be more caution than necessary

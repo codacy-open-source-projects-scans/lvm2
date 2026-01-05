@@ -26,7 +26,6 @@ static int _use_aio = 0;
 static int _md_filtering = 0;
 static int _internal_filtering = 0;
 static int _fwraid_filtering = 0;
-static int _pvmove = 0;
 static int _obtain_device_list_from_udev = DEFAULT_OBTAIN_DEVICE_LIST_FROM_UDEV;
 static enum dev_ext_e _external_device_info_source = DEV_EXT_NONE;
 static int _debug_level = 0;
@@ -45,10 +44,8 @@ static int _ignore_lvm_mirrors = DEFAULT_IGNORE_LVM_MIRRORS;
 static int _error_message_produced = 0;
 static unsigned _is_static = 0;
 static int _udev_checking = 1;
-static int _udev_sleeping = 1;
 static int _retry_deactivation = DEFAULT_RETRY_DEACTIVATION;
 static int _activation_checks = 0;
-static char _sysfs_dir_path[PATH_MAX] = "";
 static uint64_t _pv_min_size = (DEFAULT_PV_MIN_SIZE_KB * 1024L >> SECTOR_SHIFT);
 static const char *_unknown_device_name = DEFAULT_UNKNOWN_DEVICE_NAME;
 static int _io_memory_size_kb = DEFAULT_IO_MEMORY_SIZE_KB;
@@ -88,11 +85,6 @@ void init_internal_filtering(int level)
 void init_fwraid_filtering(int level)
 {
 	_fwraid_filtering = level;
-}
-
-void init_pvmove(int level)
-{
-	_pvmove = level;
 }
 
 void init_obtain_device_list_from_udev(int device_list_from_udev)
@@ -185,11 +177,6 @@ void init_udev_checking(int checking)
 		log_debug_activation("LVM udev checking disabled");
 }
 
-void init_udev_sleeping(int sleeping)
-{
-	_udev_sleeping = sleeping;
-}
-
 void init_retry_deactivation(int retry)
 {
 	_retry_deactivation = retry;
@@ -216,11 +203,6 @@ void set_cmd_name(const char *cmd_name)
 const char *get_cmd_name(void)
 {
 	return _cmd_name;
-}
-
-void set_sysfs_dir_path(const char *path)
-{
-	dm_strncpy(_sysfs_dir_path, path, sizeof(_sysfs_dir_path));
 }
 
 const char *log_command_info(void)
@@ -266,11 +248,6 @@ int internal_filtering(void)
 int fwraid_filtering(void)
 {
 	return _fwraid_filtering;
-}
-
-int pvmove_mode(void)
-{
-	return _pvmove;
 }
 
 int obtain_device_list_from_udev(void)
@@ -357,11 +334,6 @@ int udev_checking(void)
 	return _udev_checking;
 }
 
-int udev_sleeping(void)
-{
-	return _udev_sleeping;
-}
-
 int retry_deactivation(void)
 {
 	return _retry_deactivation;
@@ -370,11 +342,6 @@ int retry_deactivation(void)
 int activation_checks(void)
 {
 	return _activation_checks;
-}
-
-const char *sysfs_dir_path(void)
-{
-	return _sysfs_dir_path;
 }
 
 uint64_t pv_min_size(void)

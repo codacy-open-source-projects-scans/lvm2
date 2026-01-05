@@ -3003,7 +3003,7 @@ int lockd_query_lv(struct cmd_context *cmd, struct logical_volume *lv, int *ex, 
  */
 
 int lockd_lv_name(struct cmd_context *cmd, struct volume_group *vg,
-		  const char *lv_name, struct id *lv_id,
+		  const char *lv_name, const struct id *lv_id,
 		  const char *lock_args, const char *def_mode, uint32_t flags)
 {
 	struct owner owner = { 0 };
@@ -4820,7 +4820,7 @@ int lockd_setlockargs(struct cmd_context *cmd, struct volume_group *vg, const ch
 	 * are being changed (since locking can't be used while
 	 * the locking is being changed.)  The lockspace is stopped
 	 * while it's being changed.  At the end of the vgchange
-	 * setlockargs command, persist_ugprade_stop() releases
+	 * setlockargs command, persist_upgrade_stop() releases
 	 * the exclusive PR.  After this, any host can do a normal
 	 * start of PR/locking using the new lockargs.
 	 */

@@ -1682,7 +1682,7 @@ static int _lv_reduce(struct logical_volume *lv, uint32_t extents, int delete)
 /*
  * Empty an LV.
  */
-int lv_empty(struct logical_volume *lv)
+static int _lv_empty(struct logical_volume *lv)
 {
 	return _lv_reduce(lv, lv->le_count, 0);
 }
@@ -1698,7 +1698,7 @@ int replace_lv_with_error_segment(struct logical_volume *lv)
 	if (!(segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_ERROR)))
 		return_0;
 
-	if (len && !lv_empty(lv))
+	if (len && !_lv_empty(lv))
 		return_0;
 
 	/* Minimum size required for a table. */
@@ -6476,7 +6476,7 @@ static int _fs_reduce(struct cmd_context *cmd, struct logical_volume *lv,
 	memset(&fsinfo, 0, sizeof(fsinfo));
 	memset(&fsinfo2, 0, sizeof(fsinfo));
 
-	if (!fs_get_info(cmd, lv, &fsinfo, 1))
+	if (!fs_get_info(cmd, lv, &fsinfo))
 		goto_out;
 
 	if (fsinfo.nofs) {
@@ -6595,7 +6595,7 @@ static int _fs_reduce(struct cmd_context *cmd, struct logical_volume *lv,
 	 * Re-check the fs last block which should now be less than the
 	 * requested (reduced) LV size.
 	 */
-	if (!fs_get_info(cmd, lv, &fsinfo2, 0))
+	if (!fs_get_info(cmd, lv, &fsinfo2))
 		goto_out;
 
 	if (fsinfo.fs_last_byte && (fsinfo2.fs_last_byte > fsinfo.new_size_bytes)) {
@@ -6617,8 +6617,8 @@ static int _fs_extend_check_fsinfo(struct cmd_context *cmd, struct logical_volum
 
 	memset(fsinfo, 0, sizeof(*fsinfo));
 
-	if (!fs_get_info(cmd, lv, fsinfo, 1))
-		return 0;
+	if (!fs_get_info(cmd, lv, fsinfo))
+		return_0;
 
 	if (fsinfo->nofs)
 		return 1;
@@ -6644,7 +6644,7 @@ static int _fs_extend_check_fsinfo(struct cmd_context *cmd, struct logical_volum
 	 * the fs type and the mount state.
 	 */
 	if (!_fs_extend_allow(cmd, lv, lp, fsinfo))
-		return 0;
+		return_0;
 
 	return 1;
 }
@@ -8192,8 +8192,8 @@ int remove_layers_for_segments(struct cmd_context *cmd,
 	int lv_changed = 0;
 	struct lv_list *lvl;
 
-	log_very_verbose("Removing layer %s for segments of %s",
-			 layer_lv->name, lv->name);
+	log_very_verbose("Removing layer %s for segments of %s.",
+			 display_lvname(layer_lv), display_lvname(lv));
 
 	/* Find all segments that point at the temporary mirror */
 	dm_list_iterate_items(seg, &lv->segments) {
@@ -8254,45 +8254,12 @@ int remove_layers_for_segments(struct cmd_context *cmd,
 				lvl->lv = lv;
 				dm_list_add(lvs_changed, &lvl->list);
 				lv_changed = 1;
+				lv->status &= ~LOCKED;
 			}
 		}
 	}
 	if (lv_changed && !lv_merge_segments(lv))
 		stack;
-
-	return 1;
-}
-
-/* Remove a layer */
-int remove_layers_for_segments_all(struct cmd_context *cmd,
-				   struct logical_volume *layer_lv,
-				   uint64_t status_mask,
-				   struct dm_list *lvs_changed)
-{
-	struct lv_list *lvl;
-	struct logical_volume *lv1;
-
-	/* Loop through all LVs except the temporary mirror */
-	dm_list_iterate_items(lvl, &layer_lv->vg->lvs) {
-		lv1 = lvl->lv;
-		if (lv1 == layer_lv)
-			continue;
-
-		if (!remove_layers_for_segments(cmd, lv1, layer_lv,
-						status_mask, lvs_changed))
-			return_0;
-	}
-
-	if (!lv_empty(layer_lv))
-		return_0;
-
-	/* Assumes only used by PVMOVE ATM when unlocking LVs */
-	dm_list_iterate_items(lvl, lvs_changed) {
-		/* FIXME Assumes only one pvmove at a time! */
-		lvl->lv->status &= ~LOCKED;
-		if (!lv_merge_segments(lvl->lv))
-			return_0;
-	}
 
 	return 1;
 }
@@ -8415,7 +8382,7 @@ int remove_layer_from_lv(struct logical_volume *lv,
 		return 0;
 	}
 
-	if (!lv_empty(parent_lv))
+	if (!_lv_empty(parent_lv))
 		return_0;
 
 	if (!move_lv_segments(parent_lv, layer_lv, 0, 0))
@@ -10002,7 +9969,7 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 		}
 
 		/* Get in sync with deactivation, before reusing LV as snapshot */
-		sync_local_dev_names(lv->vg->cmd);
+		sync_local_dev_names(cmd);
 
 		/* Create zero origin volume for spare snapshot */
 		if (lp->virtual_extents &&

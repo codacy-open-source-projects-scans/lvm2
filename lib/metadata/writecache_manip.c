@@ -332,7 +332,7 @@ static int _lv_detach_writecache_cachevol_active(struct logical_volume *lv, int 
 	/*
 	 * suspend does not use 'lv' as we know it here, but grabs the
 	 * old (precommitted) version of 'lv' using lv_committed(),
-	 * which is from vg->vg_comitted.
+	 * which is from vg->vg_committed.
 	 */
 	log_debug("Suspending writecache to detach %s", display_lvname(lv));
 
@@ -370,6 +370,8 @@ static int _lv_detach_writecache_cachevol_active(struct logical_volume *lv, int 
 		log_error("Failed to resume LV in writecache detach.");
 		return 0;
 	}
+
+	sync_local_dev_names(cmd);
 
 	log_debug("Deactivating previous cachevol %s", display_lvname(lv_fast));
 
@@ -501,4 +503,3 @@ int writecache_settings_to_str_list(struct writecache_settings *settings, struct
 
 	return 1;
 }
-

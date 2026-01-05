@@ -40,6 +40,7 @@ SOURCES =\
 	device/dev-luks.c \
 	device/dev-dasd.c \
 	device/dev-lvm1-pool.c \
+	device/filesystem_xfs.c \
 	device/filesystem.c \
 	device/online.c \
 	device/parse_vpd.c \
@@ -70,6 +71,7 @@ SOURCES =\
 	format_text/import_vsn1.c \
 	format_text/text_label.c \
 	freeseg/freeseg.c \
+	id/id.c \
 	label/label.c \
 	label/hints.c \
 	locking/file_locking.c \
@@ -115,7 +117,6 @@ SOURCES =\
 	snapshot/snapshot.c \
 	striped/striped.c \
 	thin/thin.c \
-	uuid/uuid.c \
 	zero/zero.c
 
 ifeq ("@DEVMAPPER@", "yes")

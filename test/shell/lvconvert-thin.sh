@@ -93,6 +93,13 @@ lvconvert --yes --swapmetadata $vg/$lv1 --poolmetadata $lv2
 check lv_field $vg/${lv1}_tmeta uuid "$UUID"
 lvremove -f $vg
 
+# Convert volumes with skipped activation to thin-pool
+lvcreate -L4M --setactivationskip y -n $lv1 $vg
+lvcreate -L2M --setactivationskip y -n $lv2 $vg
+
+lvconvert -y --type thin-pool --poolmetadata $vg/$lv2 $vg/$lv1
+check lv_field $vg/$lv1 lv_skip_activation ""
+lvremove -f $vg
 
 # test with bigger sizes
 lvcreate -L1T -n $lv1 $vg
@@ -142,7 +149,7 @@ fi
 #lvs -a -o+chunk_size,stripe_size,seg_pe_ranges
 
 ####################################
-# Prohibites thin pool conversions #
+# Prohibits thin pool conversions #
 ####################################
 lvcreate -L32 -n $lv1 $vg
 lvcreate -L16 -n $lv2 $vg

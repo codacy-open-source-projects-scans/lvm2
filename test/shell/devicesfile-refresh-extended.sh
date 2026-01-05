@@ -140,6 +140,7 @@ cleanup_and_teardown()
 
 use_12() {
 	losetup -D
+	aux udev_wait
 	losetup "$LOOP1" "$FILE1"
 	losetup "$LOOP2" "$FILE2"
 	losetup "$LOOP3" "$FILE3"
@@ -158,6 +159,7 @@ use_12() {
 
 use_34() {
 	losetup -D
+	aux udev_wait
 	losetup "$LOOP1" "$FILE1"
 	losetup "$LOOP2" "$FILE2"
 	losetup "$LOOP3" "$FILE3"
@@ -333,7 +335,7 @@ grep "$PVID1" "$DF" | tee line1
 grep "$LOOP1" line1
 grep "$FILE1" line1
 
-# new devie ID now shown for PV2
+# new device ID now shown for PV2
 grep "$PVID2" "$DF" | tee line2
 grep "$LOOP2" line2
 grep "$FILE2" line2
@@ -390,12 +392,12 @@ grep "$LOOP3" out
 grep "$OPVID2" out
 grep "$LOOP4" out
 
-# new devie ID now shown for PV1
+# new device ID now shown for PV1
 grep "$PVID1" "$DF" | tee line1
 grep "$LOOP3" line1
 grep "$FILE3" line1
 
-# new devie ID now shown for PV2
+# new device ID now shown for PV2
 grep "$PVID2" "$DF" | tee line2
 grep "$LOOP4" line2
 grep "$FILE4" line2
@@ -451,12 +453,12 @@ grep "$LOOP1" out
 not grep "$OPVID2" out
 not grep "$LOOP2" out
 
-# new devie ID now shown for PV1
+# new device ID now shown for PV1
 grep "$PVID1" "$DF" | tee line1
 grep "$LOOP1" line1
 grep "$FILE1" line1
 
-# old devie ID still shown for PV2
+# old device ID still shown for PV2
 grep "$PVID2" "$DF" | tee line2
 grep "$LOOP4" line2
 grep "$FILE4" line2
@@ -476,7 +478,7 @@ grep "$LOOP1" out
 not grep "$OPVID2" out
 not grep "$LOOP2" out
 
-# old devie ID still shown for PV2
+# old device ID still shown for PV2
 grep "$PVID2" "$DF" | tee line2
 grep "$LOOP4" line2
 grep "$FILE4" line2
@@ -494,7 +496,7 @@ grep "$LOOP1" out
 grep "$OPVID2" out
 grep "$LOOP2" out
 
-# new devie ID now shown for PV2
+# new device ID now shown for PV2
 grep "$PVID2" "$DF" | tee line2
 grep "$LOOP2" line2
 grep "$FILE2" line2
