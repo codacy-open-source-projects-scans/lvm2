@@ -100,20 +100,20 @@ Local Settings below.)
 .SH USAGE
 The basic command set and options for managing PR:
 .P
-Device-level PR utility:
+Device-level PR utility (change device PR state):
 .br
 .B lvmpersist
 .BR start | stop | remove | clear | read
 .RI [ OPTIONS ]
 .I DEST
 .P
-VG PR configuration:
+VG PR configuration (change VG metadata):
 .br
 .B vgchange --setpersist
 .BR y | n
 .I VG
 .P
-VG PR operations:
+VG PR operations (change device PR state):
 .br
 .B vgchange --persist
 .BR start | stop | remove | clear | read | check
@@ -347,8 +347,17 @@ remkey VG, where "remkey" is the PR key of the currently started host.
 .P
 .SS Shared VG usage
 .P
-When using a shared VG, all hosts using the VG are started, and a WEAR
-(Write Exclusive - all registrants) reservation is held on the devices.
+For a shared VG, the VG metadata is configured by one host using the
+vgchange --setpersist command, which writes the desired PR configuration
+to the VG metadata.  The vgchange --setpersist command requires VG locking
+to be started.
+All hosts use the vgchange --persist commands to start/stop/check the state
+of their own PR on disk.  These are not VG metadata operations, but send 
+PR commands to change PR state on disk (typically via lvmpersist.)
+.P
+When using a shared VG, all hosts using the VG will perform a start
+command, and a WEAR
+(Write Exclusive - all registrants) reservation will be held on the devices.
 .P
 PR should be started before locking is started (vgchange --persist start
 followed by vgchange --lockstart, or a combined vgchange --persist start
@@ -366,13 +375,21 @@ which are set in /etc/lvm/lvmlocal.conf:
 .P
 local/pr_key
 
-The value set in pr_key will be used directly.  It is a hex string up to
-16 characters long.  pr_key will not be used for sanlock shared VGs.
+The local persistent reservation key in hexadecimal.
+The max length is 16 hex characters (8 bytes), plus an optional
+0x prefix. The pr_key setting is used for local VGs.
+Shared VGs use PR keys that are based on the host_id, and ignore
+this pr_key setting.
 
 local/host_id
 
-For a sanlock shared VG, or if no pr_key is set, a key will be created
-using the host_id.  This is a decimal integer between 1 and 2000.
+A unique host identifier, used for sanlock shared VGs, and for
+persistent reservation keys. Accepted values are 1-2000, except
+when sanlock_align_size is configured to 1, 2 or 4, which correspond
+to max host_id values of 250, 500, or 1000.
+PR keys for sanlock VGs are a combination of the host_id and the
+sanlock generation number. Local VGs will use the host_id as a PR
+key only when local/pr_key is not set.
 
 For a local VG, or a dlm shared VG, a key using host_id has the form:
 
