@@ -14,7 +14,7 @@
 #include "libdaemon/server/daemon-server.h"
 #include "lvm-version.h"
 #include "daemons/lvmlockd/lvmlockd-client.h"
-#include "device_mapper/misc/dm-ioctl.h"
+#include "libdm/misc/dm-ioctl.h"
 
 /* #include <assert.h> */
 #include <errno.h>
@@ -2545,7 +2545,6 @@ static void clear_locks(struct lockspace *ls, int free_vg, int drop_vg)
 	struct action *act, *act_safe;
 	uint32_t lk_version;
 	uint32_t r_version;
-	int lk_count = 0;
 	int rv;
 
 	list_for_each_entry_safe(r, r_safe, &ls->dispose, list) {
@@ -2559,8 +2558,6 @@ static void clear_locks(struct lockspace *ls, int free_vg, int drop_vg)
 		lk_version = 0;
 
 		list_for_each_entry_safe(lk, lk_safe, &r->locks, list) {
-			lk_count++;
-
 			/*
 			 * Stopping a lockspace shouldn't happen with LV locks
 			 * still held, but it will be stopped with GL and VG

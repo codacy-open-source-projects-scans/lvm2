@@ -766,7 +766,6 @@ static int _reorder_raid10_near_seg_areas(struct lv_segment *seg, enum raid0_rai
 	unsigned dc, idx1, idx1_sav, idx2, s, ss, str, xchg;
 	uint32_t data_copies = seg->data_copies;
 	uint32_t *idx, stripes = seg->area_count;
-	unsigned i = 0;
 
 	if (!stripes) {
 		log_error(INTERNAL_ERROR "stripes may not be 0.");
@@ -891,7 +890,6 @@ static int _reorder_raid10_near_seg_areas(struct lv_segment *seg, enum raid0_rai
 				idx[idx[s]] = idx[s];
 				idx[s] = ss;
 			}
-		i++;
 	} while (xchg);
 
 	return 1;
@@ -7129,7 +7127,7 @@ try_again:
 
 	/* Add integrity layer to any new images. */
 	if (has_integrity) {
-		struct integrity_settings *isettings = NULL;
+		struct dm_integrity_settings *isettings = NULL;
 		if (!lv_get_raid_integrity_settings(lv, &isettings))
 			return_0;
 		if (!lv_add_integrity_to_raid(lv, isettings, NULL, NULL))

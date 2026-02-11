@@ -13,7 +13,7 @@
  */
 
 #include "units.h"
-#include "device_mapper/vdo/target.h"
+#include "libdm/libdevmapper.h"
 
 //----------------------------------------------------------------
 

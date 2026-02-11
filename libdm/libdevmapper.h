@@ -117,7 +117,7 @@ enum {
 	DM_DEVICE_MKNODES,
 
 	DM_DEVICE_LIST_VERSIONS,
-	
+
 	DM_DEVICE_TARGET_MSG,
 
 	DM_DEVICE_SET_GEOMETRY,
@@ -211,6 +211,16 @@ const char *dm_task_get_message_response(struct dm_task *dmt);
  */
 const char *dm_task_get_name(const struct dm_task *dmt);
 struct dm_names *dm_task_get_names(struct dm_task *dmt);
+
+/*
+ * These functions return device-mapper names based on the value
+ * of the mangling mode set during preceding dm_task_run call:
+ *   - unmangled name for DM_STRING_MANGLING_{AUTO, HEX},
+ *   - name without any changes for DM_STRING_MANGLING_NONE.
+ *
+ * To get mangled or unmangled form of the name directly, use
+ * dm_task_get_name_mangled or dm_task_get_name_unmangled function.
+ */
 
 int dm_task_set_ro(struct dm_task *dmt);
 int dm_task_set_newname(struct dm_task *dmt, const char *newname);
@@ -383,6 +393,31 @@ struct dm_status_cache {
 
 int dm_get_status_cache(struct dm_pool *mem, const char *params,
 			struct dm_status_cache **status);
+
+struct dm_status_writecache {
+	uint64_t error;
+	uint64_t total_blocks;
+	uint64_t free_blocks;
+	uint64_t writeback_blocks;
+};
+
+int dm_get_status_writecache(struct dm_pool *mem, const char *params,
+                             struct dm_status_writecache **status);
+
+struct dm_status_integrity {
+	uint64_t number_of_mismatches;
+	uint64_t provided_data_sectors;
+	uint64_t recalc_sector;
+};
+
+int dm_get_status_integrity(struct dm_pool *mem, const char *params,
+                            struct dm_status_integrity **status);
+
+/*
+ * RAID target support
+ */
+int dm_raid_count_failed_devices(const char *dev_path, uint32_t *nr_failed);
+int dm_raid_clear_failed_devices(const char *dev_path, uint32_t *nr_failed);
 
 /*
  * Parse params from STATUS call for snapshot target
@@ -1922,6 +1957,245 @@ int dm_tree_node_add_cache_target(struct dm_tree_node *node,
 				  uint32_t data_block_size);
 
 /*
+ * Add a cache target using a cachevol (single LV with metadata and data).
+ * The cachevol_uuid refers to a single device containing both metadata and data,
+ * with metadata_start/metadata_len and data_start/data_len specifying the regions.
+ */
+int dm_tree_node_add_cachevol_target(struct dm_tree_node *node,
+				     uint64_t size,
+				     uint64_t feature_flags, /* DM_CACHE_FEATURE_* */
+				     const char *metadata_uuid,
+				     const char *data_uuid,
+				     const char *cachevol_uuid,
+				     const char *origin_uuid,
+				     const char *policy_name,
+				     const struct dm_config_node *policy_settings,
+				     uint64_t metadata_start,
+				     uint64_t metadata_len,
+				     uint64_t data_start,
+				     uint64_t data_len,
+				     uint32_t data_block_size);
+
+struct dm_writecache_settings {
+	/*
+	 * Allow an unrecognized key and its val to be passed to the kernel for
+	 * cases where a new kernel setting is added but lvm doesn't know about
+	 * it yet.
+	 */
+	char *new_key;
+	char *new_val;
+
+	/*
+	 * Flag is 1 if a value has been set.
+	 */
+	unsigned high_watermark_set:1;
+	unsigned low_watermark_set:1;
+	unsigned writeback_jobs_set:1;
+	unsigned autocommit_blocks_set:1;
+	unsigned autocommit_time_set:1;
+	unsigned fua_set:1;
+	unsigned nofua_set:1;
+	unsigned cleaner_set:1;
+	unsigned max_age_set:1;
+	unsigned metadata_only_set:1;
+	unsigned pause_writeback_set:1;
+	uint32_t reserved : 21;
+
+	uint64_t high_watermark;
+	uint64_t low_watermark;
+	uint64_t writeback_jobs;
+	uint64_t autocommit_blocks;
+	uint64_t autocommit_time; /* in milliseconds */
+	uint32_t fua;
+	uint32_t nofua;
+	uint32_t cleaner;
+	uint32_t max_age;         /* in milliseconds */
+	uint32_t metadata_only;
+	uint32_t pause_writeback; /* in milliseconds */
+};
+
+int dm_tree_node_add_writecache_target(struct dm_tree_node *node,
+				uint64_t size,
+				const char *origin_uuid,
+				const char *cache_uuid,
+				int pmem,
+				uint32_t writecache_block_size,
+				struct dm_writecache_settings *settings);
+
+struct dm_integrity_settings {
+	char mode[8];
+	uint32_t tag_size;
+	uint32_t block_size;       /* optional table param always set by lvm */
+	const char *internal_hash; /* optional table param always set by lvm */
+
+	uint32_t journal_sectors;
+	uint32_t interleave_sectors;
+	uint32_t buffer_sectors;
+	uint32_t journal_watermark;
+	uint32_t commit_time;
+	uint32_t bitmap_flush_interval;
+	uint64_t sectors_per_bit;
+	uint32_t allow_discards;
+
+	unsigned journal_sectors_set:1;
+	unsigned interleave_sectors_set:1;
+	unsigned buffer_sectors_set:1;
+	unsigned journal_watermark_set:1;
+	unsigned commit_time_set:1;
+	unsigned bitmap_flush_interval_set:1;
+	unsigned sectors_per_bit_set:1;
+	unsigned allow_discards_set:1;
+};
+
+int dm_tree_node_add_integrity_target(struct dm_tree_node *node,
+				uint64_t size,
+				const char *origin_uuid,
+				const char *meta_uuid,
+				struct dm_integrity_settings *settings,
+				int recalculate);
+
+/*
+ * VDO target support
+ */
+
+#define DM_SECTOR_SHIFT 9L
+
+#define DM_VDO_BLOCK_SIZE			UINT64_C(8)		// 4KiB in sectors
+#define DM_VDO_BLOCK_SIZE_KB			(DM_VDO_BLOCK_SIZE << DM_SECTOR_SHIFT)
+
+#define DM_VDO_BLOCK_MAP_CACHE_SIZE_MINIMUM_MB	(128)			// 128MiB
+#define DM_VDO_BLOCK_MAP_CACHE_SIZE_MAXIMUM_MB	(16 * 1024 * 1024 - 1)	// 16TiB - 1
+#define DM_VDO_BLOCK_MAP_CACHE_SIZE_MINIMUM_PER_LOGICAL_THREAD  (4096 * DM_VDO_BLOCK_SIZE_KB)
+
+#define DM_VDO_BLOCK_MAP_ERA_LENGTH_MINIMUM	1
+#define DM_VDO_BLOCK_MAP_ERA_LENGTH_MAXIMUM	16380
+
+#define DM_VDO_INDEX_MEMORY_SIZE_MINIMUM_MB	256			// 0.25 GiB
+#define DM_VDO_INDEX_MEMORY_SIZE_MAXIMUM_MB	(1024 * 1024 * 1024)	// 1TiB
+
+#define DM_VDO_SLAB_SIZE_MINIMUM_MB		128			// 128MiB
+#define DM_VDO_SLAB_SIZE_MAXIMUM_MB		(32 * 1024)		// 32GiB
+#define DM_VDO_SLABS_MAXIMUM			8192
+
+#define DM_VDO_LOGICAL_SIZE_MAXIMUM	(UINT64_C(4) * 1024 * 1024 * 1024 * 1024 * 1024 >> DM_SECTOR_SHIFT) // 4PiB
+#define DM_VDO_PHYSICAL_SIZE_MAXIMUM	(UINT64_C(64) * DM_VDO_BLOCK_SIZE_KB * 1024 * 1024 * 1024 >> DM_SECTOR_SHIFT) // 256TiB
+
+#define DM_VDO_ACK_THREADS_MINIMUM		0
+#define DM_VDO_ACK_THREADS_MAXIMUM		100
+
+#define DM_VDO_BIO_THREADS_MINIMUM		1
+#define DM_VDO_BIO_THREADS_MAXIMUM		100
+
+#define DM_VDO_BIO_ROTATION_MINIMUM		1
+#define DM_VDO_BIO_ROTATION_MAXIMUM		1024
+
+#define DM_VDO_CPU_THREADS_MINIMUM		1
+#define DM_VDO_CPU_THREADS_MAXIMUM		100
+
+#define DM_VDO_HASH_ZONE_THREADS_MINIMUM	0
+#define DM_VDO_HASH_ZONE_THREADS_MAXIMUM	100
+
+#define DM_VDO_LOGICAL_THREADS_MINIMUM		0
+#define DM_VDO_LOGICAL_THREADS_MAXIMUM		60
+
+#define DM_VDO_PHYSICAL_THREADS_MINIMUM		0
+#define DM_VDO_PHYSICAL_THREADS_MAXIMUM		16
+
+#define DM_VDO_MAX_DISCARD_MINIMUM		1
+#define DM_VDO_MAX_DISCARD_MAXIMUM		(UINT32_MAX / (uint32_t)(DM_VDO_BLOCK_SIZE_KB))
+
+enum dm_vdo_operating_mode {
+	DM_VDO_MODE_RECOVERING,
+	DM_VDO_MODE_READ_ONLY,
+	DM_VDO_MODE_NORMAL
+};
+
+enum dm_vdo_compression_state {
+	DM_VDO_COMPRESSION_ONLINE,
+	DM_VDO_COMPRESSION_OFFLINE
+};
+
+enum dm_vdo_index_state {
+	DM_VDO_INDEX_ERROR,
+	DM_VDO_INDEX_CLOSED,
+	DM_VDO_INDEX_OPENING,
+	DM_VDO_INDEX_CLOSING,
+	DM_VDO_INDEX_OFFLINE,
+	DM_VDO_INDEX_ONLINE,
+	DM_VDO_INDEX_UNKNOWN
+};
+
+struct dm_vdo_status {
+	char *device;
+	enum dm_vdo_operating_mode operating_mode;
+	int recovering;
+	enum dm_vdo_index_state index_state;
+	enum dm_vdo_compression_state compression_state;
+	uint64_t used_blocks;
+	uint64_t total_blocks;
+};
+
+#define DM_VDO_MAX_ERROR 256
+
+struct dm_vdo_status_parse_result {
+	char error[DM_VDO_MAX_ERROR];
+	struct dm_vdo_status *status;
+};
+
+enum dm_vdo_write_policy {
+	DM_VDO_WRITE_POLICY_AUTO = 0,
+	DM_VDO_WRITE_POLICY_SYNC,
+	DM_VDO_WRITE_POLICY_ASYNC,
+	DM_VDO_WRITE_POLICY_ASYNC_UNSAFE
+};
+
+struct dm_vdo_target_params {
+	uint32_t minimum_io_size;       // in sectors
+	uint32_t block_map_cache_size_mb;
+	union {
+		uint32_t block_map_era_length;	// format period
+		uint32_t block_map_period;      // supported alias
+	};
+	uint32_t index_memory_size_mb;  // format
+
+	uint32_t slab_size_mb;          // format
+
+	uint32_t max_discard;
+	// threads
+	uint32_t ack_threads;
+	uint32_t bio_threads;
+	uint32_t bio_rotation;
+	uint32_t cpu_threads;
+	uint32_t hash_zone_threads;
+	uint32_t logical_threads;
+	uint32_t physical_threads;
+
+	int use_compression;
+	int use_deduplication;
+	int use_metadata_hints;
+	int use_sparse_index;          // format
+
+	// write policy
+	enum dm_vdo_write_policy write_policy;
+};
+
+int dm_vdo_validate_target_params(const struct dm_vdo_target_params *vtp,
+				  uint64_t vdo_size);
+
+int dm_tree_node_add_vdo_target(struct dm_tree_node *node,
+				uint64_t size,
+				uint32_t vdo_version,
+				const char *vdo_pool_name,
+				const char *data_uuid,
+				uint64_t data_size,
+				const struct dm_vdo_target_params *vtp);
+
+int dm_vdo_parse_logical_size(const char *vdo_path, uint64_t *logical_blocks);
+
+int dm_vdo_status_parse(struct dm_pool *mem, const char *input,
+			struct dm_vdo_status_parse_result *result);
+
+/*
  * FIXME Add individual cache policy pairs  <key> = value, like:
  * int dm_tree_node_add_cache_policy_arg(struct dm_tree_node *dnode,
  *				      const char *key, uint64_t value);
@@ -2406,6 +2680,21 @@ struct dm_str_list {
 };
 
 /*
+ * Active device element returned dm_task_get_device_list()
+ * Only for accessing structure members.
+ * Do NOT allocate this structure locally.
+ * More elements can be added later (with DM_DEVICE_LIST_HAS_FLAG).
+ */
+struct dm_active_device {
+	struct dm_list list;
+	dev_t devno;
+	const char *name;	/* device name */
+
+	uint32_t event_nr;	/* valid when DM_DEVICE_LIST_HAS_EVENT_NR is set */
+	const char *uuid;	/* valid uuid when DM_DEVICE_LIST_HAS_UUID is set */
+};
+
+/*
  * Initialise a list before use.
  * The list head's next and previous pointers point back to itself.
  */
@@ -2587,6 +2876,25 @@ struct dm_list *dm_list_next(const struct dm_list *head, const struct dm_list *e
  * Return the number of elements in a list by walking it.
  */
 unsigned int dm_list_size(const struct dm_list *head);
+
+/*
+ * Retrieve the list of devices and put them into easily accessible
+ * struct dm_active_device list elements.
+ * devs_features provides flag-set with used features so it's easy to check
+ * whether the kernel provides i.e. UUID info together with DM names
+ */
+#define DM_DEVICE_LIST_HAS_EVENT_NR	1
+#define DM_DEVICE_LIST_HAS_UUID		2
+int dm_task_get_device_list(struct dm_task *dmt, struct dm_list **devs_list,
+			    unsigned *devs_features);
+/* Release all associated memory with list of active DM devices */
+void dm_device_list_destroy(struct dm_list **devs_list);
+/*
+ * Compare two dm_list structures containing dm_active_device elements.
+ * Returns 1 if both lists contain identical devices (same devno and uuid in same order),
+ * 0 if lists differ.
+ */
+int dm_device_list_equal(const struct dm_list *list1, const struct dm_list *list2);
 
 /*********
  * selinux

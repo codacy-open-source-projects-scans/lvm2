@@ -505,7 +505,10 @@ static void _dm_task_free_targets(struct dm_task *dmt)
 
 	for (t = dmt->head; t; t = n) {
 		n = t->next;
-		_dm_zfree_string(t->params);
+		if (dmt->secure_data)
+			_dm_zfree_string(t->params);
+		else
+			dm_free(t->params);
 		dm_free(t->type);
 		dm_free(t);
 	}
@@ -516,7 +519,10 @@ static void _dm_task_free_targets(struct dm_task *dmt)
 void dm_task_destroy(struct dm_task *dmt)
 {
 	_dm_task_free_targets(dmt);
-	_dm_zfree_dmi(dmt->dmi.v4);
+	if (dmt->secure_data)
+		_dm_zfree_dmi(dmt->dmi.v4);
+	else
+		dm_free(dmt->dmi.v4);
 	dm_free(dmt->dev_name);
 	dm_free(dmt->mangled_dev_name);
 	dm_free(dmt->newname);
@@ -802,6 +808,119 @@ struct dm_versions *dm_task_get_versions(struct dm_task *dmt)
 				       dmt->dmi.v4->data_start);
 }
 
+int dm_task_get_device_list(struct dm_task *dmt, struct dm_list **devs_list,
+			    unsigned *devs_features)
+{
+	struct dm_names *names, *names1;
+	struct dm_active_device *dm_dev, *dm_new_dev;
+	struct dm_list *devs;
+	unsigned next = 0;
+	uint32_t *event_nr;
+	char *uuid_ptr;
+	size_t len;
+	int cnt = 0;
+
+	*devs_list = 0;
+	*devs_features = 0;
+
+	if ((names = dm_task_get_names(dmt)) && names->dev) {
+		names1 = names;
+		if (!names->name[0])
+			cnt = -1; /* -> cnt == 0 when no device is really present */
+		do {
+			names1 = (struct dm_names *)((char *) names1 + next);
+			next = names1->next;
+			++cnt;
+		} while (next);
+	}
+
+	/* buffer for devs +  sorted ptrs + dm_devs + aligned strings */
+	if (!(devs = malloc(sizeof(*devs) + cnt * (2 * sizeof(void*) + sizeof(*dm_dev)) +
+			    (cnt ? (char*)names1 - (char*)names + 256 : 0))))
+		return_0;
+
+	dm_list_init(devs);
+
+	if (!cnt) {
+		/* nothing in the list -> mark all features present */
+		*devs_features |= (DM_DEVICE_LIST_HAS_EVENT_NR | DM_DEVICE_LIST_HAS_UUID);
+		goto out; /* nothing else to do */
+	}
+
+	/* Shift position where to store individual dm_devs */
+	dm_dev = (struct dm_active_device *) ((long*) (devs + 1) + cnt);
+
+	do {
+		names = (struct dm_names *)((char *) names + next);
+
+		dm_dev->devno = (dev_t) names->dev;
+		dm_dev->name = (const char *)(dm_dev + 1);
+		dm_dev->event_nr = 0;
+		dm_dev->uuid = "";
+
+		len = strlen(names->name) + 1;
+		memcpy((char*)dm_dev->name, names->name, len);
+
+		dm_new_dev = _align_ptr((char*)(dm_dev + 1) + len);
+		if (_check_has_event_nr()) {
+
+			*devs_features |= DM_DEVICE_LIST_HAS_EVENT_NR;
+			event_nr = _align_ptr(names->name + len);
+			dm_dev->event_nr = event_nr[0];
+
+			if ((event_nr[1] & DM_NAME_LIST_FLAG_HAS_UUID)) {
+				*devs_features |= DM_DEVICE_LIST_HAS_UUID;
+				uuid_ptr = _align_ptr(event_nr + 2);
+				len = strlen(uuid_ptr) + 1;
+				memcpy(dm_new_dev, uuid_ptr, len);
+				dm_dev->uuid = (const char *) dm_new_dev;
+				dm_new_dev = _align_ptr((char*)dm_new_dev + len);
+			}
+		}
+
+		dm_list_add(devs, &dm_dev->list);
+		dm_dev = dm_new_dev;
+		next = names->next;
+	} while (next);
+
+    out:
+	*devs_list = devs;
+
+	return 1;
+}
+
+void dm_device_list_destroy(struct dm_list **devs_list)
+{
+	struct dm_device_list *devs = (struct dm_device_list *) *devs_list;
+
+	if (devs) {
+		free(devs);
+		*devs_list = NULL;
+	}
+}
+
+int dm_device_list_equal(const struct dm_list *list1, const struct dm_list *list2)
+{
+	const struct dm_active_device *dev1, *dev2;
+	const struct dm_list *l2;
+
+	if (!list1 || !list2)
+		return (list1 == list2);
+
+	if (!(l2 = dm_list_first(list2)))
+		return dm_list_empty(list1);
+
+	dm_list_iterate_items(dev1, list1) {
+		dev2 = dm_list_item(l2, struct dm_active_device);
+		if ((dev1->devno != dev2->devno) || strcmp(dev1->uuid, dev2->uuid))
+			return 0;
+		if (!(l2 = dm_list_next(list2, l2)))
+			return !dm_list_next(list1, &dev1->list);
+	}
+
+	return 1;
+}
+
 const char *dm_task_get_message_response(struct dm_task *dmt)
 {
 	const char *start, *end;
@@ -1072,9 +1191,10 @@ static char *_add_target(struct target *t, char *out, char *end)
 	while (*pt)
 		if (*pt++ == '\\')
 			backslash_count++;
-	len = strlen(t->params) + backslash_count;
 
-	if ((out >= end) || (out + len + 1) >= end) {
+	len = strlen(t->params) + 1;
+
+	if ((out >= end) || (out + len + backslash_count) >= end) {
 		log_error("Ran out of memory building ioctl parameter");
 		return NULL;
 	}
@@ -1090,8 +1210,8 @@ static char *_add_target(struct target *t, char *out, char *end)
 		*out++ = '\0';
 	}
 	else {
-		strcpy(out, t->params);
-		out += len + 1;
+		memcpy(out, t->params, len);
+		out += len + backslash_count;
 	}
 
 	/* align next block */
@@ -1155,14 +1275,14 @@ static int _add_params(int type)
 
 static struct dm_ioctl *_flatten(struct dm_task *dmt, unsigned repeat_count)
 {
-	const size_t min_size = 16 * 1024;
+	size_t min_size;
 	const int (*version)[3];
 
 	struct dm_ioctl *dmi;
 	struct target *t;
 	struct dm_target_msg *tmsg;
 	size_t len = sizeof(struct dm_ioctl);
-	size_t newname_len = 0, message_len = 0, geometry_len = 0;
+	size_t message_len = 0, newname_len = 0, geometry_len = 0;
 	char *b, *e;
 	int count = 0;
 
@@ -1175,6 +1295,18 @@ static struct dm_ioctl *_flatten(struct dm_task *dmt, unsigned repeat_count)
 	else if (dmt->head)
 		log_debug_activation(INTERNAL_ERROR "dm '%s' ioctl should not define parameters.",
 				     _cmd_data_v4[dmt->type].name);
+	switch (dmt->type) {
+	case DM_DEVICE_CREATE:
+	case DM_DEVICE_DEPS:
+	case DM_DEVICE_LIST:
+	case DM_DEVICE_STATUS:
+	case DM_DEVICE_TABLE:
+	case DM_DEVICE_TARGET_MSG:
+		min_size = 16 * 1024;
+		break;
+	default:
+		min_size = 2 * 1024;
+	}
 
 	if (count && (dmt->sector || dmt->message)) {
 		log_error("targets and message are incompatible");
@@ -1661,11 +1793,36 @@ static int _reload_with_suppression_v4(struct dm_task *dmt)
 		len = strlen(t2->params);
 		while (len-- > 0 && t2->params[len] == ' ')
 			t2->params[len] = '\0';
-		if ((t1->start != t2->start) ||
-		    (t1->length != t2->length) ||
-		    (strcmp(t1->type, t2->type)) ||
-		    (strcmp(t1->params, t2->params)))
+
+		if (t1->start != t2->start) {
+			log_debug("reload %u:%u diff start %llu %llu type %s %s", task->major, task->minor,
+				   (unsigned long long)t1->start, (unsigned long long)t2->start, t1->type, t2->type);
 			goto no_match;
+		}
+		if (t1->length != t2->length) {
+			log_debug("reload %u:%u diff length %llu %llu type %s %s", task->major, task->minor,
+				  (unsigned long long)t1->length, (unsigned long long)t2->length, t1->type, t2->type);
+			goto no_match;
+		}
+		if (strcmp(t1->type, t2->type)) {
+			log_debug("reload %u:%u diff type %s %s", task->major, task->minor, t1->type, t2->type);
+			goto no_match;
+		}
+		if (strcmp(t1->params, t2->params)) {
+			if (dmt->skip_reload_params_compare) {
+				log_debug("reload %u:%u diff params ignore for type %s",
+					  task->major, task->minor, t1->type);
+				log_debug("reload params1 %s", t1->params);
+				log_debug("reload params2 %s", t2->params);
+			} else {
+				log_debug("reload %u:%u diff params for type %s",
+					  task->major, task->minor, t1->type);
+				log_debug("reload params1 %s", t1->params);
+				log_debug("reload params2 %s", t2->params);
+				goto no_match;
+			}
+		}
+
 		t1 = t1->next;
 		t2 = t2->next;
 	}

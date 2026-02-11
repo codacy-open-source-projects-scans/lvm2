@@ -16,9 +16,8 @@
  * Support counting number of failed device bits in dm-raid superblock bit arrays or clear them out.
  */
 
-#include "device_mapper/misc/dmlib.h"
-#include "device_mapper/all.h"
-#include "device_mapper/raid/target.h"
+#include "libdm/misc/dmlib.h"
+#include "libdm/libdevmapper.h"
 #include "lib/mm/xlate.h"
 #include <fcntl.h>
 #include <unistd.h>
@@ -97,7 +96,7 @@ static void _clear_failed_devices(struct dm_raid_superblock *sb)
 		memset(sb->extended_failed_devices, 0, sizeof(sb->extended_failed_devices));
 }
 
-static int _count_or_clear_failed_devices(const char *dev_path, bool clear, uint32_t *nr_failed)
+static int _count_or_clear_failed_devices(const char *dev_path, int clear, uint32_t *nr_failed)
 {
 	struct dm_raid_superblock *sb = NULL;
 	size_t sz;
@@ -156,10 +155,10 @@ out:
 
 int dm_raid_count_failed_devices(const char *dev_path, uint32_t *nr_failed)
 {
-	return _count_or_clear_failed_devices(dev_path, false, nr_failed);
+	return _count_or_clear_failed_devices(dev_path, 0, nr_failed);
 }
 
 int dm_raid_clear_failed_devices(const char *dev_path, uint32_t *nr_failed)
 {
-	return _count_or_clear_failed_devices(dev_path, true, nr_failed);
+	return _count_or_clear_failed_devices(dev_path, 1, nr_failed);
 }

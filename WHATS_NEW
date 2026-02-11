@@ -1,5 +1,12 @@
 Version 2.03.39 - 
 ==================
+  Show active cache mode in kernel table line with lvs -o kernel_cache_mode.
+  Preserve file desciptors with CLOEXEC opened in library constructors.
+  Use -Wl,-rpath-link for library linking.
+  Switch from use of internal device_mapper library to libdm.
+  Refactor libbase radix tree to lib/datastruct.
+  Use dm_device_list_equal for DM cache comparison.
+  Fix cachevol cmeta/cdata device offsets.
   Fix RAID LV health report to distinguish 'refresh needed' from 'repair needed'.
   Fix vgreduce --removemissing --force infinite loop for raid/mirror snapshot.
   Fix vgsplit to not fail on no active LV on a PV being split to an existing VG.

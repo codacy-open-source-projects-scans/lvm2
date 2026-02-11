@@ -15,11 +15,8 @@
 /* Note: this object is also used by VDO dmeventd plugin for parsing status */
 /* File could be included by VDO plugin and can use original libdm library */
 #ifndef LIB_DMEVENT_H
-#include "device_mapper/all.h"
+#include "libdm/libdevmapper.h"
 #endif
-
-#include "device_mapper/vdo/target.h"
-#include "base/memory/zalloc.h"
 
 #include <ctype.h>
 #include <stdlib.h>
@@ -27,11 +24,11 @@
 
 //----------------------------------------------------------------
 
-static bool _tok_eq(const char *b, const char *e, const char *str)
+static int _tok_eq(const char *b, const char *e, const char *str)
 {
 	while (b != e) {
 		if (!*str || *b != *str)
-			return false;
+			return 0;
 
 		b++;
 		str++;
@@ -40,15 +37,15 @@ static bool _tok_eq(const char *b, const char *e, const char *str)
 	return !*str;
 }
 
-static bool _parse_operating_mode(const char *b, const char *e, void *context)
+static int _parse_operating_mode(const char *b, const char *e, void *context)
 {
 	static const struct {
 		const char str[12];
 		enum dm_vdo_operating_mode mode;
 	} _table[] = {
-		{"recovering", DM_VDO_MODE_RECOVERING},
-		{"read-only", DM_VDO_MODE_READ_ONLY},
-		{"normal", DM_VDO_MODE_NORMAL}
+		{ "recovering", DM_VDO_MODE_RECOVERING },
+		{ "read-only", DM_VDO_MODE_READ_ONLY },
+		{ "normal", DM_VDO_MODE_NORMAL },
 	};
 
 	enum dm_vdo_operating_mode *r = context;
@@ -56,21 +53,21 @@ static bool _parse_operating_mode(const char *b, const char *e, void *context)
 	for (i = 0; i < DM_ARRAY_SIZE(_table); i++) {
 		if (_tok_eq(b, e, _table[i].str)) {
 			*r = _table[i].mode;
-			return true;
+			return 1;
 		}
 	}
 
-	return false;
+	return 0;
 }
 
-static bool _parse_compression_state(const char *b, const char *e, void *context)
+static int _parse_compression_state(const char *b, const char *e, void *context)
 {
 	static const struct {
 		const char str[8];
 		enum dm_vdo_compression_state state;
 	} _table[] = {
-		{"online", DM_VDO_COMPRESSION_ONLINE},
-		{"offline", DM_VDO_COMPRESSION_OFFLINE}
+		{ "online", DM_VDO_COMPRESSION_ONLINE },
+		{ "offline", DM_VDO_COMPRESSION_OFFLINE },
 	};
 
 	enum dm_vdo_compression_state *r = context;
@@ -78,42 +75,42 @@ static bool _parse_compression_state(const char *b, const char *e, void *context
 	for (i = 0; i < DM_ARRAY_SIZE(_table); i++) {
 		if (_tok_eq(b, e, _table[i].str)) {
 			*r = _table[i].state;
-			return true;
+			return 1;
 		}
 	}
 
-	return false;
+	return 0;
 }
 
-static bool _parse_recovering(const char *b, const char *e, void *context)
+static int _parse_recovering(const char *b, const char *e, void *context)
 {
-	bool *r = context;
+	int *r = context;
 
 	if (_tok_eq(b, e, "recovering"))
-		*r = true;
+		*r = 1;
 
 	else if (_tok_eq(b, e, "-"))
-		*r = false;
+		*r = 0;
 
 	else
-		return false;
+		return 0;
 
-	return true;
+	return 1;
 }
 
-static bool _parse_index_state(const char *b, const char *e, void *context)
+static int _parse_index_state(const char *b, const char *e, void *context)
 {
 	static const struct {
 		const char str[8];
 		enum dm_vdo_index_state state;
 	} _table[] = {
-		{"error", DM_VDO_INDEX_ERROR},
-		{"closed", DM_VDO_INDEX_CLOSED},
-		{"opening", DM_VDO_INDEX_OPENING},
-		{"closing", DM_VDO_INDEX_CLOSING},
-		{"offline", DM_VDO_INDEX_OFFLINE},
-		{"online", DM_VDO_INDEX_ONLINE},
-		{"unknown", DM_VDO_INDEX_UNKNOWN}
+		{ "error", DM_VDO_INDEX_ERROR },
+		{ "closed", DM_VDO_INDEX_CLOSED },
+		{ "opening", DM_VDO_INDEX_OPENING },
+		{ "closing", DM_VDO_INDEX_CLOSING },
+		{ "offline", DM_VDO_INDEX_OFFLINE },
+		{ "online", DM_VDO_INDEX_ONLINE },
+		{ "unknown", DM_VDO_INDEX_UNKNOWN },
 	};
 
 	enum dm_vdo_index_state *r = context;
@@ -121,28 +118,28 @@ static bool _parse_index_state(const char *b, const char *e, void *context)
 	for (i = 0; i < DM_ARRAY_SIZE(_table); i++) {
 		if (_tok_eq(b, e, _table[i].str)) {
 			*r = _table[i].state;
-			return true;
+			return 1;
 		}
 	}
 
-	return false;
+	return 0;
 }
 
-static bool _parse_uint64(const char *b, const char *e, void *context)
+static int _parse_uint64(const char *b, const char *e, void *context)
 {
 	uint64_t *r = context, n;
 
 	n = 0;
 	while (b != e) {
 		if (!isdigit(*b))
-			return false;
+			return 0;
 
 		n = (n * 10) + (*b - '0');
 		b++;
 	}
 
 	*r = n;
-	return true;
+	return 1;
 }
 
 static const char *_eat_space(const char *b, const char *e)
@@ -174,8 +171,8 @@ static void _set_error(struct dm_vdo_status_parse_result *result, const char *fm
 	va_end(ap);
 }
 
-static bool _parse_field(const char **b, const char *e,
-			 bool (*p_fn)(const char *, const char *, void *),
+static int _parse_field(const char **b, const char *e,
+			 int (*p_fn)(const char *, const char *, void *),
 			 void *field, const char *field_name,
 			 struct dm_vdo_status_parse_result *result)
 {
@@ -184,20 +181,20 @@ static bool _parse_field(const char **b, const char *e,
 	te = _next_tok(*b, e);
 	if (!te) {
 		_set_error(result, "couldn't get token for '%s'", field_name);
-		return false;
+		return 0;
 	}
 
 	if (!p_fn(*b, te, field)) {
 		_set_error(result, "couldn't parse '%s'", field_name);
-		return false;
+		return 0;
 	}
 
 	*b = _eat_space(te, e);
-	return true;
+	return 1;
 
 }
 
-bool dm_vdo_status_parse(struct dm_pool *mem, const char *input,
+int dm_vdo_status_parse(struct dm_pool *mem, const char *input,
 			 struct dm_vdo_status_parse_result *result)
 {
 	const char *b = input;
@@ -205,11 +202,11 @@ bool dm_vdo_status_parse(struct dm_pool *mem, const char *input,
 	const char *te;
 	struct dm_vdo_status *s;
 
-	s = (!mem) ? zalloc(sizeof(*s)) : dm_pool_zalloc(mem, sizeof(*s));
+	s = (!mem) ? dm_zalloc(sizeof(*s)) : dm_pool_zalloc(mem, sizeof(*s));
 
 	if (!s) {
 		_set_error(result, "out of memory");
-		return false;
+		return 0;
 	}
 
 	b = _eat_space(b, e);
@@ -219,7 +216,7 @@ bool dm_vdo_status_parse(struct dm_pool *mem, const char *input,
 		goto bad;
 	}
 
-	if (!(s->device = (!mem) ? strndup(b, (te - b)) : dm_pool_alloc(mem, (te - b)))) {
+	if (!(s->device = (!mem) ? strndup(b, (te - b)) : dm_pool_strndup(mem, b, (te - b)))) {
 		_set_error(result, "out of memory");
 		goto bad;
 	}
@@ -241,14 +238,14 @@ bool dm_vdo_status_parse(struct dm_pool *mem, const char *input,
 	}
 
 	result->status = s;
-	return true;
+	return 1;
 
 bad:
 	if (s && !mem) {
 		free(s->device);
 		free(s);
 	}
-	return false;
+	return 0;
 }
 
 //----------------------------------------------------------------

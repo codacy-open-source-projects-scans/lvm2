@@ -23,9 +23,8 @@
 //#define _GNU_SOURCE 1
 //#define _LARGEFILE64_SOURCE 1
 
-#include "device_mapper/misc/dmlib.h"
+#include "libdm/misc/dmlib.h"
 
-#include "target.h"
 
 #include "lib/mm/xlate.h"
 
@@ -185,11 +184,11 @@ static void _vdo_decode_pvc(struct vdo_component_41_0 *pvc)
 	pvc->nonce = le64toh(pvc->nonce);
 }
 
-bool dm_vdo_parse_logical_size(const char *vdo_path, uint64_t *logical_blocks)
+int dm_vdo_parse_logical_size(const char *vdo_path, uint64_t *logical_blocks)
 {
 	char buffer[4096];
 	int fh;
-	bool r = false;
+	int r = 0;
 	struct stat st;
 	uint64_t size;
 	uint64_t regpos;
@@ -203,7 +202,7 @@ bool dm_vdo_parse_logical_size(const char *vdo_path, uint64_t *logical_blocks)
 	*logical_blocks = 0;
 	if ((fh = open(vdo_path, O_RDONLY)) == -1) {
 		log_sys_debug("Failed to open VDO backend %s.", vdo_path);
-		return false;
+		return 0;
 	}
 
 	if (ioctl(fh, BLKGETSIZE64, &size) == -1) {
@@ -295,7 +294,7 @@ bool dm_vdo_parse_logical_size(const char *vdo_path, uint64_t *logical_blocks)
 #endif
 
 	*logical_blocks = pvc.config.logical_blocks;
-	r = true;
+	r = 1;
 err:
 	(void) close(fh);
 

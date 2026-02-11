@@ -12,24 +12,20 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "device_mapper/misc/dmlib.h"
-#include "device_mapper/all.h"
-
-#include "vdo_limits.h"
-#include "target.h"
+#include "libdm/misc/dmlib.h"
 
 /* validate vdo target parameters and  'vdo_size' in sectors */
-bool dm_vdo_validate_target_params(const struct dm_vdo_target_params *vtp,
+int dm_vdo_validate_target_params(const struct dm_vdo_target_params *vtp,
 				   uint64_t vdo_size)
 {
-	bool valid = true;
+	int valid = 1;
 
 	/* 512 or 4096 bytes only ATM */
-	if ((vtp->minimum_io_size != (512 >> SECTOR_SHIFT)) &&
-	    (vtp->minimum_io_size != (4096 >> SECTOR_SHIFT))) {
+	if ((vtp->minimum_io_size != (512 >> DM_SECTOR_SHIFT)) &&
+	    (vtp->minimum_io_size != (4096 >> DM_SECTOR_SHIFT))) {
 		log_error("VDO minimum io size %u is unsupported [512, 4096].",
-			  (vtp->minimum_io_size << SECTOR_SHIFT));
-		valid = false;
+			  (vtp->minimum_io_size << DM_SECTOR_SHIFT));
+		valid = 0;
 	}
 
 	if ((vtp->block_map_cache_size_mb < DM_VDO_BLOCK_MAP_CACHE_SIZE_MINIMUM_MB) ||
@@ -38,7 +34,7 @@ bool dm_vdo_validate_target_params(const struct dm_vdo_target_params *vtp,
 			  vtp->block_map_cache_size_mb,
 			  DM_VDO_BLOCK_MAP_CACHE_SIZE_MINIMUM_MB,
 			  DM_VDO_BLOCK_MAP_CACHE_SIZE_MAXIMUM_MB);
-		valid = false;
+		valid = 0;
 	}
 
 	if ((vtp->block_map_era_length < DM_VDO_BLOCK_MAP_ERA_LENGTH_MINIMUM) ||
@@ -47,7 +43,7 @@ bool dm_vdo_validate_target_params(const struct dm_vdo_target_params *vtp,
 			  vtp->block_map_era_length,
 			  DM_VDO_BLOCK_MAP_ERA_LENGTH_MINIMUM,
 			  DM_VDO_BLOCK_MAP_ERA_LENGTH_MAXIMUM);
-		valid = false;
+		valid = 0;
 	}
 
 	if ((vtp->index_memory_size_mb < DM_VDO_INDEX_MEMORY_SIZE_MINIMUM_MB) ||
@@ -56,7 +52,7 @@ bool dm_vdo_validate_target_params(const struct dm_vdo_target_params *vtp,
 			  vtp->index_memory_size_mb,
 			  DM_VDO_INDEX_MEMORY_SIZE_MINIMUM_MB,
 			  DM_VDO_INDEX_MEMORY_SIZE_MAXIMUM_MB);
-		valid = false;
+		valid = 0;
 	}
 
 	if ((vtp->slab_size_mb < DM_VDO_SLAB_SIZE_MINIMUM_MB) ||
@@ -65,7 +61,7 @@ bool dm_vdo_validate_target_params(const struct dm_vdo_target_params *vtp,
 			  vtp->slab_size_mb,
 			  DM_VDO_SLAB_SIZE_MINIMUM_MB,
 			  DM_VDO_SLAB_SIZE_MAXIMUM_MB);
-		valid = false;
+		valid = 0;
 	}
 
 	if ((vtp->max_discard < DM_VDO_MAX_DISCARD_MINIMUM) ||
@@ -74,14 +70,14 @@ bool dm_vdo_validate_target_params(const struct dm_vdo_target_params *vtp,
 			  vtp->max_discard,
 			  DM_VDO_MAX_DISCARD_MINIMUM,
 			  DM_VDO_MAX_DISCARD_MAXIMUM);
-		valid = false;
+		valid = 0;
 	}
 
 	if (vtp->ack_threads > DM_VDO_ACK_THREADS_MAXIMUM) {
 		log_error("VDO ack threads %u is out of range [0..%u].",
 			  vtp->ack_threads,
 			  DM_VDO_ACK_THREADS_MAXIMUM);
-		valid = false;
+		valid = 0;
 	}
 
 	if ((vtp->bio_threads < DM_VDO_BIO_THREADS_MINIMUM) ||
@@ -90,7 +86,7 @@ bool dm_vdo_validate_target_params(const struct dm_vdo_target_params *vtp,
 			  vtp->bio_threads,
 			  DM_VDO_BIO_THREADS_MINIMUM,
 			  DM_VDO_BIO_THREADS_MAXIMUM);
-		valid = false;
+		valid = 0;
 	}
 
 	if ((vtp->bio_rotation < DM_VDO_BIO_ROTATION_MINIMUM) ||
@@ -99,7 +95,7 @@ bool dm_vdo_validate_target_params(const struct dm_vdo_target_params *vtp,
 			  vtp->bio_rotation,
 			  DM_VDO_BIO_ROTATION_MINIMUM,
 			  DM_VDO_BIO_ROTATION_MAXIMUM);
-		valid = false;
+		valid = 0;
 	}
 
 	if ((vtp->cpu_threads < DM_VDO_CPU_THREADS_MINIMUM) ||
@@ -108,28 +104,28 @@ bool dm_vdo_validate_target_params(const struct dm_vdo_target_params *vtp,
 			  vtp->cpu_threads,
 			  DM_VDO_CPU_THREADS_MINIMUM,
 			  DM_VDO_CPU_THREADS_MAXIMUM);
-		valid = false;
+		valid = 0;
 	}
 
 	if (vtp->hash_zone_threads > DM_VDO_HASH_ZONE_THREADS_MAXIMUM) {
 		log_error("VDO hash zone threads %u is out of range [0..%u].",
 			  vtp->hash_zone_threads,
 			  DM_VDO_HASH_ZONE_THREADS_MAXIMUM);
-		valid = false;
+		valid = 0;
 	}
 
 	if (vtp->logical_threads > DM_VDO_LOGICAL_THREADS_MAXIMUM) {
 		log_error("VDO logical threads %u is out of range [0..%u].",
 			  vtp->logical_threads,
 			  DM_VDO_LOGICAL_THREADS_MAXIMUM);
-		valid = false;
+		valid = 0;
 	}
 
 	if (vtp->physical_threads > DM_VDO_PHYSICAL_THREADS_MAXIMUM) {
 		log_error("VDO physical threads %u is out of range [0..%u].",
 			  vtp->physical_threads,
 			  DM_VDO_PHYSICAL_THREADS_MAXIMUM);
-		valid = false;
+		valid = 0;
 	}
 
 	switch (vtp->write_policy) {
@@ -140,7 +136,7 @@ bool dm_vdo_validate_target_params(const struct dm_vdo_target_params *vtp,
 		break;
 	default:
 		log_error(INTERNAL_ERROR "VDO write policy %u is unknown.", vtp->write_policy);
-		valid = false;
+		valid = 0;
 	}
 
 	if ((vtp->hash_zone_threads ||
@@ -152,14 +148,14 @@ bool dm_vdo_validate_target_params(const struct dm_vdo_target_params *vtp,
 		log_error("Value of vdo_hash_zone_threads(%u), vdo_logical_threads(%u), "
 			  "vdo_physical_threads(%u) must be all zero or all non-zero.",
 			  vtp->hash_zone_threads, vtp->logical_threads, vtp->physical_threads);
-		valid = false;
+		valid = 0;
 	}
 
 	if (vdo_size > DM_VDO_LOGICAL_SIZE_MAXIMUM) {
 		log_error("VDO logical size is larger than limit " FMTu64 " TiB by " FMTu64 " KiB.",
-			  DM_VDO_LOGICAL_SIZE_MAXIMUM / (UINT64_C(1024) * 1024 * 1024 * 1024 >> SECTOR_SHIFT),
+			  DM_VDO_LOGICAL_SIZE_MAXIMUM / (UINT64_C(1024) * 1024 * 1024 * 1024 >> DM_SECTOR_SHIFT),
 			  (vdo_size - DM_VDO_LOGICAL_SIZE_MAXIMUM) / 2);
-		valid = false;
+		valid = 0;
 	}
 
 	return valid;
