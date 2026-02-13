@@ -217,13 +217,19 @@ def call_lvm(command):
 	return process.returncode, stdout_text, stderr_text
 
 
-def supports_vdo():
-	cmd = ['segtypes']
-	modprobe = Popen(["modprobe", "kvdo"], stdout=PIPE, stderr=PIPE, close_fds=True, env=os.environ)
+def _modprobe(module):
+	modprobe = Popen(["modprobe", module], stdout=PIPE, stderr=PIPE, close_fds=True, env=os.environ)
 	modprobe.communicate()
 	if modprobe.returncode != 0:
 		return False
-	rc, out, err = call_lvm(cmd)
+	else:
+		return True
+
+
+def supports_vdo():
+	if not (_modprobe("kvdo") or _modprobe("dm-vdo")):
+		return False
+	rc, out, err = call_lvm(['segtypes'])
 	if rc != 0 or "vdo" not in out:
 		return False
 	return True
@@ -2305,7 +2311,11 @@ class TestDbusService(unittest.TestCase):
 		if not self.vdo:
 			raise unittest.SkipTest('vdo not supported')
 
-		vg, _pool, _lv = self._create_vdo_pool()
+		vg, pool, lv = self._create_vdo_pool()
+
+		self.assertEqual(pool.LvCommon.SegType, ["vdo-pool"])
+		self.assertEqual(lv.LvCommon.PoolLv, pool.object_path)
+
 		self.handle_return(vg.Vg.Remove(dbus.Int32(g_tmo), EOD))
 
 	def test_vdo_pool_compression_deduplication(self):
