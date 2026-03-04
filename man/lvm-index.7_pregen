@@ -46,6 +46,9 @@ Utility to deactivate block devices
 .SH C
 .PD 0
 .TP 20
+.B cmirrord
+cluster mirror log daemon
+.TP 20
 .B config
 Display and manipulate configuration information
 .PD
@@ -312,5 +315,8 @@ Search for all volume groups
 .B vgsplit
 Move physical volumes into a new or existing volume group
 .PD
+.
 .SH SEE ALSO
-\fBlvm\fP(8), \fBlvm.conf\fP(5), \fBlvmdump\fP(8)
+.
+.BR lvm (8),
+.BR lvm-categories (7)

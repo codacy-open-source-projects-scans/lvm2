@@ -521,8 +521,9 @@ struct logical_volume *convert_vdo_lv(struct logical_volume *lv,
 	} else
 		lvc.pool_name = lv->name;
 
-	if (!activate_lv(cmd, lv)) {
-		log_error("Aborting. Failed to activate pool metadata %s.",
+	if (!activate_lv_temporary(cmd, lv)) {
+		log_error("Aborting. Failed to activate temporary "
+			  "volume for VDO pool conversion of %s.",
 			  display_lvname(lv));
 		return NULL;
 	}

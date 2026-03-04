@@ -5817,10 +5817,65 @@ static int _lv_reduce_vdo_discard(struct cmd_context *cmd,
 	return 1;
 }
 
+static int _lv_resize_check_cow_reduce(struct logical_volume *lv,
+				       uint64_t new_size)
+{
+	struct cmd_context *cmd = lv->vg->cmd;
+	struct lv_status_snapshot *snap_status;
+	int r;
+
+	/*
+	 * COW snapshot must be active to check how many exception blocks are
+	 * in use.  Reject when inactive to avoid silently truncating data.
+	 * If the snapshot content is not needed, remove it with lvremove.
+	 */
+	if (!lv_is_active(lv_lock_holder(lv))) {
+		log_error("Inactive snapshot %s cannot be reduced "
+			  "(activate or remove it).",
+			  display_lvname(lv));
+		return 0;
+	}
+
+	/*
+	 * Reject reduce if it would truncate exception data already written
+	 * to the COW store.  Flush so that in-flight writes are reflected
+	 * in the exception counts before we compare.
+	 */
+	if ((r = lv_snapshot_status(lv, 1, &snap_status))) {
+		/* merge_failed cannot occur here: merging snapshots are
+		 *   rejected earlier in _lv_resize_check_type(); kept as
+		 *   a defensive check.
+		 * overflow mode is currently not supported by lvm2
+		 *   kept as a defensive check. */
+		if (snap_status->snap->invalid ||
+		    snap_status->snap->merge_failed ||
+		    snap_status->snap->overflow) {
+			log_error("Invalid snapshot %s cannot be reduced, only removed.",
+				  display_lvname(lv));
+			r = 0;
+		} else if (new_size < snap_status->snap->used_sectors) {
+			log_error("Cannot reduce snapshot %s to below %s (%.2f%% full, would lose exception data).",
+				  display_lvname(lv),
+				  display_size(cmd, snap_status->snap->used_sectors),
+				  dm_percent_to_round_float(snap_status->usage, 2));
+			r = 0;
+		}
+		dm_pool_destroy(snap_status->mem);
+	}
+
+	return r;
+}
+
 static int _lv_resize_check_type(struct logical_volume *lv,
 				 struct lvresize_params *lp)
 {
 	struct lv_segment *seg;
+
+	if (lv_is_merging_cow(lv)) {
+		log_error("Cannot resize merging snapshot %s.",
+			  display_lvname(lv));
+		return 0;
+	}
 
 	if (lv_is_origin(lv)) {
 		if (lp->resize == LV_REDUCE) {
@@ -5889,6 +5944,9 @@ static int _lv_resize_check_type(struct logical_volume *lv,
 			log_error("Cannot reduce LV with integrity.");
 			return 0;
 		}
+		if (lv_is_cow(lv) &&
+		    !_lv_resize_check_cow_reduce(lv, (uint64_t)lp->extents * lv->vg->extent_size))
+			return_0;
 	} else if (lp->resize == LV_EXTEND)  {
 		if (lv_is_thin_pool_metadata(lv) &&
 		    (!(seg = find_pool_seg(first_seg(lv))) ||
@@ -6975,11 +7033,10 @@ int lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
 				  display_lvname(lv_top));
 			return 0;
 		}
-		if (!activate_lv(cmd, lv_top)) {
+		if (!activate_lv_temporary(cmd, lv_top)) {
 			log_error("Failed to activate %s.", display_lvname(lv_top));
 			return 0;
 		}
-		sync_local_dev_names(cmd);
 		activated = 1;
 	}
 
@@ -6991,11 +7048,15 @@ int lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
 
 	/*
 	 * Disable fsopt if LV type cannot hold a file system.
+	 * CoW snapshot LVs (the COW store) do not hold a filesystem even
+	 * though their segments are linear; the filesystem lives on the
+	 * origin LV and the COW store only holds exception blocks.
 	 */
 	if (lp->fsopt[0] &&
-	    !(lv_is_linear(lv) || lv_is_striped(lv) || lv_is_raid(lv) ||
-	      lv_is_mirror(lv) || lv_is_thin_volume(lv) || lv_is_vdo(lv) ||
-	      lv_is_cache(lv) || lv_is_writecache(lv))) {
+	    (lv_is_cow(lv) ||
+	     !(lv_is_linear(lv) || lv_is_striped(lv) || lv_is_raid(lv) ||
+	       lv_is_mirror(lv) || lv_is_thin_volume(lv) || lv_is_vdo(lv) ||
+	       lv_is_cache(lv) || lv_is_writecache(lv)))) {
 		log_print_unless_silent("Ignoring fs resizing options for LV type %s.",
 					seg ? seg->segtype->name : "unknown");
 		lp->fsopt[0] = '\0';
@@ -7014,13 +7075,10 @@ int lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
 			log_error("The LV must be active to safely reduce (see --fs options.)");
 			goto out;
 		}
-		lv_top->status |= LV_TEMPORARY;
-		if (!activate_lv(cmd, lv_top)) {
+		if (!activate_lv_temporary(cmd, lv_top)) {
 			log_error("Failed to activate %s to check for fs.", display_lvname(lv_top));
 			goto out;
 		}
-		lv_top->status &= ~LV_TEMPORARY;
-		sync_local_dev_names(cmd);
 		activated_checksize = 1;
 
 	} else if (lp->fsopt[0] && !is_active) {
@@ -9855,21 +9913,17 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 			}
 		}
 	} else if (lp->snapshot) {
-		lv->status |= LV_TEMPORARY;
-		if (!activate_lv(cmd, lv)) {
+		if (!activate_lv_temporary(cmd, lv)) {
 			log_error("Aborting. Failed to activate snapshot "
 				  "exception store.");
 			goto revert_new_lv;
 		}
-		lv->status &= ~LV_TEMPORARY;
 	} else if (seg_is_vdo_pool(lp)) {
-		lv->status |= LV_TEMPORARY;
-		if (!activate_lv(cmd, lv)) {
+		if (!activate_lv_temporary(cmd, lv)) {
 			log_error("Aborting. Failed to activate temporary "
 				  "volume for VDO pool creation.");
 			goto revert_new_lv;
 		}
-		lv->status &= ~LV_TEMPORARY;
 	} else if (!lv_active_change(cmd, lv, lp->activate)) {
 		log_error("Failed to activate new LV %s.", display_lvname(lv));
 		goto deactivate_and_revert_new_lv;

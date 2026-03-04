@@ -1,5 +1,17 @@
 Version 2.03.39 - 
 ==================
+  Fix pofile generation to include SOURCES2 binaries and update xgettext options.
+  Reject lvreduce of CoW snapshot COW store when it would truncate exception data.
+  Skip filesystem resize handling for CoW snapshot COW store LVs in lvresize.
+  Fix dmeventd inode fallback to use /dev/dm-X when dm_dir() path is unavailable.
+  Use temporary activations for integrity, writecache, thin and VDO pool conv.
+  Add activate_lv_temporary() to consolidate LV_TEMPORARY and sync handling.
+  Add missing sync in add_mirror_log() and activate_and_wipe_lv_list().
+  Propagate bcache _wait_all() failure to bcache_flush() and bcache_invalidate_di().
+  Propagate io_getevents() EINTR failure through bcache wait chain to abort I/O.
+  Retry io_getevents() on EINTR unless LVM interrupt signal was caught.
+  Fix checking error codes from io_destroy() and io_getevents().
+  Add lvm-index(7), lvm-categories(7) and lvm-args(7) man pages.
   Show active cache mode in kernel table line with lvs -o kernel_cache_mode.
   Preserve file desciptors with CLOEXEC opened in library constructors.
   Use -Wl,-rpath-link for library linking.
@@ -50,7 +62,7 @@ Version 2.03.36 - 24th October 2025
   Allow creating _imeta with multiple segments.
   Fix driver_version() accepts NULL version buffer pointer.
   Fix invalid free() call in error path of _add_metadata_area_to_pv().
-  Avoid destroying aio context in forked process.
+  Avoid destroying aio context (calling of io_destroy()) in forked process.
   Add lvs -o cache_promotions,cache_promotions fields.
   Update pvmove logic when moving i.e. raid legs.
   Display integrity info in lvdisplay.

@@ -275,6 +275,9 @@ Check the consistency of volume group(s)
 .SH Daemons
 .PD 0
 .TP 20
+.B cmirrord
+cluster mirror log daemon
+.TP 20
 .B dmeventd
 Device-mapper event daemon
 .TP 20
@@ -332,5 +335,8 @@ LVM system activity data collector
 .B lvmsar
 LVM system activity reporter
 .PD
+.
 .SH SEE ALSO
-\fBlvm\fP(8), \fBlvm.conf\fP(5), \fBlvmdump\fP(8)
+.
+.BR lvm (8),
+.BR lvm-index (7)

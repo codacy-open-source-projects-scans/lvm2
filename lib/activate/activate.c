@@ -257,6 +257,12 @@ int lv_snapshot_percent(const struct logical_volume *lv, dm_percent_t *percent)
 {
 	return 0;
 }
+int lv_snapshot_status(const struct logical_volume *lv,
+		       int flush,
+		       struct lv_status_snapshot **status)
+{
+	return 0;
+}
 int lv_mirror_percent(struct cmd_context *cmd, const struct logical_volume *lv,
 		      int wait, dm_percent_t *percent, uint32_t *event_nr)
 {
@@ -1051,6 +1057,34 @@ int lv_snapshot_percent(const struct logical_volume *lv, dm_percent_t *percent)
 	dev_manager_destroy(dm);
 
 	return r;
+}
+
+/*
+ * Get COW snapshot status for an active COW snapshot LV.
+ * If flush is non-zero a DM flush is issued so in-flight writes are
+ * reflected in the counts before the status is read.
+ * On success returns 1 with *status populated.
+ * Caller must call dm_pool_destroy((*status)->mem) when done.
+ * Returns 0 if the LV is inactive or the query fails.
+ */
+int lv_snapshot_status(const struct logical_volume *lv,
+		       int flush,
+		       struct lv_status_snapshot **status)
+{
+	struct dev_manager *dm;
+	int exists;
+
+	if (!(dm = dev_manager_create(lv->vg->cmd, lv->vg->name, 1)))
+		return_0;
+
+	if (!dev_manager_snapshot_status(dm, lv, flush, status, &exists)) {
+		dev_manager_destroy(dm);
+		if (exists)
+			stack;
+		return 0;
+	}
+
+	return 1;
 }
 
 /* FIXME Merge with snapshot_percent */
@@ -2957,6 +2991,28 @@ int deactivate_lv_with_sub_lv(const struct logical_volume *lv)
 	}
 
 	return 1;
+}
+
+/*
+ * Activate LV temporarily for an internal operation (e.g. formatting,
+ * wiping, metadata preparation).  Sets LV_TEMPORARY to suppress udev
+ * scanning, clears it after activation, then synchronises local device
+ * names so callers can immediately open the device node.
+ */
+int activate_lv_temporary(struct cmd_context *cmd, struct logical_volume *lv)
+{
+	int r;
+
+	lv->status |= LV_TEMPORARY;
+	r = activate_lv(cmd, lv);
+	lv->status &= ~LV_TEMPORARY;
+
+	if (!r)
+		return_0;
+
+	sync_local_dev_names(cmd);
+
+	return r;
 }
 
 int activate_lv(struct cmd_context *cmd, const struct logical_volume *lv)
