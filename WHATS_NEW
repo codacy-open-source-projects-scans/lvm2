@@ -1,5 +1,11 @@
-Version 2.03.39 - 
+Version 2.03.40 - 
 ==================
+
+Version 2.03.39 - 13rd March 2026
+=================================
+  Support --interval +N to delay first poll in pvmove and lvpoll.
+  Add lvmpolld 'cmd' log keyword to enable verbose lvpoll output.
+  Add atomic leases using Compare and Write (CAW) to lvmlockd.
   Fix pofile generation to include SOURCES2 binaries and update xgettext options.
   Reject lvreduce of CoW snapshot COW store when it would truncate exception data.
   Skip filesystem resize handling for CoW snapshot COW store LVs in lvresize.
@@ -13,7 +19,7 @@ Version 2.03.39 -
   Fix checking error codes from io_destroy() and io_getevents().
   Add lvm-index(7), lvm-categories(7) and lvm-args(7) man pages.
   Show active cache mode in kernel table line with lvs -o kernel_cache_mode.
-  Preserve file desciptors with CLOEXEC opened in library constructors.
+  Preserve file descriptors with CLOEXEC opened in library constructors.
   Use -Wl,-rpath-link for library linking.
   Switch from use of internal device_mapper library to libdm.
   Refactor libbase radix tree to lib/datastruct.

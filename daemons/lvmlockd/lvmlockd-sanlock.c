@@ -403,7 +403,7 @@ static int read_info_file(char *vg_name, uint32_t *host_id, uint64_t *generation
 		} else if (!strncmp(line, "no_timeout ", 11)) {
 			if (sscanf(line, "no_timeout %d", no_timeout) != 1)
 				goto fail;
-		} else if (!strncmp(line, "using_caw", 3)) {
+		} else if (!strncmp(line, "using_caw", 9)) {
 			if (sscanf(line, "using_caw %d", using_caw) != 1)
 				goto fail;
 		}
@@ -626,7 +626,6 @@ static int _lease_corrupt_error(int rv)
 	    rv == SANLK_LEADER_DIFF ||
 	    rv == SANLK_LEADER_LOCKSPACE ||
 	    rv == SANLK_LEADER_RESOURCE ||
-	    rv == SANLK_LEADER_CHECKSUM ||
 	    rv == SANLK_LEADER_CHECKSUM ||
 	    rv == SANLK_DBLOCK_CHECKSUM ||
 	    rv == SANLK_WRONG_CAW)
@@ -2121,7 +2120,7 @@ int lm_rem_lockspace_sanlock(struct lockspace *ls, int free_vg)
 		 */
 		strcpy_name_len(lms->ss.name, "#unused", SANLK_NAME_LEN);
 
-		rv = sanlock_write_lockspace(&lms->ss, 0, 0, sanlock_io_timeout);
+		rv = sanlock_write_lockspace(&lms->ss, 0, SANLK_WRITE_LS_NO_CAW, sanlock_io_timeout);
 		if (rv < 0) {
 			log_error("S %s rem_lockspace free_vg write_lockspace error %d %s",
 				  ls->name, rv, lms->ss.host_id_disk.path);
