@@ -2215,7 +2215,7 @@ static int _error_device(CMD_ARGS)
 		log_error("No device specified.");
 		return 0;
 	}
-		
+
 	size = _get_device_size(name);
 
 	if (!(dmt = dm_task_create(DM_DEVICE_RELOAD)))
@@ -6887,6 +6887,8 @@ static int _process_switches(int *argcp, char ***argvp, const char *dev_dir)
 
 	if (_switches[VERBOSE_ARG] > 1) {
 		dm_log_init_verbose(_switches[VERBOSE_ARG] - 1);
+		if (_switches[VERBOSE_ARG] > 3)
+			setenv("DM_DEBUG_WITH_LINE_NUMBERS", "1", 0);
 		if (_switches[VERBOSE_ARG] > 2) {
 			if (!(_initial_timestamp = dm_timestamp_alloc()))
 				stack;
