@@ -86,6 +86,8 @@ static int _hold_control_fd_open = 0;
 static int _version_checked = 0;
 static int _version_ok = 1;
 static unsigned _ioctl_buffer_double_factor = 0;
+/* Max ioctl buffer: 16KB << 16 = 1GB */
+#define DM_IOCTL_BUFFER_MAX_DOUBLINGS 16
 
 /* *INDENT-OFF* */
 static const struct cmd_data _cmd_data_v4[] = {
@@ -122,6 +124,18 @@ static const struct cmd_data _cmd_data_v4[] = {
 #endif
 };
 /* *INDENT-ON* */
+
+/* Validate task type against the command table. */
+static int _validate_task_type(struct dm_task *dmt)
+{
+	if ((unsigned) dmt->type >= DM_ARRAY_SIZE(_cmd_data_v4)) {
+		log_error(INTERNAL_ERROR "unknown device-mapper task %d",
+			  dmt->type);
+		return 0;
+	}
+
+	return 1;
+}
 
 #define ALIGNMENT 8
 
@@ -1609,12 +1623,81 @@ static int _check_uevent_generated(struct dm_ioctl *dmi)
 }
 #endif
 
+/*
+ * Create a RELOAD task and populate it with table data.
+ * Used by both _create_and_load_v4() and the async create chain.
+ * The target list (head/tail) is moved -- caller must NULL its own copy.
+ * Returns the new task on success, NULL on failure.
+ */
+static struct dm_task *_new_reload_task(const char *name,
+					struct target *head,
+					struct target *tail,
+					int read_only,
+					int secure_data,
+					int ima_measurement,
+					int major,
+					int minor)
+{
+	struct dm_task *task;
+
+	if (!(task = dm_task_create(DM_DEVICE_RELOAD)))
+		return_NULL;
+
+	if (name && !dm_task_set_name(task, name)) {
+		dm_task_destroy(task);
+		return_NULL;
+	}
+
+	task->read_only = read_only;
+	task->head = head;
+	task->tail = tail;
+	task->secure_data = secure_data;
+	task->ima_measurement = ima_measurement;
+	task->major = major;
+	task->minor = minor;
+
+	return task;
+}
+
+/*
+ * Revert a failed CREATE-with-table by issuing a synchronous REMOVE.
+ * If cookie_set, sets up a udev cookie for the remove.
+ * Used by both _create_and_load_v4() and the async create chain.
+ */
+static void _revert_create(const char *dev_name,
+			   int cookie_set, uint32_t event_nr)
+{
+	struct dm_task *dmt;
+	uint32_t cookie;
+
+	if (!(dmt = dm_task_create(DM_DEVICE_REMOVE)))
+		return;
+
+	if (!dm_task_set_name(dmt, dev_name)) {
+		dm_task_destroy(dmt);
+		return;
+	}
+
+	if (cookie_set) {
+		cookie = (event_nr & ~DM_UDEV_FLAGS_MASK) |
+			 (DM_COOKIE_MAGIC << DM_UDEV_FLAGS_SHIFT);
+		if (!dm_task_set_cookie(dmt, &cookie,
+					(event_nr & DM_UDEV_FLAGS_MASK) >>
+					DM_UDEV_FLAGS_SHIFT))
+			stack; /* keep going */
+	}
+
+	if (!dm_task_run(dmt))
+		log_error("Failed to revert device creation.");
+
+	dm_task_destroy(dmt);
+}
+
 static int _create_and_load_v4(struct dm_task *dmt)
 {
 	struct dm_info info;
 	struct dm_task *task;
 	int r, ioctl_errno = 0;
-	uint32_t cookie;
 
 	/* Use new task struct to create the device */
 	if (!(task = dm_task_create(DM_DEVICE_CREATE))) {
@@ -1650,27 +1733,14 @@ static int _create_and_load_v4(struct dm_task *dmt)
 	dm_task_destroy(task);
 
 	/* Next load the table */
-	if (!(task = dm_task_create(DM_DEVICE_RELOAD))) {
+	if (!(task = _new_reload_task(dmt->dev_name, dmt->head, dmt->tail,
+				      dmt->read_only, dmt->secure_data,
+				      dmt->ima_measurement,
+				      info.major, info.minor))) {
 		stack;
 		_udev_complete(dmt);
 		goto revert;
 	}
-
-	/* Copy across relevant fields */
-	if (dmt->dev_name && !dm_task_set_name(task, dmt->dev_name)) {
-		stack;
-		dm_task_destroy(task);
-		_udev_complete(dmt);
-		goto revert;
-	}
-
-	task->major = info.major;
-	task->minor = info.minor;
-	task->read_only = dmt->read_only;
-	task->head = dmt->head;
-	task->tail = dmt->tail;
-	task->secure_data = dmt->secure_data;
-	task->ima_measurement = dmt->ima_measurement;
 
 	r = dm_task_run(task);
 	if (!r)
@@ -1699,29 +1769,7 @@ static int _create_and_load_v4(struct dm_task *dmt)
 		return 1;
 
       revert:
-	dmt->type = DM_DEVICE_REMOVE;
-	dm_free(dmt->uuid);
-	dmt->uuid = NULL;
-	dm_free(dmt->mangled_uuid);
-	dmt->mangled_uuid = NULL;
-	/* coverity[double_free] recursive function call */
-	_dm_task_free_targets(dmt);
-
-	/*
-	 * Also udev-synchronize "remove" dm task that is a part of this revert!
-	 * But only if the original dm task was supposed to be synchronized.
-	 */
-	if (dmt->cookie_set) {
-		cookie = (dmt->event_nr & ~DM_UDEV_FLAGS_MASK) |
-			 (DM_COOKIE_MAGIC << DM_UDEV_FLAGS_SHIFT);
-		if (!dm_task_set_cookie(dmt, &cookie,
-					(dmt->event_nr & DM_UDEV_FLAGS_MASK) >>
-					DM_UDEV_FLAGS_SHIFT))
-			stack; /* keep going */
-	}
-
-	if (!dm_task_run(dmt))
-		log_error("Failed to revert device creation.");
+	_revert_create(dmt->dev_name, dmt->cookie_set, dmt->event_nr);
 
 	if (ioctl_errno != 0)
 		dmt->ioctl_errno =  ioctl_errno;
@@ -2033,16 +2081,24 @@ static int _dm_ioctl_unmangle_uuids(int type, struct dm_ioctl *dmi)
 }
 #endif
 
-static struct dm_ioctl *_do_dm_ioctl(struct dm_task *dmt, unsigned command,
-				     unsigned buffer_repeat_count,
-				     unsigned retry_repeat_count,
-				     int *retryable)
+/* True for ioctl types that generate a udev event and need cookie handling. */
+static inline int _dmt_has_uevent(const struct dm_task *dmt)
+{
+	return dmt->type == DM_DEVICE_RESUME ||
+	       dmt->type == DM_DEVICE_REMOVE ||
+	       dmt->type == DM_DEVICE_RENAME;
+}
+
+/*
+ * Flatten the task into a fresh dm_ioctl buffer and set all flags and
+ * udev cookie bits.  Returns the allocated buffer (caller owns it) or
+ * NULL on failure.
+ */
+static struct dm_ioctl *_dm_task_build_dmi(struct dm_task *dmt,
+					   unsigned buffer_repeat_count,
+					   unsigned retry_repeat_count)
 {
 	struct dm_ioctl *dmi;
-	int ioctl_with_uevent;
-	int r;
-
-	dmt->ioctl_errno = 0;
 
 	dmi = _flatten(dmt, buffer_repeat_count);
 	if (!dmi) {
@@ -2058,11 +2114,7 @@ static struct dm_ioctl *_do_dm_ioctl(struct dm_task *dmt, unsigned command,
 	if (dmt->no_open_count)
 		dmi->flags |= DM_SKIP_BDGET_FLAG;
 
-	ioctl_with_uevent = dmt->type == DM_DEVICE_RESUME ||
-			    dmt->type == DM_DEVICE_REMOVE ||
-			    dmt->type == DM_DEVICE_RENAME;
-
-	if (ioctl_with_uevent && dm_cookie_supported()) {
+	if (_dmt_has_uevent(dmt) && dm_cookie_supported()) {
 		/*
 		 * Always mark events coming from libdevmapper as
 		 * "primary sourced". This is needed to distinguish
@@ -2128,7 +2180,25 @@ static struct dm_ioctl *_do_dm_ioctl(struct dm_task *dmt, unsigned command,
 			     dmt->enable_checks ? "enablechecks " : "",
 			     dmt->sector, _sanitise_message(dmt->message),
 			     dmi->data_size, retry_repeat_count);
+
+	return dmi;
+}
+
+static struct dm_ioctl *_do_dm_ioctl(struct dm_task *dmt, unsigned command,
+				     unsigned buffer_repeat_count,
+				     unsigned retry_repeat_count,
+				     int *retryable)
+{
+	struct dm_ioctl *dmi;
+	int r;
+
+	if (!(dmi = _dm_task_build_dmi(dmt, buffer_repeat_count,
+				       retry_repeat_count)))
+		return NULL;
+
 #ifdef DM_IOCTLS
+	dmt->ioctl_errno = 0;
+
 	r = ioctl(_control_fd, command, dmi);
 
 	if (dmt->record_timestamp)
@@ -2180,7 +2250,7 @@ static struct dm_ioctl *_do_dm_ioctl(struct dm_task *dmt, unsigned command,
 		}
 	}
 
-	if (ioctl_with_uevent && dm_udev_get_sync_support() &&
+	if (_dmt_has_uevent(dmt) && dm_udev_get_sync_support() &&
 	    !_check_uevent_generated(dmi)) {
 		if (dmt->deferred_remove)
 			log_debug_activation("Deferred remove: device busy, "
@@ -2215,12 +2285,111 @@ void dm_task_update_nodes(void)
 	update_devs();
 }
 
+/*
+ * Perform device-node operations after a successful ioctl.
+ * Returns 1 on success, 0 on failure.
+ */
+static int _dm_task_node_ops(struct dm_task *dmt, struct dm_ioctl *dmi)
+{
+	const char *dev_name = DEV_NAME(dmt);
+	int check_udev = dmt->cookie_set &&
+			 !(dmt->event_nr >> DM_UDEV_FLAGS_SHIFT &
+			   DM_UDEV_DISABLE_DM_RULES_FLAG);
+	int rely_on_udev = dmt->cookie_set ? (dmt->event_nr >> DM_UDEV_FLAGS_SHIFT &
+					      DM_UDEV_DISABLE_LIBRARY_FALLBACK) : 0;
+
+	switch (dmt->type) {
+	case DM_DEVICE_CREATE:
+		if ((dmt->add_node == DM_ADD_NODE_ON_CREATE) &&
+		    dev_name && *dev_name && !rely_on_udev)
+			add_dev_node(dev_name, MAJOR(dmi->dev),
+				     MINOR(dmi->dev), dmt->uid, dmt->gid,
+				     dmt->mode, check_udev, rely_on_udev);
+		break;
+	case DM_DEVICE_REMOVE:
+		/* FIXME Kernel needs to fill in dmi->name */
+		if (dev_name && !rely_on_udev)
+			rm_dev_node(dev_name, check_udev, rely_on_udev);
+		break;
+
+	case DM_DEVICE_RENAME:
+		/* FIXME Kernel needs to fill in dmi->name */
+		if (!dmt->new_uuid && dev_name)
+			rename_dev_node(dev_name, dmt->newname,
+					check_udev, rely_on_udev);
+		break;
+
+	case DM_DEVICE_RESUME:
+		if ((dmt->add_node == DM_ADD_NODE_ON_RESUME) &&
+		    dev_name && *dev_name)
+			add_dev_node(dev_name, MAJOR(dmi->dev),
+				     MINOR(dmi->dev), dmt->uid, dmt->gid,
+				     dmt->mode, check_udev, rely_on_udev);
+		/* FIXME Kernel needs to fill in dmi->name */
+		set_dev_node_read_ahead(dev_name,
+					MAJOR(dmi->dev), MINOR(dmi->dev),
+					dmt->read_ahead, dmt->read_ahead_flags);
+		break;
+
+	case DM_DEVICE_MKNODES:
+		if (dmi->flags & DM_EXISTS_FLAG)
+			add_dev_node(dmi->name, MAJOR(dmi->dev),
+				     MINOR(dmi->dev), dmt->uid,
+				     dmt->gid, dmt->mode, 0, rely_on_udev);
+		else if (dev_name)
+			rm_dev_node(dev_name, 0, rely_on_udev);
+		break;
+
+	case DM_DEVICE_STATUS:
+	case DM_DEVICE_TABLE:
+	case DM_DEVICE_WAITEVENT:
+		if (!_unmarshal_status(dmt, dmi))
+			return 0;
+		break;
+	}
+
+	return 1;
+}
+
 #define DM_IOCTL_RETRIES 25
 #define DM_RETRY_USLEEP_DELAY 200000
 
 int dm_task_get_errno(struct dm_task *dmt)
 {
 	return dmt->ioctl_errno;
+}
+
+/*
+ * Check whether a DM_BUFFER_FULL_FLAG retry is allowed for this task type.
+ * Increments the global doubling factor on success.
+ * Returns 1 if the caller should retry with a larger buffer, 0 otherwise.
+ */
+static int _can_retry_buffer_full(struct dm_task *dmt)
+{
+	switch (dmt->type) {
+	case DM_DEVICE_LIST_VERSIONS:
+	case DM_DEVICE_LIST:
+	case DM_DEVICE_DEPS:
+	case DM_DEVICE_STATUS:
+	case DM_DEVICE_TABLE:
+	case DM_DEVICE_WAITEVENT:
+	case DM_DEVICE_TARGET_MSG:
+		break;
+	default:
+		log_error("WARNING: libdevmapper buffer too small for data.");
+		return 0;
+	}
+
+	if (_ioctl_buffer_double_factor >= DM_IOCTL_BUFFER_MAX_DOUBLINGS) {
+		log_error("Ioctl buffer maximum reached (16KB << %u = %zu bytes), giving up.",
+			  _ioctl_buffer_double_factor,
+			  (size_t)16 * 1024 << _ioctl_buffer_double_factor);
+		return 0;
+	}
+
+	_ioctl_buffer_double_factor++;
+
+	return 1;
 }
 
 #if defined(GNU_SYMVER)
@@ -2241,19 +2410,14 @@ DM_EXPORT_NEW_SYMBOL(int, dm_task_run, 1_02_197)
 {
 	struct dm_ioctl *dmi;
 	unsigned command;
-	int check_udev;
-	int rely_on_udev;
 	int suspended_counter;
 	unsigned ioctl_retry = 1;
 	int retryable = 0;
 	const char *dev_name = DEV_NAME(dmt);
 	const char *dev_uuid = DEV_UUID(dmt);
 
-	if ((unsigned) dmt->type >= DM_ARRAY_SIZE(_cmd_data_v4)) {
-		log_error(INTERNAL_ERROR "unknown device-mapper task %d",
-			  dmt->type);
-		return 0;
-	}
+	if (!_validate_task_type(dmt))
+		return_0;
 
 	command = _cmd_data_v4[dmt->type].cmd;
 
@@ -2313,81 +2477,15 @@ repeat_ioctl:
 	}
 
 	if (dmi->flags & DM_BUFFER_FULL_FLAG) {
-		switch (dmt->type) {
-		case DM_DEVICE_LIST_VERSIONS:
-		case DM_DEVICE_LIST:
-		case DM_DEVICE_DEPS:
-		case DM_DEVICE_STATUS:
-		case DM_DEVICE_TABLE:
-		case DM_DEVICE_WAITEVENT:
-		case DM_DEVICE_TARGET_MSG:
-			_ioctl_buffer_double_factor++;
+		if (_can_retry_buffer_full(dmt)) {
 			_dm_zfree_dmi(dmi);
 			goto repeat_ioctl;
-		default:
-			log_error("WARNING: libdevmapper buffer too small for data");
 		}
+		goto_bad;
 	}
 
-	/*
-	 * Are we expecting a udev operation to occur that we need to check for?
-	 */
-	check_udev = dmt->cookie_set &&
-		     !(dmt->event_nr >> DM_UDEV_FLAGS_SHIFT &
-		       DM_UDEV_DISABLE_DM_RULES_FLAG);
-
-	rely_on_udev = dmt->cookie_set ? (dmt->event_nr >> DM_UDEV_FLAGS_SHIFT &
-					  DM_UDEV_DISABLE_LIBRARY_FALLBACK) : 0;
-
-	switch (dmt->type) {
-	case DM_DEVICE_CREATE:
-		if ((dmt->add_node == DM_ADD_NODE_ON_CREATE) &&
-		    dev_name && *dev_name && !rely_on_udev)
-			add_dev_node(dev_name, MAJOR(dmi->dev),
-				     MINOR(dmi->dev), dmt->uid, dmt->gid,
-				     dmt->mode, check_udev, rely_on_udev);
-		break;
-	case DM_DEVICE_REMOVE:
-		/* FIXME Kernel needs to fill in dmi->name */
-		if (dev_name && !rely_on_udev)
-			rm_dev_node(dev_name, check_udev, rely_on_udev);
-		break;
-
-	case DM_DEVICE_RENAME:
-		/* FIXME Kernel needs to fill in dmi->name */
-		if (!dmt->new_uuid && dev_name)
-			rename_dev_node(dev_name, dmt->newname,
-					check_udev, rely_on_udev);
-		break;
-
-	case DM_DEVICE_RESUME:
-		if ((dmt->add_node == DM_ADD_NODE_ON_RESUME) &&
-		    dev_name && *dev_name)
-			add_dev_node(dev_name, MAJOR(dmi->dev),
-				     MINOR(dmi->dev), dmt->uid, dmt->gid,
-				     dmt->mode, check_udev, rely_on_udev);
-		/* FIXME Kernel needs to fill in dmi->name */
-		set_dev_node_read_ahead(dev_name,
-					MAJOR(dmi->dev), MINOR(dmi->dev),
-					dmt->read_ahead, dmt->read_ahead_flags);
-		break;
-	
-	case DM_DEVICE_MKNODES:
-		if (dmi->flags & DM_EXISTS_FLAG)
-			add_dev_node(dmi->name, MAJOR(dmi->dev),
-				     MINOR(dmi->dev), dmt->uid,
-				     dmt->gid, dmt->mode, 0, rely_on_udev);
-		else if (dev_name)
-			rm_dev_node(dev_name, 0, rely_on_udev);
-		break;
-
-	case DM_DEVICE_STATUS:
-	case DM_DEVICE_TABLE:
-	case DM_DEVICE_WAITEVENT:
-		if (!_unmarshal_status(dmt, dmi))
-			goto bad;
-		break;
-	}
+	if (!_dm_task_node_ops(dmt, dmi))
+		goto bad;
 
 	/* Was structure reused? */
 	_dm_zfree_dmi(dmt->dmi.v4);
