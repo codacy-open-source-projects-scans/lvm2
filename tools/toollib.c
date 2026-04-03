@@ -2768,9 +2768,11 @@ static struct logical_volume _historical_lv = {
 	.hostname = "",
 };
 
+static const struct segtype_handler _historical_ops = { 0 };
 static struct segment_type _historical_segment_type = {
 	.name = "historical",
 	.flags = SEG_VIRTUAL | SEG_CANNOT_BE_ZEROED,
+	.ops = &_historical_ops,
 };
 
 static struct lv_segment _historical_lv_segment = {
@@ -5918,7 +5920,7 @@ int pvcreate_each_device(struct cmd_context *cmd,
 	 * during the wait, then do the create steps.
 	 */
 
-	lockf_global(cmd, "un");
+	(void) lockf_global(cmd, "un");
 
 	unlocked_for_prompts = 1;
 

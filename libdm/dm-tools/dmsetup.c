@@ -974,8 +974,7 @@ out:
 		dm_task_destroy(obj.deps_task);
 	if (obj.split_name)
 		_destroy_split_name(obj.split_name);
-	if (obj.stats)
-		dm_stats_destroy(obj.stats);
+	dm_stats_destroy(obj.stats); /* handles NULL */
 	return r;
 }
 
@@ -4108,7 +4107,7 @@ static int _dm_stats_double_disp_helper(struct dm_report *rh,
 	const struct dm_stats *dms = (const struct dm_stats *) data;
 	char buf[64];
 	char *repstr;
-	double *sortval, value;
+	double *sortval, value = 0.0;
 
 	if (!get_fn(dms, &value, DM_STATS_REGION_CURRENT, DM_STATS_AREA_CURRENT))
 		return_0;
@@ -4173,7 +4172,7 @@ static int _dm_stats_size_disp_helper(struct dm_report *rh,
 {
 	const struct dm_stats *dms = (const struct dm_stats *) data;
 	const char *repstr;
-	double *sortval, value;
+	double *sortval, value = 0.0;
 
 	if (!get_fn(dms, &value, DM_STATS_REGION_CURRENT, DM_STATS_AREA_CURRENT))
 		return_0;

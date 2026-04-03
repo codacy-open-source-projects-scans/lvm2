@@ -386,8 +386,7 @@ void free_dus(struct dm_list *dus)
 
 void free_did(struct dev_id *id)
 {
-	if (id->idname && strlen(id->idname))
-		free(id->idname);
+	free(id->idname);
 	free(id);
 }
 
@@ -1241,6 +1240,9 @@ static int _dev_has_id(struct device *dev, uint16_t idtype, const char *idname)
 {
 	struct dev_id *id;
 
+	if (!idname)
+		return 0;
+
 	dm_list_iterate_items(id, &dev->ids) {
 		if (id->idtype != idtype)
 			continue;
@@ -1551,8 +1553,11 @@ static void devices_file_backup(struct cmd_context *cmd, char *fc, char *fb, tim
 		stack;
 		return;
 	}
-	tm = localtime(tp);
-	strftime(datetime_str, sizeof(datetime_str), "%Y%m%d.%H%M%S", tm);
+	if (!(tm = localtime(tp)) ||
+	    !strftime(datetime_str, sizeof(datetime_str), "%Y%m%d.%H%M%S", tm)) {
+		log_warn("WARNING: Failed to format backup timestamp.");
+		return;
+	}
 
 	/* arbitrary max for devicesfile_backup_limit setting */
 	if (backup_limit > 5000)
@@ -2697,7 +2702,10 @@ static int _match_du_to_dev(struct cmd_context *cmd, struct dev_use *du, struct 
 			if (!(id = zalloc(sizeof(struct dev_id))))
 				return_0;
 			id->idtype = DEV_ID_TYPE_DEVNAME;
-			id->idname = strdup(du->idname);
+			if (!(id->idname = strdup(du->idname))) {
+				free(id);
+				return_0;
+			}
 			dm_list_add(&dev->ids, &id->list);
 			du->dev = dev;
 			dev->id = id;
@@ -2844,7 +2852,10 @@ static int _match_du_to_dev(struct cmd_context *cmd, struct dev_use *du, struct 
 					id->idtype = nvme_type_to_idtype(dw->nvme_type);
 				else
 					id->idtype = scsi_type_to_idtype(dw->scsi_type);
-				id->idname = strdup(dw->id);
+				if (!(id->idname = strdup(dw->id))) {
+					free(id);
+					return_0;
+				}
 				dm_list_add(&dev->ids, &id->list);
 				du->dev = dev;
 				dev->id = id;
