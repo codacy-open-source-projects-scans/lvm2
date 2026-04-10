@@ -243,7 +243,7 @@ int vgchange_activate(struct cmd_context *cmd, struct volume_group *vg,
 	if (do_activate && pr_op && !strcmp(pr_op, "start") && cmd->disable_pr_required) {
 		if (vg_is_shared(vg)) {
 			log_error("Activation with persist start not permitted for shared VG %s.", vg->name);
-			return 0;;
+			return 0;
 		}
 		if (!persist_start_include(cmd, vg, (activate == CHANGE_AAY), 0, NULL))
 			return_0;
@@ -366,7 +366,7 @@ static int _vgchange_alloc(struct cmd_context *cmd, struct volume_group *vg)
 {
 	alloc_policy_t alloc;
 
-	alloc = (alloc_policy_t) arg_uint_value(cmd, alloc_ARG, ALLOC_NORMAL);
+	alloc = (alloc_policy_t) (uint32_t) arg_uint_value(cmd, alloc_ARG, ALLOC_NORMAL);
 
 	/* FIXME: make consistent with vg_set_alloc_policy() */
 	if (alloc == vg->alloc) {
@@ -589,7 +589,7 @@ static int _vgchange_system_id(struct cmd_context *cmd, struct volume_group *vg,
 		return 0;
 	}
 
-	if (!strcmp(vg->system_id, system_id)) {
+	if (vg->system_id && !strcmp(vg->system_id, system_id)) {
 		log_error("Volume Group system ID is already \"%s\".", vg->system_id);
 		return 0;
 	}
@@ -797,7 +797,7 @@ static int _vgchange_single(struct cmd_context *cmd, const char *vg_name,
 	}
 
 	if (arg_is_set(cmd, activate_ARG)) {
-		activate = (activation_change_t) arg_uint_value(cmd, activate_ARG, 0);
+		activate = (activation_change_t) (uint32_t) arg_uint_value(cmd, activate_ARG, 0);
 		if (!vgchange_activate(cmd, vg, activate, vp->vg_complete_to_activate, vp->root_dm_uuid))
 			return_ECMD_FAILED;
 	} else if (arg_is_set(cmd, refresh_ARG)) {
@@ -1090,7 +1090,8 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 
 	if (arg_is_set(cmd, activate_ARG) &&
 	    (arg_is_set(cmd, monitor_ARG) || arg_is_set(cmd, poll_ARG))) {
-		if (!is_change_activating((activation_change_t) arg_uint_value(cmd, activate_ARG, 0))) {
+		if (!is_change_activating((activation_change_t) (uint32_t)
+					  arg_uint_value(cmd, activate_ARG, 0))) {
 			log_error("Only -ay* allowed with --monitor or --poll.");
 			return EINVALID_CMD_LINE;
 		}
@@ -1114,7 +1115,7 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 	}
 
 	if (arg_is_set(cmd, clustered_ARG) && !argc && !arg_is_set(cmd, yes_ARG) &&
-	    (yes_no_prompt("Change clustered property of all volumes groups? [y/n]: ") == 'n')) {
+	    (yes_no_prompt("Change clustered property of all volume groups? [y/n]: ") == 'n')) {
 		log_error("No volume groups changed.");
 		return ECMD_FAILED;
 	}
@@ -1129,7 +1130,8 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 	 * PR usage with activation/deactivation.
 	 */
 	if (arg_is_set(cmd, activate_ARG)) {
-		int is_activating = is_change_activating((activation_change_t)arg_uint_value(cmd, activate_ARG, CHANGE_AY));
+		int is_activating = is_change_activating((activation_change_t) (uint32_t)
+							 arg_uint_value(cmd, activate_ARG, CHANGE_AY));
 
 		/* Always allow deactivation without PR being started. */
 		if (!is_activating)
@@ -1177,7 +1179,8 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 	    (cmd->command->command_enum == vgchange_refresh_CMD)) {
 		cmd->lockd_vg_default_sh = 1;
 		/* Allow deactivating if locks fail. */
-		if (is_change_activating((activation_change_t)arg_uint_value(cmd, activate_ARG, CHANGE_AY)))
+		if (is_change_activating((activation_change_t) (uint32_t)
+					 arg_uint_value(cmd, activate_ARG, CHANGE_AY)))
 			cmd->lockd_vg_enforce_sh = 1;
 	}
 

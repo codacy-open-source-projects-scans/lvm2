@@ -912,6 +912,8 @@ static int _dev_cache_iterate_devs_for_index(struct cmd_context *cmd)
 		if (!_index_dev_by_vgid_and_lvid(cmd, dev))
 			r = 0;
 
+	dev_iter_destroy(iter);
+
 	return r;
 }
 
@@ -1994,7 +1996,6 @@ static void devices_file_rename_unused(struct cmd_context *cmd)
 	const char *filename;
 	time_t t;
 	struct tm *tm;
-	struct stat st;
 
 	filename = find_config_tree_str(cmd, devices_devicesfile_CFG, NULL);
 
@@ -2002,9 +2003,6 @@ static void devices_file_rename_unused(struct cmd_context *cmd)
 		return;
 
 	if (dm_snprintf(path, sizeof(path), "%s/devices/%s", cmd->system_dir, filename) < 0)
-		return;
-
-	if (stat(path, &st))
 		return;
 
 	t = time(NULL);
@@ -2018,7 +2016,9 @@ static void devices_file_rename_unused(struct cmd_context *cmd)
 		return;
 
 	if (rename(path, path2) < 0) {
-		stack;
+		/* Silently ignore if file doesn't exist */
+		if (errno != ENOENT)
+			stack;
 		return;
 	}
 	log_debug("Devices file moved to %s", path2);

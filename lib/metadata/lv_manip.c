@@ -3709,7 +3709,7 @@ static struct alloc_handle *_alloc_init(struct cmd_context *cmd,
 
 			/* Calculate log_len (i.e. length of each rmeta device) for RAID */
 			cur_rimage_extents = raid_rimage_extents(segtype, existing_extents, stripes, mirrors);
-			new_rimage_extents = raid_rimage_extents(segtype, existing_extents + new_extents, stripes, mirrors),
+			new_rimage_extents = raid_rimage_extents(segtype, existing_extents + new_extents, stripes, mirrors);
 			ah->log_len = raid_rmeta_extents_delta(cmd, cur_rimage_extents, new_rimage_extents,
 							       region_size, extent_size);
 			ah->metadata_area_count = metadata_area_count;
@@ -4393,12 +4393,12 @@ static int _lv_extend_layered_lv(struct alloc_handle *ah,
 			seg_image = first_seg(lv_image);
 
 			if (!seg_image->integrity_meta_dev) {
-				log_error("1");
+				log_error("Missing integrity meta dev for %s.", display_lvname(lv_image));
 				return 0;
 			}
 
 			if (!(lv_iorig = seg_lv(seg_image, 0))) {
-				log_error("2");
+				log_error("Missing integrity origin for %s.", display_lvname(lv_image));
 				return 0;
 			}
 
@@ -6878,7 +6878,7 @@ int lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
 		_setup_params_for_extend_metadata(lv_meta, &lp_meta);
 		if (lp->poolmetadata_size) {
 			lp_meta.size = lp->poolmetadata_size;
-			lp_meta.size = lp->poolmetadata_sign;
+			lp_meta.sign = lp->poolmetadata_sign;
 			lp->poolmetadata_size = 0;
 			lp->poolmetadata_sign = SIGN_NONE;
 		}
@@ -7200,6 +7200,7 @@ int lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
 
 	if (!lv_meta)
 		goto do_main;
+	/* coverity[format_string_injection] lv->name is validated, cannot contain format specifiers */
 	if (!_lv_resize_volume(lv_meta, &lp_meta, lp->pvh))
 		goto_out;
 	if (!lp_meta.size_changed)
@@ -7220,6 +7221,7 @@ int lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
 			goto_out;
 	}
 
+	/* coverity[format_string_injection] lv->name is validated, cannot contain format specifiers */
 	if (!_lv_resize_volume(lv_main, lp, lp->pvh))
 		goto_out;
 	if (!lp->size_changed) {

@@ -1073,6 +1073,8 @@ static int _add_dev_node(const char *dev_name, uint32_t major, uint32_t minor,
 			return 1;
 		}
 
+		/* Wrong device exists, remove it before creating correct one */
+		/* coverity[toctou] stat check is for validation; ENOENT is handled */
 		if (unlink(path) && (errno != ENOENT)) {
 			log_sys_error("unlink", path);
 			return 0;
@@ -1085,6 +1087,7 @@ static int _add_dev_node(const char *dev_name, uint32_t major, uint32_t minor,
 		 */
 		if (errno == ENOENT && lstat(path, &linfo) >= 0 && S_ISLNK(linfo.st_mode)) {
 			log_debug_activation("Removing dangling symlink %s", path);
+			/* coverity[toctou] lstat check is only for logging; ENOENT is handled */
 			if (unlink(path) && (errno != ENOENT)) {
 				log_sys_error("unlink", path);
 				return 0;
@@ -1135,6 +1138,7 @@ static int _add_dev_node(const char *dev_name, uint32_t major, uint32_t minor,
 	old_mask = umask(0);
 
 	/* The node may already have been created by udev. So ignore EEXIST. */
+	/* coverity[toctou] previous checks are for cleanup/optimization; EEXIST is handled */
 	if (mknod(path, S_IFBLK | mode, dev) < 0 && errno != EEXIST) {
 		log_error("%s: mknod for %s failed: %s", path, dev_name, strerror(errno));
 		umask(old_mask);
@@ -1168,6 +1172,7 @@ static int _rm_dev_node(const char *dev_name, int warn_if_udev_failed)
 			 "Falling back to direct node removal.", path);
 
 	/* udev may already have deleted the node. Ignore ENOENT. */
+	/* coverity[toctou] lstat is only for the warning; ENOENT is handled */
 	if (unlink(path) && (errno != ENOENT)) {
 		log_sys_error("unlink", path);
 		return 0;
@@ -1219,6 +1224,8 @@ static int _rename_dev_node(const char *old_name, const char *new_name,
 			return _rm_dev_node(old_name, 0);
 		}
 
+		/* Remove existing node at target path before rename */
+		/* coverity[toctou] stat/lstat checks are for validation; errors are handled */
 		if (unlink(newpath) < 0) {
 			if (errno == EPERM) {
 				/* devfs, entry has already been renamed */
@@ -1961,11 +1968,31 @@ static int _sysfs_get_dev_major_minor(const char *path, uint32_t major, uint32_t
 
 static int _sysfs_find_kernel_name(uint32_t major, uint32_t minor, char *buf, size_t buf_size)
 {
+	/* sorted alphabetically */
+	static const char _ignore_sysfs[][16] = {
+		".",
+		"..",
+		"bdi",
+		"dev",
+		"device",
+		"holders",
+		"integrity",
+		"loop",
+		"md",
+		"mq",
+		"power",
+		"queue",
+		"removable",
+		"slave",
+		"slaves",
+		"subsystem",
+		"trace",
+		"uevent"
+	};
 	const char *name, *name_dev;
 	char path[PATH_MAX];
 	struct dirent *dirent, *dirent_dev;
 	DIR *d, *d_dev;
-	struct stat st;
 	int r = 0, sz;
 
 	if (!*_sysfs_dir ||
@@ -1997,56 +2024,38 @@ static int _sysfs_find_kernel_name(uint32_t major, uint32_t minor, char *buf, si
 		}
 
 		path[sz - 4] = 0; /* strip /dev from end of path string */
-		if (stat(path, &st))
-			continue;
 
-		if (S_ISDIR(st.st_mode)) {
-
-			/* let's assume there is no tree-complex device in past systems */
-			if (!(d_dev = opendir(path))) {
+		/* let's assume there is no tree-complex device in past systems */
+		if (!(d_dev = opendir(path))) {
+			/* Silently skip non-directories, log other errors */
+			if (errno != ENOTDIR)
 				log_sys_debug("opendir", path);
+			continue;
+		}
+
+		while ((dirent_dev = readdir(d_dev))) {
+			name_dev = dirent_dev->d_name;
+
+			/* skip known ignorable paths using binary search */
+			if (bsearch(&name_dev, _ignore_sysfs, DM_ARRAY_SIZE(_ignore_sysfs),
+				    sizeof(char *), (int (*)(const void *, const void *))strcmp))
+				continue;
+
+			if (dm_snprintf(path, sizeof(path), "%sblock/%s/%s/dev",
+					_sysfs_dir, name, name_dev) == -1) {
+				log_warn("Couldn't create path for %s/%s.", name, name_dev);
 				continue;
 			}
 
-			while ((dirent_dev = readdir(d_dev))) {
-				name_dev = dirent_dev->d_name;
-
-				/* skip known ignorable paths */
-				if (!strcmp(name_dev, ".") || !strcmp(name_dev, "..") ||
-				    !strcmp(name_dev, "bdi") ||
-				    !strcmp(name_dev, "dev") ||
-				    !strcmp(name_dev, "device") ||
-				    !strcmp(name_dev, "holders") ||
-				    !strcmp(name_dev, "integrity") ||
-				    !strcmp(name_dev, "loop") ||
-				    !strcmp(name_dev, "queue") ||
-				    !strcmp(name_dev, "md") ||
-				    !strcmp(name_dev, "mq") ||
-				    !strcmp(name_dev, "power") ||
-				    !strcmp(name_dev, "removable") ||
-				    !strcmp(name_dev, "slave") ||
-				    !strcmp(name_dev, "slaves") ||
-				    !strcmp(name_dev, "subsystem") ||
-				    !strcmp(name_dev, "trace") ||
-				    !strcmp(name_dev, "uevent"))
-					continue;
-
-				if (dm_snprintf(path, sizeof(path), "%sblock/%s/%s/dev",
-						_sysfs_dir, name, name_dev) == -1) {
-					log_warn("Couldn't create path for %s/%s.", name, name_dev);
-					continue;
-				}
-
-				if (_sysfs_get_dev_major_minor(path, major, minor)) {
-					r = dm_strncpy(buf, name_dev, buf_size);
-					break; /* found */
-				}
+			if (_sysfs_get_dev_major_minor(path, major, minor)) {
+				r = dm_strncpy(buf, name_dev, buf_size);
+				break; /* found */
 			}
-
-			if (closedir(d_dev))
-				log_sys_debug("closedir", name);
 		}
-	}
+
+		if (closedir(d_dev))
+			log_sys_debug("closedir", name);
+		}
 
 	if (closedir(d))
 		log_sys_debug("closedir", path);

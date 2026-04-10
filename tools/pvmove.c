@@ -40,16 +40,15 @@ struct pvmove_params {
 static int _pvmove_target_present(struct cmd_context *cmd)
 {
 	const struct segment_type *segtype;
-	int found = 1;
 
 	if (!(segtype = get_segtype_from_string(cmd, SEG_TYPE_NAME_MIRROR)))
 		return_0;
 
 	if (activation() && segtype->ops->target_present &&
 	    !segtype->ops->target_present(cmd, NULL, NULL))
-		found = 0;
+		return 0;
 
-	return found;
+	return 1;
 }
 
 
@@ -86,9 +85,9 @@ static const char *_extract_lvname(struct cmd_context *cmd, const char *vgname,
 
 /* Create list of PVs for allocation of replacement extents */
 static struct dm_list *_get_allocatable_pvs(struct cmd_context *cmd, int argc,
-					 char **argv, struct volume_group *vg,
-					 struct physical_volume *pv,
-					 alloc_policy_t alloc)
+					    char **argv, struct volume_group *vg,
+					    struct physical_volume *pv,
+					    alloc_policy_t alloc)
 {
 	struct dm_list *allocatable_pvs, *pvht, *pvh;
 	struct pv_list *pvl;
@@ -139,7 +138,7 @@ static int _remove_sibling_pvs_from_trim_list(struct logical_volume *lv,
 	struct pv_list *pvl1, *pvl2;
 	uint32_t s;
 
-	/* Early return for invalid cases */
+	/* Early return when collocation is not applicable */
 	if (!lv_name || !*lv_name ||
 	    !seg_is_raid(raid_seg) ||
 	    seg_is_raid0(raid_seg) ||
@@ -238,7 +237,7 @@ static int _trim_allocatable_pvs(struct dm_list *alloc_list,
 
 /*
  * Replace any LV segments on given PV with temporary mirror.
- * Returns list of LVs changed.
+ * Affected LVs are added to lvs_changed.
  */
 static int _insert_pvmove_mirrors(struct cmd_context *cmd,
 				  struct logical_volume *lv_mirr,
@@ -728,9 +727,9 @@ out:
 }
 
 static int _pvmove_read_single(struct cmd_context *cmd,
-				struct volume_group *vg,
-				struct physical_volume *pv,
-				struct processing_handle *handle)
+			       struct volume_group *vg,
+			       struct physical_volume *pv,
+			       struct processing_handle *handle)
 {
 	struct pvmove_params *pp = (struct pvmove_params *) handle->custom_handle;
 	struct logical_volume *lv;
@@ -858,7 +857,7 @@ int pvmove(struct cmd_context *cmd, int argc, char **argv)
 			}
 		}
 
-		pp.alloc = (alloc_policy_t) arg_uint_value(cmd, alloc_ARG, ALLOC_INHERIT);
+		pp.alloc = (alloc_policy_t) (uint32_t) arg_uint_value(cmd, alloc_ARG, ALLOC_INHERIT);
 
 		pp.in_progress = 1;
 

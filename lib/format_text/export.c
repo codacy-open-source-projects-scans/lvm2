@@ -240,7 +240,7 @@ static int _sectors_to_units(uint64_t sectors, char *buffer, size_t s)
 	/* to convert to K */
 	d /= 2.0;
 
-	for (i = 0; (d > 1024.0) && i < DM_ARRAY_SIZE(_units); ++i)
+	for (i = 0; (d > 1024.0) && i < DM_ARRAY_SIZE(_units) - 1; ++i)
 		d /= 1024.0;
 
 	return dm_snprintf(buffer, s, "# %g %s", d, _units[i]) > 0;
@@ -672,7 +672,7 @@ int out_areas(struct formatter *f, const struct lv_segment *seg,
 
 			if (seg->meta_areas && seg_metalv(seg,s))
 				outf(f, "\"%s\", \"%s\"%s",
-				     (seg->meta_areas && seg_metalv(seg, s)) ? seg_metalv(seg, s)->name : "",
+				     seg_metalv(seg, s)->name,
 				     seg_lv(seg, s)->name, (s == seg->area_count - 1) ? "" : ",");
 			else
 				outf(f, "\"%s\"%s", seg_lv(seg, s)->name, (s == seg->area_count - 1) ? "" : ",");

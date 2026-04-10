@@ -171,8 +171,8 @@ static int _btrfs_get_mnt(struct fs_info *fsi, dev_t lv_devt)
 	bool found = false;
 
 	/* For a mounted btrfs, there will be a sys dir like /sys/fs/btrfs/$uuid/devices */
-	if (!dm_snprintf(devices_path, sizeof(devices_path), "%sfs/btrfs/%s/devices",
-			dm_sysfs_dir(), fsi->uuid)) {
+	if (dm_snprintf(devices_path, sizeof(devices_path), "%sfs/btrfs/%s/devices",
+			dm_sysfs_dir(), fsi->uuid) < 0) {
 		log_error("Couldn't create btrfs devices path for %s.", fsi->fs_dev_path);
 		return 0;
 	}
@@ -198,8 +198,8 @@ static int _btrfs_get_mnt(struct fs_info *fsi, dev_t lv_devt)
 
 		device_name = de->d_name;
 
-		if (!dm_snprintf(rdev_path, sizeof(devices_path), "%s/%s/dev",
-				 devices_path, device_name)) {
+		if (dm_snprintf(rdev_path, sizeof(rdev_path), "%s/%s/dev",
+				 devices_path, device_name) < 0) {
 			    log_error("Couldn't create rdev path for %s.", fsi->fs_dev_path);
 			    ret = 0;
 			    break;
@@ -287,8 +287,10 @@ int fs_get_info(struct cmd_context *cmd, struct logical_volume *lv, struct fs_in
 		return 0;
 	}
 
-	if (fsi->nofs)
+	if (info.nofs) {
+		fsi->nofs = 1;
 		return 1;
+	}
 
 	/*
 	 * If there's a LUKS dm-crypt layer over the LV, then

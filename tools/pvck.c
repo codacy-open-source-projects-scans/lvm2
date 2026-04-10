@@ -112,13 +112,14 @@ static char *_chars_to_hexstr(const void *in, void *out, int num, int max, const
 	memset(out, 0, max);
 	memset(tmp, 0, max);
 
-	if (num > max-1) {
+	/* Each byte becomes 1-2 hex chars, limit to half buffer size to avoid overflow */
+	if (num > (max-1)/2) {
 		log_print("CHECK: abbreviating output for %s", field);
-		num = max - 1;
+		num = (max - 1) / 2;
 	}
 
 	for (n = 0; n < num; n++) {
-		ret = sprintf(tmp+off, "%x", *i & 0xFF);
+		ret = snprintf(tmp+off, max-off, "%x", *i & 0xFF);
 		off += ret;
 		i++;
 	}
@@ -352,21 +353,29 @@ static struct devicefile *get_devicefile(struct cmd_context *cmd, const char *pa
 	struct stat sb;
 	struct devicefile *def;
 	size_t len;
+	int fd;
 
-	if (stat(path, &sb))
+	if ((fd = open(path, O_RDONLY)) < 0)
 		return_NULL;
 
-	if ((sb.st_mode & S_IFMT) != S_IFREG)
+	if (fstat(fd, &sb) < 0) {
+		(void) close(fd);
 		return_NULL;
+	}
+
+	if ((sb.st_mode & S_IFMT) != S_IFREG) {
+		(void) close(fd);
+		return_NULL;
+	}
 
 	len = strlen(path) + 1;
-	if (!(def = dm_pool_alloc(cmd->mem, sizeof(struct devicefile) + len)))
+	if (!(def = dm_pool_alloc(cmd->mem, sizeof(struct devicefile) + len))) {
+		(void) close(fd);
 		return_NULL;
+	}
 
 	memcpy(def->path, path, len);
-
-	if ((def->fd = open(path, O_RDONLY)) < 0)
-		return_NULL;
+	def->fd = fd;
 
 	return def;
 }
@@ -1632,7 +1641,7 @@ static int _dump_search(struct cmd_context *cmd, const char *dump, struct settin
 			mda_offset = set->mda2_offset;
 			set_vals++;
 		}
-		if (set->mda_size_set) {
+		if (set->mda2_size_set) {
 			mda_size = set->mda2_size;
 			set_vals++;
 		}

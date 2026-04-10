@@ -1298,7 +1298,7 @@ static dm_percent_range_t _combine_percent(dm_percent_t a, dm_percent_t b,
 	if (a == DM_PERCENT_0 && b == DM_PERCENT_0)
 		return DM_PERCENT_0;
 
-	return (dm_percent_range_t) dm_make_percent(numerator, denominator);
+	return (dm_percent_range_t) (dm_percent_t) dm_make_percent(numerator, denominator);
 }
 
 static int _percent_run(struct dev_manager *dm, const char *name,
@@ -1796,7 +1796,7 @@ int dev_manager_raid_status(struct dev_manager *dm,
 	struct dm_status_raid *sr;
 
 	*exists = -1;
-	if (!(*status = dm_pool_zalloc(dm->mem, sizeof(struct lv_status_cache))))
+	if (!(*status = dm_pool_zalloc(dm->mem, sizeof(struct lv_status_raid))))
 		return_0;
 
 	if (!(dlid = build_dm_uuid(dm->mem, lv, layer)))
@@ -3030,7 +3030,7 @@ static char *_add_error_or_zero_device(struct dev_manager *dm, struct dm_tree *d
 		return NULL;
 	}
 
-	sprintf(errid, "missing_%d_%d", segno, s);
+	(void) dm_snprintf(errid, sizeof(errid), "missing_%d_%d", segno, s);
 
 	if (!(dlid = build_dm_uuid(dm->mem, seg->lv, errid)))
 		return_NULL;

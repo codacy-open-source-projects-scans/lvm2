@@ -1599,6 +1599,8 @@ static int _setgeometry(CMD_ARGS)
 	int r = 0;
 	struct dm_task *dmt;
 
+	(void)argc; /* required by CMD_ARGS macro, but unused by this function */
+
 	if (!(dmt = dm_task_create(DM_DEVICE_SET_GEOMETRY)))
 		return_0;
 
@@ -3165,7 +3167,7 @@ static int _uint32_disp(struct dm_report *rh,
 			struct dm_report_field *field, const void *data,
 			void *private __attribute__((unused)))
 {
-	const uint32_t value = *(const int32_t *)data;
+	const uint32_t value = *(const uint32_t *)data;
 
 	return dm_report_field_uint32(rh, field, &value);
 }
@@ -5244,13 +5246,13 @@ static int _stats_create_file(CMD_ARGS)
 
 	free(regions);
 	free(abspath);
-	free(bounds);
+	dm_histogram_bounds_destroy(bounds);
 	dm_stats_destroy(dms);
 	return 1;
 
 bad:
 	free(abspath);
-	free(bounds);
+	dm_histogram_bounds_destroy(bounds);
 
 	if ((fd > -1) && close(fd))
 		log_sys_debug("close", path);

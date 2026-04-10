@@ -792,7 +792,7 @@ static int _read_historical_lvnames(struct cmd_context *cmd,
 	if (!_read_id(&glv->historical->lvid.id[1], hlvn, "id")) {
 		log_error("Couldn't read uuid for removed logical volume %s in vg %s.",
 			  glv->historical->name, vg->name);
-		return 0;
+		goto bad;
 	}
 	memcpy(&glv->historical->lvid.id[0], &glv->historical->vg->id, sizeof(glv->historical->lvid.id[0]));
 
@@ -803,7 +803,8 @@ static int _read_historical_lvnames(struct cmd_context *cmd,
 
 	if (dm_config_has_node(hlvn, "creation_time")) {
 		if (!_read_uint64(hlvn, "creation_time", &timestamp)) {
-			log_error("Invalid creation_time for removed logical volume %s.", str);
+			log_error("Invalid creation_time for removed logical volume %s.",
+				  glv->historical->name);
 			goto bad;
 		}
 		glv->historical->timestamp = timestamp;
@@ -811,7 +812,8 @@ static int _read_historical_lvnames(struct cmd_context *cmd,
 
 	if (dm_config_has_node(hlvn, "removal_time")) {
 		if (!_read_uint64(hlvn, "removal_time", &timestamp)) {
-			log_error("Invalid removal_time for removed logical volume %s.", str);
+			log_error("Invalid removal_time for removed logical volume %s.",
+				  glv->historical->name);
 			goto bad;
 		}
 		glv->historical->timestamp_removed = timestamp;
@@ -1122,7 +1124,7 @@ static struct volume_group *_read_vg(struct cmd_context *cmd,
 		dm_list_init(&pr_list);
 		if (!_read_str_list(mem, &pr_list, cv)) {
 			log_error("Couldn't read pr for volume group %s.", vg->name);
-			return 0;
+			goto bad;
 		}
 		if (str_list_match_item(&pr_list, "require"))
 			vg->pr |= VG_PR_REQUIRE;

@@ -124,7 +124,7 @@ struct lvmpolld_lv *pdlv_create(struct lvmpolld_state *ls, const char *id,
 	if (!pdlv || !tmp.lvmpolld_id || !tmp.lvname || !tmp.lvm_system_dir_env || !tmp.sinterval)
 		goto err;
 
-	tmp.lvid = _get_lvid(tmp.lvmpolld_id, sysdir),
+	tmp.lvid = _get_lvid(tmp.lvmpolld_id, sysdir);
 
 	*pdlv = tmp;
 
@@ -304,6 +304,22 @@ void pdst_locked_dump(const struct lvmpolld_store *pdst, struct buffer *buff)
 
 	dm_hash_iterate(n, pdst->store)
 		_pdlv_locked_dump(buff, dm_hash_get_data(pdst->store, n));
+}
+
+pid_t pdst_kill_pdlv(struct lvmpolld_store *pdst, const char *id)
+{
+	struct lvmpolld_lv *pdlv;
+	pid_t pid = 0;
+
+	pdst_lock(pdst);
+	pdlv = pdst_locked_lookup(pdst, id);
+	if (pdlv && !pdlv_locked_polling_finished(pdlv) && pdlv->cmd_pid > 0) {
+		kill(pdlv->cmd_pid, SIGTERM);
+		pid = pdlv->cmd_pid;
+	}
+	pdst_unlock(pdst);
+
+	return pid;
 }
 
 void pdst_locked_send_cancel(const struct lvmpolld_store *pdst)

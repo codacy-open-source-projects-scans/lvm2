@@ -167,11 +167,12 @@ static void _allocate_memory(void)
 	 * meanwhile let users use lvm2 code without memory preallocation.
 	 * Compilation for VALGRIND tracing also goes without preallocation.
 	 */
+#define MAX_AREAS 32
 	void *stack_mem;
 	struct rlimit limit;
-	int i, area = 0, missing = _size_malloc_tmp, max_areas = 32;
+	int i, area = 0, missing = _size_malloc_tmp;
 	size_t hblks;
-	char *areas[max_areas];
+	char *areas[MAX_AREAS];
 
 	/* Check if we could preallocate requested stack */
 	if (getrlimit(RLIMIT_STACK, &limit) == 0) {
@@ -219,7 +220,7 @@ static void _allocate_memory(void)
 			missing -= _size_malloc_tmp;
 		}
 
-		if (area == max_areas && missing > 0) {
+		if (area == MAX_AREAS && missing > 0) {
 			/* Too bad. Warn the user and proceed, as things are
 			 * most likely going to work out anyway. */
 			log_warn("WARNING: Failed to reserve memory, %d bytes missing.", missing);
@@ -417,7 +418,7 @@ static int _memlock_maps(struct cmd_context *cmd, lvmlock_t lock, size_t *mstats
 #define _GNU_SOURCE
 #endif
 #include <dlfcn.h>
-static const unsigned char _instruction_hlt = 0x94;
+static const unsigned char _instruction_hlt = 0xF4;
 static char _mmap_orig;
 static unsigned char *_mmap_addr;
 #ifdef __i386__
@@ -467,7 +468,7 @@ static int _disable_mmap(void)
 		}
 		_mmap64_orig = *_mmap64_addr;
 	}
-	*_mmap64_addr = INSTRUCTION_HLT;
+	*_mmap64_addr = _instruction_hlt;
 #endif /* __i386__ */
 #endif /* ARCH_X86 */
 	return 1;
@@ -513,7 +514,7 @@ static void _restore_priority_if_possible(struct cmd_context *cmd)
 	if (setpriority(PRIO_PROCESS, 0, _priority) == 0)
 		log_debug_activation("Restoring original task priority %d.", _priority);
 	else
-		log_warn("WARNING: setpriority %u failed: %s.",
+		log_warn("WARNING: setpriority %d failed: %s.",
 			 _priority, strerror(errno));
 
 	_priority_raised = 0;
@@ -552,7 +553,7 @@ static void _lock_mem(struct cmd_context *cmd)
 			return;
 		}
 
-		if (!(_maps_fd = open(_procselfmaps, O_RDONLY))) {
+		if ((_maps_fd = open(_procselfmaps, O_RDONLY)) < 0) {
 			log_sys_debug("open", _procselfmaps);
 			return;
 		}

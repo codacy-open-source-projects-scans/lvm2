@@ -77,7 +77,8 @@ static int _move_one_lv(struct volume_group *vg_from,
 
 	if (lv_is_active(lv)) {
 		if ((parent_lv = lv_parent(lv)))
-			log_error("Logical volume %s (part of %s) must be inactive.", display_lvname(lv), parent_lv->name);
+			log_error("Logical volume %s (part of %s) must be inactive.",
+				  display_lvname(lv), display_lvname(parent_lv));
 		else
 			log_error("Logical volume %s must be inactive.", display_lvname(lv));
 		return 0;
@@ -599,7 +600,7 @@ int vgsplit(struct cmd_context *cmd, int argc, char **argv)
 	}
 
 	if (!(vg_from = vg_read_for_update(cmd, vg_name_from, NULL, 0))) {
-		log_error("Failed to read VG %s.", vg_name_to);
+		log_error("Failed to read VG %s.", vg_name_from);
 		unlock_and_release_vg(cmd, vg_to, vg_name_to);
 		return ECMD_FAILED;
 	}

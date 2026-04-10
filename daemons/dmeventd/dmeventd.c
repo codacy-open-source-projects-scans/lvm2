@@ -2268,7 +2268,7 @@ static void _init_thread_signals(void)
 	struct sigaction act = { .sa_handler = _sig_alarm };
 
 	if (sigaction(SIGALRM, &act, NULL))
-		log_sys_debug("sigaction", "SIGLARM");
+		log_sys_debug("sigaction", "SIGALRM");
 	sigfillset(&my_sigset);
 
 	/* These are used for exiting */
@@ -2677,6 +2677,9 @@ static int _restart_dmeventd(struct dm_event_fifos *fifos)
 		message += strlen(message) + 1;
 	}
 
+	free(msg.data);
+	msg.data = NULL;
+
 	if (version >= 2) {
 		if (daemon_talk(fifos, &msg, DM_EVENT_CMD_GET_PARAMETERS, "-", "-", 0, 0)) {
 			fprintf(stderr, "Failed to acquire parameters from old dmeventd.\n");
@@ -2704,7 +2707,7 @@ static int _restart_dmeventd(struct dm_event_fifos *fifos)
 	}
 
 	if (!_systemd_activation &&
-	    ((e = getenv(SD_ACTIVATION_ENV_VAR_NAME)) && strcmp(e, "1")))
+	    ((e = getenv(SD_ACTIVATION_ENV_VAR_NAME)) && !strcmp(e, "1")))
 		_systemd_activation = 1;
 
 	fini_fifos(fifos);

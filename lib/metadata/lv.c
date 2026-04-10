@@ -235,7 +235,7 @@ char *lvseg_metadata_devices_str(struct dm_pool *mem, const struct lv_segment *s
 {
 	struct dm_list *list;
 
-	if (!(list = lvseg_devices(mem, seg)))
+	if (!(list = lvseg_metadata_devices(mem, seg)))
 		return_NULL;
 
 	return str_list_to_str(mem, list, ",");
@@ -265,7 +265,7 @@ char *lvseg_seg_le_ranges_str(struct dm_pool *mem, const struct lv_segment *seg)
 {
 	struct dm_list *list;
 
-	if (!(list = lvseg_seg_pe_ranges(mem, seg)))
+	if (!(list = lvseg_seg_le_ranges(mem, seg)))
 		return_NULL;
 
 	return str_list_to_str(mem, list, seg->lv->vg->cmd->report_list_item_separator);
@@ -1426,7 +1426,7 @@ static int _sublvs_remove_after_reshape(const struct logical_volume *lv)
 	uint32_t s;
 	struct lv_segment *seg = first_seg(lv);
 
-	for (s = seg->area_count -1; s; s--)
+	for (s = 0; s < seg->area_count; s++)
 		if (seg_lv(seg, s)->status & LV_REMOVE_AFTER_RESHAPE)
 			return 1;
 
@@ -1799,7 +1799,7 @@ int lv_active_change(struct cmd_context *cmd, struct logical_volume *lv,
 		ay_with_mode = "sh";
 	if (activate == CHANGE_AEY)
 		ay_with_mode = "ex";
-	
+
 	if (is_change_activating(activate) &&
 	    !lockd_lv(cmd, lv, ay_with_mode, LDLV_PERSISTENT)) {
 		log_error("Failed to lock logical volume %s.", display_lvname(lv));

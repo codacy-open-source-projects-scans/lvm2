@@ -858,7 +858,7 @@ static int _config_def_check_node_single_value(struct cft_check_handle *handle,
 			break;
 		case DM_CFG_FLOAT:
 			if (!(def->type & CFG_TYPE_FLOAT)) {
-				_log_type_error(rp, CFG_TYPE_FLOAT, def->type, handle-> suppress_messages);
+				_log_type_error(rp, CFG_TYPE_FLOAT, def->type, handle->suppress_messages);
 				return 0;
 			}
 			break;
@@ -938,7 +938,7 @@ static int _check_value_differs_from_default(struct cft_check_handle *handle,
 			case DM_CFG_FLOAT:
 				f = v_def ? v_def->v.f
 					  : cfg_def_get_default_value(handle->cmd, def, CFG_TYPE_FLOAT, NULL);
-				diff = fabsf(f - v->v.f) < FLT_EPSILON;
+				diff = fabsf(f - v->v.f) >= FLT_EPSILON;
 				break;
 			case DM_CFG_STRING:
 				/* string value can be a real string but it can also represent bool */

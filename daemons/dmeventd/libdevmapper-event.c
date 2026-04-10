@@ -249,7 +249,7 @@ static int _daemon_read(struct dm_event_fifos *fifos,
 			goto bad;
 		}
 
-		ret = read(fifos->server, buf + bytes, size);
+		ret = read(fifos->server, buf + bytes, size - bytes);
 		if (ret < 0) {
 			if ((errno == EINTR) || (errno == EAGAIN))
 				continue;
@@ -437,6 +437,7 @@ static int _check_for_usable_fifos(char *dmeventd_path, struct dm_event_fifos *f
 	}
 
 	/* Anyone listening?  If not, errno will be ENXIO */
+	/* coverity[toctou] lstat pre-check is for security; fstat revalidates after open */
 	fifos->client = open(fifos->client_path, O_WRONLY | O_NONBLOCK);
 	if (fifos->client >= 0) {
 		/* Should never happen if all the above checks passed. */

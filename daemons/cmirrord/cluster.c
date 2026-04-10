@@ -410,7 +410,7 @@ static struct checkpoint_data *prepare_checkpoint(struct clog_cpg *entry,
 		return NULL;
 	}
 	new->requester = cp_requester;
-	strncpy(new->uuid, entry->name.value, entry->name.length);
+	dm_strncpy(new->uuid, entry->name.value, sizeof(new->uuid));
 
 	new->bitmap_size = push_state(entry->name.value, entry->luid,
 				      "clean_bits",
@@ -621,7 +621,7 @@ rr_create_retry:
 	dm_list_init(&rq->u.list);
 	rq->u_rq.request_type = DM_ULOG_CHECKPOINT_READY;
 	rq->originator = cp->requester;  /* FIXME: hack to overload meaning of originator */
-	strncpy(rq->u_rq.uuid, cp->uuid, CPG_MAX_NAME_LENGTH);
+	dm_strncpy(rq->u_rq.uuid, cp->uuid, sizeof(rq->u_rq.uuid));
 	rq->u_rq.seq = my_cluster_id;
 
 	r = cluster_send(rq);
@@ -653,7 +653,7 @@ static int export_checkpoint(struct checkpoint_data *cp)
 	dm_list_init(&rq->u.list);
 	rq->u_rq.request_type = DM_ULOG_CHECKPOINT_READY;
 	rq->originator = cp->requester;
-	strncpy(rq->u_rq.uuid, cp->uuid, CPG_MAX_NAME_LENGTH);
+	dm_strncpy(rq->u_rq.uuid, cp->uuid, sizeof(rq->u_rq.uuid));
 	rq->u_rq.seq = my_cluster_id;
 	rq->u_rq.data_size = rq_size - sizeof(*rq);
 
@@ -1241,7 +1241,7 @@ static void cpg_message_callback(cpg_handle_t handle, const struct cpg_name *gna
 		}
 		LOG_SPRINT(match, "[%s] Checkpoint prepared for %u* (%s)",
 			   SHORT_UUID(rq->u_rq.uuid), match->checkpoint_requesters[i],
-			   (log_get_state(&rq->u_rq) != LOG_RESUMED)? "LOG_RESUMED": "LOG_SUSPENDED");
+			   (log_get_state(&rq->u_rq) == LOG_RESUMED)? "LOG_RESUMED": "LOG_SUSPENDED");
 		LOG_COND(log_checkpoint, "[%s] Checkpoint prepared for %u*",
 			 SHORT_UUID(rq->u_rq.uuid), match->checkpoint_requesters[i]);
 		match->checkpoints_needed--;
@@ -1656,6 +1656,7 @@ int create_cluster_cpg(char *uuid, uint64_t luid)
 	r = cpg_join(new->handle, &new->name);
 	if (r != CS_OK) {
 		LOG_ERROR("cpg_join failed:  Cannot join cluster");
+		cpg_finalize(new->handle);
 		free(new);
 		return -EPERM;
 	}

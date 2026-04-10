@@ -294,7 +294,7 @@ static int poll_for_output(struct lvmpolld_lv *pdlv, struct lvmpolld_thread_data
 			if (fds[1].revents & POLLHUP)
 				DEBUGLOG(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "caught err POLLHUP");
 			else
-				WARN(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "poll for command's STDOUT failed");
+				WARN(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "poll for command's STDERR failed");
 
 			fds[1].fd = -1;
 			fds_count--;
@@ -714,6 +714,17 @@ static response poll_init(client_handle h, struct lvmpolld_state *ls, request re
 
 	pdst_unlock(pdst);
 
+
+	/* Kill the polling lvpoll process for this LV before starting abort */
+	if (abort_polling) {
+		pid_t killed_pid = pdst_kill_pdlv(ls->id_to_pdlv_poll, id);
+
+		if (killed_pid)
+			DEBUGLOG(ls, "%s: %s (PID %d) %s", PD_LOG_PREFIX,
+				 "Sent SIGTERM to polling cmd", killed_pid,
+				 "after abort.");
+	}
+
 	free(id);
 
 	return daemon_reply_simple(LVMPD_RESP_OK, NULL);
@@ -771,7 +782,7 @@ static int process_timeout_arg(const char *str, unsigned *max_timeouts)
 
 	errno = 0;
 	l = strtoul(str, &endptr, 10);
-	if (errno || *endptr || l >= UINT_MAX)
+	if (errno || *endptr || l > UINT_MAX)
 		return 0;
 
 	*max_timeouts = (unsigned) l;
