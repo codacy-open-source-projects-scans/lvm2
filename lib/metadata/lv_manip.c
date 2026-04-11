@@ -1025,6 +1025,15 @@ static uint32_t _round_to_stripe_boundary(struct volume_group *vg, uint32_t exte
 	return new_extents;
 }
 
+static int _validate_area_count(uint32_t area_count)
+{
+	if (area_count > MAX_STRIPES) {
+		log_error(INTERNAL_ERROR "area_count %u exceeds maximum %u.", area_count, MAX_STRIPES);
+		return_0;
+	}
+	return 1;
+}
+
 /*
  * All lv_segments get created here.
  */
@@ -1045,12 +1054,17 @@ struct lv_segment *alloc_lv_segment(const struct segment_type *segtype,
 {
 	struct lv_segment *seg;
 	struct dm_pool *mem = lv->vg->vgmem;
-	uint32_t areas_sz = area_count * sizeof(*seg->areas);
+	uint32_t areas_sz;
 
 	if (!segtype) {
 		log_error(INTERNAL_ERROR "alloc_lv_segment: Missing segtype.");
 		return NULL;
 	}
+
+	if (!_validate_area_count(area_count))
+		return_NULL;
+
+	areas_sz = area_count * sizeof(*seg->areas);
 
 	if (!(seg = dm_pool_zalloc(mem, sizeof(*seg))))
 		return_NULL;
@@ -1355,7 +1369,12 @@ int set_lv_segment_area_lv(struct lv_segment *seg, uint32_t area_num,
 int add_lv_segment_areas(struct lv_segment *seg, uint32_t new_area_count)
 {
 	struct lv_segment_area *newareas;
-	uint32_t areas_sz = new_area_count * sizeof(*newareas);
+	uint32_t areas_sz;
+
+	if (!_validate_area_count(new_area_count))
+		return_0;
+
+	areas_sz = new_area_count * sizeof(*newareas);
 
 	if (!(newareas = dm_pool_zalloc(seg->lv->vg->vgmem, areas_sz))) {
 		log_error("Failed to allocate widened LV segment for %s.",
@@ -4454,7 +4473,7 @@ static int _lv_extend_layered_lv(struct alloc_handle *ah,
 				return_0;
 
 			/* Wipe lv list */
-			if (!activate_and_wipe_lvlist(&meta_lvs, WIPE_MODE_DO_ZERO, 0, 0)) {
+			if (!activate_and_wipe_lvlist(&meta_lvs, WIPE_MODE_DO_ZERO, 0, PROMPT)) {
 				/* If we failed clearing rmeta SubLVs, try removing the new RaidLV */
 				if (!lv_remove(lv))
 					log_error("Failed to remove LV");

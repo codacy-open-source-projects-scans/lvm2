@@ -435,11 +435,12 @@ static void split_line(char *buf, int *argc, char **argv, int max_args, char sep
 
 int lockd_lockargs_get_version(char *str, unsigned int *major, unsigned int *minor, unsigned int *patch)
 {
-	char version[16] = {0};
+	char version[16];
 	char *major_str, *minor_str, *patch_str;
 	char *n, *d1, *d2;
 
-	strncpy(version, str, 15);
+	strncpy(version, str, sizeof(version) - 1);
+	version[sizeof(version) - 1] = '\0';
 
 	n = strchr(version, ':');
 	if (n)
@@ -3465,9 +3466,9 @@ out_act:
 	 * blank or fill it with garbage, but instead set it to REM:<name>
 	 * to make it easier to follow progress of freeing is via log_debug.
 	 */
-	memset(tmp_name, 0, sizeof(tmp_name));
 	memcpy(tmp_name, "REM:", 4);
-	strncpy(tmp_name+4, ls->name, sizeof(tmp_name)-4);
+	strncpy(tmp_name + 4, ls->name, sizeof(tmp_name) - 5);
+	tmp_name[sizeof(tmp_name) - 1] = 0;
 	memcpy(ls->name, tmp_name, sizeof(ls->name));
 	pthread_mutex_unlock(&lockspaces_mutex);
 
@@ -3575,6 +3576,7 @@ static int add_lockspace_thread(const char *ls_name,
 		return -ENOMEM;
 
 	strncpy(ls->name, ls_name, MAX_NAME);
+	ls->name[MAX_NAME] = '\0';
 	ls->lm_type = lm_type;
 
 	if (vg_args && strlen(vg_args) && (lm_type == LD_LM_SANLOCK) &&
@@ -3614,6 +3616,7 @@ static int add_lockspace_thread(const char *ls_name,
 		ls->host_id = act->host_id;
 
 	if (!(r = alloc_resource())) {
+		free_pvs_path(&ls->pvs);
 		free(ls);
 		return -ENOMEM;
 	}
@@ -7178,7 +7181,8 @@ static int send_helper_request(struct action *act, char *ls_name, uint32_t new_m
 	}
 
 	if (act->op == LD_OP_FENCE) {
-		strncpy(msg.ls_name, ls_name, MAX_NAME);
+		strncpy(msg.ls_name, ls_name, sizeof(msg.ls_name) - 1);
+		msg.ls_name[sizeof(msg.ls_name) - 1] = 0;
 		msg.type = HELPER_COMMAND;
 		msg.act = LD_OP_FENCE;
 		msg.msg_id = new_msg_id;

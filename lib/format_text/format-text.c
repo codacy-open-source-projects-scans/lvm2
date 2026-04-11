@@ -190,19 +190,9 @@ static void _xlate_mdah(struct mda_header *mdah)
 	}
 }
 
-static int _raw_read_mda_header(struct mda_header *mdah, struct device_area *dev_area,
-				int primary_mda, uint32_t ignore_bad_fields, uint32_t *bad_fields)
+int raw_parse_mda_header(struct mda_header *mdah, struct device_area *dev_area,
+			 uint32_t ignore_bad_fields, uint32_t *bad_fields)
 {
-	log_debug_metadata("Reading mda header sector from %s at %llu.",
-			   dev_name(dev_area->dev), (unsigned long long)dev_area->start);
-
-	if (!dev_read_bytes(dev_area->dev, dev_area->start, MDA_HEADER_SIZE, mdah)) {
-		log_error("Failed to read metadata area header on %s at %llu.",
-			  dev_name(dev_area->dev), (unsigned long long)dev_area->start);
-		*bad_fields |= BAD_MDA_READ;
-		return 0;
-	}
-
 	if (mdah->checksum_xl != htole32(calc_crc(INITIAL_CRC, (uint8_t *)mdah->magic,
 						  MDA_HEADER_SIZE -
 						  sizeof(mdah->checksum_xl)))) {
@@ -234,12 +224,35 @@ static int _raw_read_mda_header(struct mda_header *mdah, struct device_area *dev
 		*bad_fields |= BAD_MDA_START;
 	}
 
+	if (mdah->size < MDA_HEADER_SIZE) {
+		log_warn("WARNING: Metadata area size %llu too small in mda header on %s at %llu.",
+			  (unsigned long long)mdah->size,
+			  dev_name(dev_area->dev), (unsigned long long)dev_area->start);
+		*bad_fields |= BAD_MDA_HEADER;
+	}
+
 	*bad_fields &= ~ignore_bad_fields;
 
 	if (*bad_fields)
 		return 0;
 
 	return 1;
+}
+
+static int _raw_read_mda_header(struct mda_header *mdah, struct device_area *dev_area,
+				int primary_mda, uint32_t ignore_bad_fields, uint32_t *bad_fields)
+{
+	log_debug_metadata("Reading mda header sector from %s at %llu.",
+			   dev_name(dev_area->dev), (unsigned long long)dev_area->start);
+
+	if (!dev_read_bytes(dev_area->dev, dev_area->start, MDA_HEADER_SIZE, mdah)) {
+		log_error("Failed to read metadata area header on %s at %llu.",
+			  dev_name(dev_area->dev), (unsigned long long)dev_area->start);
+		*bad_fields |= BAD_MDA_READ;
+		return 0;
+	}
+
+	return raw_parse_mda_header(mdah, dev_area, ignore_bad_fields, bad_fields);
 }
 
 struct mda_header *raw_read_mda_header(const struct format_type *fmt,
@@ -418,7 +431,8 @@ static struct volume_group *_vg_read_raw_area(struct cmd_context *cmd,
 
 	/* Validate rlocn fields fit within mda bounds before uint32_t cast */
 	if (rlocn->offset >= mdah->size ||
-	    rlocn->size > mdah->size - MDA_HEADER_SIZE) {
+	    rlocn->size > mdah->size - MDA_HEADER_SIZE ||
+	    rlocn->size > UINT32_MAX) {
 		log_error("Metadata location out of bounds (offset %llu size %llu mda %llu) on %s.",
 			  (unsigned long long)rlocn->offset,
 			  (unsigned long long)rlocn->size,
@@ -1515,7 +1529,8 @@ int read_metadata_location_summary(const struct format_type *fmt,
 
 	/* Validate rlocn fields fit within mda bounds before uint32_t cast */
 	if (rlocn->offset >= mdah->size ||
-	    rlocn->size > mdah->size - MDA_HEADER_SIZE) {
+	    rlocn->size > mdah->size - MDA_HEADER_SIZE ||
+	    rlocn->size > UINT32_MAX) {
 		log_warn("WARNING: Metadata location out of bounds (offset %llu size %llu mda %llu) on %s.",
 			 (unsigned long long)rlocn->offset,
 			 (unsigned long long)rlocn->size,
