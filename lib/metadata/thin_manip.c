@@ -499,12 +499,14 @@ int thin_pool_prepare_metadata(struct logical_volume *metadata_lv,
 		log_error("Failed to activate temporary volume to "
 			  "prepare thin pool metadata %s.",
 			  display_lvname(metadata_lv));
-		return_0;
+		return 0;
 	}
 
 	/* coverity[secure_temp] until better solution */
 	if (!(f = tmpfile())) {
 		log_error("Cannot create temporary file to prepare metadata.");
+		if (!deactivate_lv(cmd, metadata_lv))
+			stack;
 		return 0;
 	}
 
@@ -718,6 +720,9 @@ static uint32_t _estimate_chunk_size(uint32_t data_extents, uint32_t extent_size
 {
 	uint32_t chunk_size = _estimate_size(data_extents, extent_size, metadata_size);
 	const uint32_t BIG_CHUNK =  2 * DEFAULT_THIN_POOL_CHUNK_SIZE_ALIGNED - 1;
+
+	if (chunk_size <= 1)
+		return DM_THIN_MIN_DATA_BLOCK_SIZE;
 
 	if ((attr & THIN_FEATURE_BLOCK_SIZE) &&
 	    (chunk_size > BIG_CHUNK) &&
