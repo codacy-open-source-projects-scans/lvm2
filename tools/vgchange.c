@@ -232,7 +232,7 @@ int vgchange_activate(struct cmd_context *cmd, struct volume_group *vg,
 	}
 
 	if (arg_is_set(cmd, persist_ARG))
-		pr_op = arg_str_value(cmd, persist_ARG, NULL); 
+		pr_op = arg_str_value(cmd, persist_ARG, NULL);
 
 	/*
 	 * vgchange -ay --persist start
@@ -248,12 +248,12 @@ int vgchange_activate(struct cmd_context *cmd, struct volume_group *vg,
 		if (!persist_start_include(cmd, vg, (activate == CHANGE_AAY), 0, NULL))
 			return_0;
 	}
- 
+
 	/*
 	 * Safe, since we never write out new metadata here. Required for
 	 * partial activation to work.
 	 */
-        cmd->handles_missing_pvs = 1;
+	cmd->handles_missing_pvs = 1;
 
 	/* FIXME: Force argument to deactivate them? */
 	if (!do_activate) {
@@ -635,7 +635,7 @@ static int _vgchange_system_id(struct cmd_context *cmd, struct volume_group *vg,
 		    vg->name, vg->system_id, system_id);
 
 	vg->system_id = system_id;
-	
+
 	return 1;
 }
 
@@ -717,9 +717,7 @@ do_start:
 
 	r = lockd_start_vg(cmd, vg, &exists);
 
-	if (r)
-		vp->lock_start_count++;
-	else if (exists)
+	if (r || exists)
 		vp->lock_start_count++;
 	if (!strcmp(vg->lock_type, "sanlock"))
 		vp->lock_start_sanlock = 1;
@@ -744,7 +742,6 @@ static int _vgchange_single(struct cmd_context *cmd, const char *vg_name,
 			    struct processing_handle *handle)
 {
 	struct vgchange_params *vp = (struct vgchange_params *)handle->custom_handle;
-	int ret = ECMD_PROCESSED;
 	unsigned i;
 	activation_change_t activate;
 	int changed = 0;
@@ -816,7 +813,7 @@ static int _vgchange_single(struct cmd_context *cmd, const char *vg_name,
 			return_ECMD_FAILED;
 	}
 
-	return ret;
+	return ECMD_PROCESSED;
 }
 
 /*
@@ -1178,7 +1175,7 @@ int vgchange(struct cmd_context *cmd, int argc, char **argv)
 	if ((cmd->command->command_enum == vgchange_activate_CMD) ||
 	    (cmd->command->command_enum == vgchange_refresh_CMD)) {
 		cmd->lockd_vg_default_sh = 1;
-		/* Allow deactivating if locks fail. */
+		/* Enforce shared lock when activating, skip it for deactivation. */
 		if (is_change_activating((activation_change_t) (uint32_t)
 					 arg_uint_value(cmd, activate_ARG, CHANGE_AY)))
 			cmd->lockd_vg_enforce_sh = 1;
@@ -1901,11 +1898,11 @@ static int _vgchange_setpersist_single(struct cmd_context *cmd, const char *vg_n
 		return ECMD_FAILED;
 	}
 
-	/* 
-	 * vgchange --setpersist y|require|autostart --persist start 
+	/*
+	 * vgchange --setpersist y|require|autostart --persist start
 	 * will start PR before changing VG.
 	 */
-	if (on && op && strcmp(op, "start")) {
+	if (on && op && !strcmp(op, "start")) {
 		if (!persist_start(cmd, vg, NULL, NULL)) {
 			log_error("Failed to start PR, VG not changed.");
 			return_ECMD_FAILED;

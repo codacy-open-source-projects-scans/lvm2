@@ -118,6 +118,21 @@ static int _linear_type_requested(const char *type_str)
 	return (!strcmp(type_str, SEG_TYPE_NAME_LINEAR));
 }
 
+static int _check_linear_and_mirrors_zero(struct cmd_context *cmd,
+					  struct lvconvert_params *lp)
+{
+	if (_linear_type_requested(lp->type_str)) {
+		if (arg_is_set(cmd, mirrors_ARG) && (arg_uint_value(cmd, mirrors_ARG, 0) != 0)) {
+			log_error("Cannot specify mirrors with linear type.");
+			return 0;
+		}
+		lp->mirrors_supplied = 1;
+		lp->mirrors = 0;
+	}
+
+	return 1;
+}
+
 static int _striped_type_requested(const char *type_str)
 {
 	return (!strcmp(type_str, SEG_TYPE_NAME_STRIPED) || _linear_type_requested(type_str));
@@ -198,11 +213,6 @@ static int _read_params(struct cmd_context *cmd, struct lvconvert_params *lp)
 		if (!arg_is_set(cmd, name_ARG) && !lp->track_changes) {
 			log_error("Please name the new logical volume using '--name'");
 			return 0;
-		}
-
-		if ((lp->lv_split_name = arg_str_value(cmd, name_ARG, NULL))) {
-			if (!validate_restricted_lvname_param(cmd, &vg_name, &lp->lv_split_name))
-				return_0;
 		}
 
 		lp->keep_mimages = 1;
@@ -1222,7 +1232,7 @@ static int _raid_split_image_conversion(struct logical_volume *lv)
 
 	if (lv_is_raid_image(lv) &&
 	    (s = strstr(lv->name, "_rimage_"))) {
-		dm_strncpy(raidlv_name, lv->name, s - lv->name);
+		dm_strncpy(raidlv_name, lv->name, s - lv->name + 1);
 
 		if (!(tmp_lv = find_lv(lv->vg, raidlv_name))) {
 			log_error("Failed to find RaidLV of RAID subvolume %s.",
@@ -1280,14 +1290,8 @@ static int _lvconvert_mirrors(struct cmd_context *cmd,
 		return 0;
 	}
 
-	if (_linear_type_requested(lp->type_str)) {
-		if (arg_is_set(cmd, mirrors_ARG) && (arg_uint_value(cmd, mirrors_ARG, 0) != 0)) {
-			log_error("Cannot specify mirrors with linear type.");
-			return 0;
-		}
-		lp->mirrors_supplied = 1;
-		lp->mirrors = 0;
-	}
+	if (!_check_linear_and_mirrors_zero(cmd, lp))
+		return 0;
 
 	/* Adjust mimage and/or log count */
 	if (!_lvconvert_mirrors_parse_params(cmd, lv, lp,
@@ -1375,14 +1379,8 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 	if (!_raid_split_image_conversion(lv))
 		return_0;
 
-	if (_linear_type_requested(lp->type_str)) {
-		if (arg_is_set(cmd, mirrors_ARG) && (arg_uint_value(cmd, mirrors_ARG, 0) != 0)) {
-			log_error("Cannot specify mirrors with linear type.");
-			return 0;
-		}
-		lp->mirrors_supplied = 1;
-		lp->mirrors = 0;
-	}
+	if (!_check_linear_and_mirrors_zero(cmd, lp))
+		return 0;
 
 	if (!_lvconvert_validate_thin(lv, lp))
 		return_0;
@@ -1442,36 +1440,36 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 		return lv_raid_split(lv, lp->yes, lp->lv_split_name, image_count, lp->pvh);
 
 	if (lp->mirrors_supplied) {
-		if (seg_is_linear(seg) || seg_is_raid1(seg)) { /* ??? */
-		if (!*lp->type_str || !strcmp(lp->type_str, SEG_TYPE_NAME_RAID1) || !strcmp(lp->type_str, SEG_TYPE_NAME_LINEAR) ||
-		    (!strcmp(lp->type_str, SEG_TYPE_NAME_STRIPED) && image_count == 1)) {
-			if (image_count > DEFAULT_RAID1_MAX_IMAGES) {
-				log_error("Only up to %u mirrors in %s LV %s supported currently.",
-					  DEFAULT_RAID1_MAX_IMAGES, lp->segtype->name, display_lvname(lv));
-				return 0;
-			}
-			if (!seg_is_raid1(seg) && lv_raid_has_integrity(lv)) {
-				log_error("Cannot add raid images with integrity for this raid level.");
-				return 0;
-			}
-			if (!lv_raid_change_image_count(lv, lp->yes, image_count,
-							(lp->region_size_supplied || !seg->region_size) ?
-							lp->region_size : seg->region_size , lp->pvh))
-				return_0;
-
-			if (lv_raid_has_integrity(lv) && !images_reduced) {
-				struct dm_integrity_settings *isettings = NULL;
-				if (!lv_get_raid_integrity_settings(lv, &isettings))
+		if (seg_is_linear(seg) || seg_is_raid1(seg)) {
+			if (!*lp->type_str || !strcmp(lp->type_str, SEG_TYPE_NAME_RAID1) || !strcmp(lp->type_str, SEG_TYPE_NAME_LINEAR) ||
+			    (!strcmp(lp->type_str, SEG_TYPE_NAME_STRIPED) && image_count == 1)) {
+				if (image_count > DEFAULT_RAID1_MAX_IMAGES) {
+					log_error("Only up to %u mirrors in %s LV %s supported currently.",
+						  DEFAULT_RAID1_MAX_IMAGES, lp->segtype->name, display_lvname(lv));
+					return 0;
+				}
+				if (!seg_is_raid1(seg) && lv_raid_has_integrity(lv)) {
+					log_error("Cannot add raid images with integrity for this raid level.");
+					return 0;
+				}
+				if (!lv_raid_change_image_count(lv, lp->yes, image_count,
+								(lp->region_size_supplied || !seg->region_size) ?
+								lp->region_size : seg->region_size , lp->pvh))
 					return_0;
-				if (!lv_add_integrity_to_raid(lv, isettings, lp->pvh, NULL))
-					return_0;
+
+				if (lv_raid_has_integrity(lv) && !images_reduced) {
+					struct dm_integrity_settings *isettings = NULL;
+					if (!lv_get_raid_integrity_settings(lv, &isettings))
+						return_0;
+					if (!lv_add_integrity_to_raid(lv, isettings, lp->pvh, NULL))
+						return_0;
+				}
+
+				log_print_unless_silent("Logical volume %s successfully converted.",
+							display_lvname(lv));
+
+				return 1;
 			}
-
-			log_print_unless_silent("Logical volume %s successfully converted.",
-						display_lvname(lv));
-
-			return 1;
-		}
 		}
 		goto try_new_takeover_or_reshape;
 	}
@@ -1902,8 +1900,7 @@ static int _lvconvert_splitsnapshot(struct cmd_context *cmd, struct logical_volu
 
 		if ((arg_count(cmd, force_ARG) == PROMPT) &&
 		    !arg_is_set(cmd, yes_ARG) &&
-		    lv_is_visible(cow) &&
-		    lv_is_active(cow)) {
+		    lv_is_visible(cow)) {
 			if (yes_no_prompt("Do you really want to split off active "
 					  "logical volume %s? [y/n]: ", display_lvname(cow)) == 'n') {
 				log_error("Logical volume %s not split.", display_lvname(cow));
@@ -3677,6 +3674,9 @@ static int _cache_vol_attach(struct cmd_context *cmd,
 	if (!get_cache_params(cmd, &chunk_size, &cache_metadata_format, &cache_mode, &policy_name, &policy_settings))
 		goto_out;
 
+	if (!archive(lv->vg))
+		goto_out;
+
 	/*
 	 * lv/cache_lv keeps the same lockd lock it had before, the lock for
 	 * lv_fast is kept but is not used while it's attached, and
@@ -5195,14 +5195,16 @@ static int _lvconvert_split_cache_single(struct cmd_context *cmd,
 		if (cmd->command->command_enum == lvconvert_split_and_remove_cache_CMD) {
 			ret = _lvconvert_split_and_remove_cachevol(cmd, lv_main, lv_fast);
 
-			log_print_unless_silent("Logical volume %s is not cached and %s is removed.",
-						display_lvname(lv), display_lvname(lv_fast));
+			if (ret)
+				log_print_unless_silent("Logical volume %s is not cached and %s is removed.",
+							display_lvname(lv), display_lvname(lv_fast));
 
 		} else if (cmd->command->command_enum == lvconvert_split_and_keep_cache_CMD) {
 			ret = _lvconvert_split_and_keep_cachevol(cmd, lv_main, lv_fast);
 
-			log_print_unless_silent("Logical volume %s is not cached and %s is unused.",
-						display_lvname(lv), display_lvname(lv_fast));
+			if (ret)
+				log_print_unless_silent("Logical volume %s is not cached and %s is unused.",
+							display_lvname(lv), display_lvname(lv_fast));
 
 		} else
 			log_error(INTERNAL_ERROR "Unknown cache split command.");
@@ -5363,6 +5365,8 @@ int lvconvert_raid_types_cmd(struct cmd_context * cmd, int argc, char **argv)
 	}
 
 	saved_ignore_suspended_devices = ignore_suspended_devices();
+	/* Same as lvconvert_repair_cmd and lvconvert_start_poll_cmd */
+	init_ignore_suspended_devices(1);
 
 	ret = process_each_lv(cmd, 1, cmd->position_argv, NULL, NULL, READ_FOR_UPDATE,
 			      handle, &_lvconvert_raid_types_check, &_lvconvert_raid_types_single);

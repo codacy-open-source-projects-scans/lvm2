@@ -124,6 +124,9 @@ const char *get_percent_string(percent_type_t def)
 {
 	static const char _percent_types[][8] = { "NONE", "VG", "FREE", "LV", "PVS", "ORIGIN" };
 
+	if (def >= DM_ARRAY_SIZE(_percent_types))
+		return "UNKNOWN";
+
 	return _percent_types[def];
 }
 
@@ -750,10 +753,6 @@ int lvdisplay_segments(const struct logical_volume *lv)
 	return 1;
 }
 
-void vgdisplay_extents(const struct volume_group *vg __attribute__((unused)))
-{
-}
-
 void vgdisplay_full(const struct volume_group *vg)
 {
 	uint32_t access_str;
@@ -1034,7 +1033,7 @@ char yes_no_prompt(const char *prompt, ...)
 
 	sigint_restore();
 
-	/* For other then Yes answer check there is really no interrupt */
+	/* For other than Yes answer check there is really no interrupt */
 	if (sig || sigint_caught()) {
 		stack;
 		ret = 'n';

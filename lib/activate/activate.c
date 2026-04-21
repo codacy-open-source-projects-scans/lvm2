@@ -938,7 +938,7 @@ int lv_info_with_seg_status(struct cmd_context *cmd,
 		/* Always collect status for '-vpool' */
 		if (_lv_info(cmd, lv, 1, &status->info, lv_seg, &status->seg_status, 0, 0, 0) &&
 		    (status->seg_status.type == SEG_STATUS_VDO_POOL)) {
-			/* There is -tpool device, but query 'active' state of 'fake' vdo-pool */
+			/* There is -vpool device, but query 'active' state of 'fake' vdo-pool */
 			if (!_lv_info(cmd, lv, 0, NULL, NULL, NULL, 0, 0, 0))
 				status->info.exists = 0; /* So VDO pool LV is not active */
 		}
@@ -965,8 +965,10 @@ int lv_check_not_in_use(const struct logical_volume *lv, int error_if_used)
 	else if (!info.open_count)
 		return 1;
 
-	/* If sysfs is not used, use open_count information only. */
-	if (dm_sysfs_dir()) {
+	/* If sysfs is not used, use open_count information only.
+	 * dm_sysfs_dir() always returns pointer to a buffer,
+	 * check if the sysfs path is not empty. */
+	if (*dm_sysfs_dir()) {
 		if (dm_device_has_holders(info.major, info.minor)) {
 			if (error_if_used)
 				log_error("Logical volume %s is used by another device.",
@@ -1130,8 +1132,8 @@ int lv_raid_data_offset(const struct logical_volume *lv, uint64_t *data_offset)
 	if (!lv_info(lv->vg->cmd, lv, 0, NULL, 0, 0))
 		return 0;
 
-	log_debug_activation("Checking raid data offset and dev sectors for LV %s/%s",
-			     lv->vg->name, lv->name);
+	log_debug_activation("Checking raid data offset and dev sectors for LV %s.",
+			     display_lvname(lv));
 
 	if (!lv_raid_status(lv, &raid_status))
                 return_0;
@@ -1179,8 +1181,8 @@ int lv_raid_dev_count(const struct logical_volume *lv, uint32_t *dev_cnt)
 	if (!lv_info(lv->vg->cmd, lv, 0, NULL, 0, 0))
 		return 0;
 
-	log_debug_activation("Checking raid device count for LV %s/%s",
-			     lv->vg->name, lv->name);
+	log_debug_activation("Checking raid device count for LV %s.",
+			     display_lvname(lv));
 
 	if (!lv_raid_status(lv, &raid_status))
 		return_0;
@@ -1942,7 +1944,7 @@ int monitor_dev_for_events(struct cmd_context *cmd, const struct logical_volume 
 	/* Do not monitor snapshot that already covers origin */
 	if (monitor && lv_is_cow_covering_origin(lv)) {
 		log_debug_activation("Skipping monitor of snapshot larger "
-				     "then origin %s.", display_lvname(lv));
+				     "than origin %s.", display_lvname(lv));
 		return 1;
 	}
 
@@ -2514,7 +2516,7 @@ static int _lv_has_open_snapshots(const struct logical_volume *lv)
 			r++;
 
 	if (r)
-		log_error("LV %s has open %d snapshot(s), not deactivating.",
+		log_error("LV %s has %d open snapshot(s), not deactivating.",
 			  display_lvname(lv), r);
 
 	return r;
@@ -2790,10 +2792,18 @@ int lv_mknodes(struct cmd_context *cmd, const struct logical_volume *lv)
 	return r;
 }
 
-/* Remove any existing, closed mapped device by @name */
+/*
+ * Remove any existing, closed mapped device by @name.
+ *
+ * TODO: missing devices should be tracked in the DM tree and removed
+ * automatically by the CLEAN action instead of this name-guessing hack.
+ * Current approach may leak devices if they are dropped via lvconvert
+ * or other operations that don't call lv_deactivate_any_missing_subdevs().
+ */
 static int _remove_dm_dev_by_name(const char *name)
 {
 	int r = 0;
+	uint32_t cookie;
 	struct dm_task *dmt;
 	struct dm_info info;
 
@@ -2811,8 +2821,11 @@ static int _remove_dm_dev_by_name(const char *name)
 		if (!(dmt = dm_task_create(DM_DEVICE_REMOVE)))
 			return_0;
 
-		if (dm_task_set_name(dmt, name))
+		cookie = fs_get_cookie();
+		if (dm_task_set_name(dmt, name) &&
+		    dm_task_set_cookie(dmt, &cookie, 0))
 			r = dm_task_run(dmt);
+		fs_set_cookie(cookie);
 	}
 
 	dm_task_destroy(dmt);

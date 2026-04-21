@@ -24,7 +24,7 @@
 #include "lib/misc/lvm-exec.h"
 #include "lib/metadata/lv_alloc.h"
 
-#include <sys/sysinfo.h> // sysinfo
+#include <sys/sysinfo.h>
 #include <stdarg.h>
 
 /* VDO memory calculation constants */
@@ -191,9 +191,9 @@ static int _sysfs_get_kvdo_value(const char *dm_name, const struct dm_info *dmin
 	}
 	temp[size] = 0;
 	errno = 0;
-	*value = strtoll(temp, NULL, 0);
+	*value = strtoull(temp, NULL, 0);
 	if (errno) {
-		log_sys_debug("strtool", path);
+		log_sys_debug("strtoull", path);
 		goto bad;
 	}
 
@@ -321,10 +321,10 @@ static int _format_vdo_pool_data_lv(struct logical_volume *data_lv,
 		return 0;
 	}
 
-	argv[args] = dpath;
+	argv[++args] = dpath;
 
 	if (!(f = pipe_open(data_lv->vg->cmd, argv, 0, &pdata))) {
-		log_error("WARNING: Cannot read output from %s.", argv[0]);
+		log_error("Cannot read output from %s.", argv[0]);
 		return 0;
 	}
 
@@ -357,7 +357,7 @@ static int _format_vdo_pool_data_lv(struct logical_volume *data_lv,
 	}
 
 	if (logical_size_aligned) {
-		// align obtained size to extent size
+		/* align obtained size to extent size */
 		logical_size_aligned = *logical_size / data_lv->vg->extent_size * data_lv->vg->extent_size;
 		if (*logical_size != logical_size_aligned) {
 			log_debug("Using bigger VDO virtual size unaligned on extent size by %s.",
@@ -398,7 +398,7 @@ int convert_vdo_pool_lv(struct logical_volume *data_lv,
 	adjust = (*virtual_extents * (uint64_t) extent_size) % DM_VDO_BLOCK_SIZE;
 	if (adjust) {
 		*virtual_extents += (DM_VDO_BLOCK_SIZE - adjust) / extent_size;
-		log_print_unless_silent("Rounding size up to 4,00 KiB VDO logical extent boundary: %s.",
+		log_print_unless_silent("Rounding size up to 4 KiB VDO logical extent boundary: %s.",
 					display_size(data_lv->vg->cmd, *virtual_extents * (uint64_t) extent_size));
 	}
 
@@ -440,7 +440,7 @@ int convert_vdo_pool_lv(struct logical_volume *data_lv,
 			log_error("Cannot create fully fitting VDO volume, "
 				  "--virtualsize has to be specified.");
 
-		log_error("Size %s for VDO volume cannot be smaller then extent size %s.",
+		log_error("Size %s for VDO volume cannot be smaller than extent size %s.",
 			  display_size(data_lv->vg->cmd, vdo_logical_size),
 			  display_size(data_lv->vg->cmd, extent_size));
 		return 0;
@@ -605,8 +605,8 @@ int fill_vdo_target_params(struct cmd_context *cmd,
 {
 	const char *policy;
 
-	// TODO: Postpone filling data to the moment when VG is known with profile.
-	// TODO: Maybe add more lvm cmdline switches to set profile settings.
+	/* TODO: Postpone filling data to the moment when VG is known with profile. */
+	/* TODO: Maybe add more lvm cmdline switches to set profile settings. */
 
 	vtp->use_compression =
 		find_config_tree_int(cmd, allocation_vdo_use_compression_CFG, profile);
@@ -715,14 +715,14 @@ static int _get_memory_info(struct cmd_context *cmd, uint64_t *total_mb, uint64_
 			break;
 
 		if ((unsigned)(++e - line) > sizeof(namebuf))
-			continue; // something too long
+			continue; /* something too long */
 
 		dm_strncpy((char*)findme.name, line, e - line);
 
 		found = bsearch(&findme, mt, DM_ARRAY_SIZE(mt), sizeof(mem_table_t),
 				_compare_mem_table_s);
 		if (!found)
-			continue; // not interesting
+			continue; /* not interesting */
 
 		errno = 0;
 		*(found->value) = (uint64_t) strtoull(e, &tail, 10);
@@ -734,14 +734,14 @@ static int _get_memory_info(struct cmd_context *cmd, uint64_t *total_mb, uint64_
 	}
 	(void)fclose(fp);
 
-	// use at most 2/3 of swap space to keep machine usable
+	/* use at most 2/3 of swap space to keep machine usable */
 	can_swap = (anon_pages + shmem) * VDO_SWAP_USAGE_FRACTION;
 	swap_free = swap_free * VDO_SWAP_USAGE_FRACTION;
 
 	if (can_swap > swap_free)
 		can_swap = swap_free;
 
-	// TODO: add more constrains, i.e. 3/4 of physical RAM...
+	/* TODO: add more constrains, i.e. 3/4 of physical RAM... */
 
 	*total_mb = mem_total >> 10;
 	*available_mb = (mem_available + can_swap) >> 10;
@@ -791,9 +791,9 @@ int check_vdo_constrains(struct cmd_context *cmd, const struct vdo_pool_size_con
 	int cnt, has_cnt;
 
 	if (cfg->block_map_cache_size_mb && (cache_mb < VDO_MIN_CACHE_MEMORY_MB))
-		cache_mb = VDO_MIN_CACHE_MEMORY_MB; // always at least 150 MiB for block map
+		cache_mb = VDO_MIN_CACHE_MEMORY_MB; /* always at least 150 MiB for block map */
 
-	// total required memory for VDO target
+	/* total required memory for VDO target */
 	req_mb = VDO_BASE_MEMORY_OVERHEAD_MB + cfg->index_memory_size_mb + virt_mb + phy_mb + cache_mb;
 
 	_get_memory_info(cmd, &total_mb, &available_mb);

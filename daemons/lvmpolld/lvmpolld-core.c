@@ -326,15 +326,11 @@ static int poll_for_output(struct lvmpolld_lv *pdlv, struct lvmpolld_thread_data
 
 	DEBUGLOG(pdlv->ls, "%s: %s", PD_LOG_PREFIX, "about to collect remaining lines");
 	if (fds[0].fd >= 0)
-		while (read_single_line(data, 0)) {
-			assert(r > 0);
+		while (read_single_line(data, 0))
 			INFO(pdlv->ls, "%s: PID %d: %s: %s", LVM2_LOG_PREFIX, pdlv->cmd_pid, "STDOUT", data->line);
-		}
 	if (fds[1].fd >= 0)
-		while (read_single_line(data, 1)) {
-			assert(r > 0);
+		while (read_single_line(data, 1))
 			WARN(pdlv->ls, "%s: PID %d: %s: %s", LVM2_LOG_PREFIX, pdlv->cmd_pid, "STDERR", data->line);
-		}
 
 	if (WIFEXITED(ch_stat)) {
 		cmd_state.retcode = WEXITSTATUS(ch_stat);
@@ -604,13 +600,14 @@ static int spawn_detached_thread(struct lvmpolld_lv *pdlv)
 	if (pthread_attr_init(&attr) != 0)
 		return 0;
 
-	if (pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) != 0)
+	if (pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) != 0) {
+		pthread_attr_destroy(&attr);
 		return 0;
+	}
 
 	r = pthread_create(&pdlv->tid, &attr, fork_and_poll, (void *)pdlv);
 
-	if (pthread_attr_destroy(&attr) != 0)
-		return 0;
+	pthread_attr_destroy(&attr);
 
 	return !r;
 }

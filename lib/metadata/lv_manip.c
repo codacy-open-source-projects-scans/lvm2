@@ -1773,10 +1773,16 @@ int lv_refresh_suspend_resume(const struct logical_volume *lv)
 	/*
 	 * Remove any transiently activated error
 	 * devices which aren't used any more.
+	 * Flush the activation udev cookie first so the
+	 * missing device removal uses a separate cookie.
 	 */
-	if (lv_is_raid(lv) && !lv_deactivate_any_missing_subdevs(lv)) {
-		log_error("Failed to remove temporary SubLVs from %s", display_lvname(lv));
-		return 0;
+	if (lv_is_raid(lv)) {
+		sync_local_dev_names(lv->vg->cmd);
+		if (!lv_deactivate_any_missing_subdevs(lv)) {
+			log_error("Failed to remove temporary SubLVs from %s.",
+				  display_lvname(lv));
+			return 0;
+		}
 	}
 
 	return 1;
@@ -5271,7 +5277,7 @@ static uint32_t _lvseg_get_stripes(struct lv_segment *seg, uint32_t *stripesize)
 
 	if (seg_is_raid(seg)) {
 		*stripesize = seg->stripe_size;
-		return _raid_stripes_count(seg); 
+		return _raid_stripes_count(seg);
 	}
 
 	*stripesize = 0;
@@ -5735,7 +5741,7 @@ static int _lvresize_adjust_extents(struct logical_volume *lv,
 		/* Segment size in extents must be divisible by stripes */
 		stripes_extents = lp->stripes;
 		if (lp->stripe_size > vg->extent_size)
-			/* Strip size is bigger then extent size needs more extents */
+			/* Strip size is bigger than extent size needs more extents */
 			stripes_extents *= (lp->stripe_size / vg->extent_size);
 
 		size_rest = seg_size % stripes_extents;
@@ -5979,11 +5985,11 @@ static int _lv_resize_check_type(struct logical_volume *lv,
 			return 0;
 		}
 
-		/* Validate thin target supports bigger size of thin volume then external origin */
+		/* Validate thin target supports bigger size of thin volume than external origin */
 		if (lv_is_thin_volume(lv) && first_seg(lv)->external_lv &&
 		    (lp->extents > first_seg(lv)->external_lv->le_count) &&
 		    !thin_pool_feature_supported(first_seg(lv)->pool_lv, THIN_FEATURE_EXTERNAL_ORIGIN_EXTEND)) {
-			log_error("Thin target does not support external origin smaller then thin volume.");
+			log_error("Thin target does not support external origin smaller than thin volume.");
 			return 0;
 		}
 	}
@@ -6549,13 +6555,10 @@ static int _fs_extend_allow(struct cmd_context *cmd, struct logical_volume *lv,
 static int _fs_reduce(struct cmd_context *cmd, struct logical_volume *lv,
 		      struct lvresize_params *lp)
 {
-	struct fs_info fsinfo;
-	struct fs_info fsinfo2;
+	struct fs_info fsinfo = { 0 };
+	struct fs_info fsinfo2 =  { 0 };
 	uint64_t newsize_bytes_lv;
 	int ret = 0;
-
-	memset(&fsinfo, 0, sizeof(fsinfo));
-	memset(&fsinfo2, 0, sizeof(fsinfo));
 
 	if (!fs_get_info(cmd, lv, &fsinfo))
 		goto_out;
@@ -8484,7 +8487,7 @@ int remove_layer_from_lv(struct logical_volume *lv,
 	 */
 	if (!strstr(layer_lv->name, "_mimage")) {
 		for (r = 0; r < DM_ARRAY_SIZE(_suffixes); ++r) {
-			if (strstr(layer_lv->name, _suffixes[r]) == 0) {
+			if (strstr(layer_lv->name, _suffixes[r])) {
 				lv_names.old = layer_lv->name;
 				lv_names.new = parent_lv->name;
 				if (!for_each_sub_lv(parent_lv, _rename_skip_pools_externals_cb, (void *) &lv_names))
@@ -9032,7 +9035,8 @@ int wipe_lv(struct logical_volume *lv, struct wipe_params wp)
 						log_debug("Falling back to direct zeroing.");
 					}
 
-					goto retry_with_dev_set; 				}
+					goto retry_with_dev_set;
+				}
 			}
 		} else
 retry_with_dev_set:
@@ -9524,7 +9528,7 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 			return_NULL;
 
 		if (origin_lv->size < lp->chunk_size) {
-			log_error("Caching of origin cache volume smaller then chunk size is unsupported.");
+			log_error("Caching of origin cache volume smaller than chunk size is unsupported.");
 			return NULL;
 		}
 	} else if (seg_is_cache(lp)) {
@@ -9540,11 +9544,11 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 		/* Create cache origin for cache pool */
 		/* FIXME Eventually support raid/mirrors with -m */
 		if (!(create_segtype = get_segtype_from_string(vg->cmd, SEG_TYPE_NAME_STRIPED)))
-			return_0;
+			return_NULL;
 
 	} else if (seg_is_integrity(lp)) {
 		if (!(create_segtype = get_segtype_from_string(vg->cmd, SEG_TYPE_NAME_STRIPED)))
-			return_0;
+			return_NULL;
 
 	} else if (seg_is_mirrored(lp) || (seg_is_raid(lp) && !seg_is_any_raid0(lp))) {
 		if (!(lp->region_size = adjusted_mirror_region_size(vg->cmd,
@@ -9595,7 +9599,7 @@ static struct logical_volume *_lv_create_an_lv(struct volume_group *vg,
 			}
 
 			if (!validate_snapshot_origin(origin_lv))
-                                return_0;
+				return_NULL;
 		}
 
 		if (!cow_has_min_chunks(vg, lp->extents, lp->chunk_size))

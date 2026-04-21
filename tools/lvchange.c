@@ -292,15 +292,12 @@ static int _attach_metadata_devices(struct lv_segment *seg, struct dm_list *list
 	return 1;
 }
 
-static int _reactivate_lv(struct logical_volume *lv,
-			  int active, int exclusive)
+static int _reactivate_lv(struct logical_volume *lv, int active)
 {
-	struct cmd_context *cmd = lv->vg->cmd;
-
 	if (!active)
 		return 1;
 
-	return activate_lv(cmd, lv);
+	return activate_lv(lv->vg->cmd, lv);
 }
 
 /*
@@ -313,7 +310,6 @@ static int _reactivate_lv(struct logical_volume *lv,
 static int _lvchange_resync(struct cmd_context *cmd, struct logical_volume *lv)
 {
 	int active = 0;
-	int exclusive = 0;
 	int monitored;
 	struct lv_segment *seg = first_seg(lv);
 	struct dm_list device_list;
@@ -337,14 +333,6 @@ static int _lvchange_resync(struct cmd_context *cmd, struct logical_volume *lv)
 		}
 
 		active = 1;
-		if (lv_is_active(lv))
-			exclusive = 1;
-	}
-
-	if (seg_is_raid(seg) && active && !exclusive) {
-		log_error("RAID logical volume %s cannot be active remotely.",
-			  display_lvname(lv));
-		return 0;
 	}
 
 	/* Activate exclusively to ensure no nodes still have LV active */
@@ -379,10 +367,10 @@ static int _lvchange_resync(struct cmd_context *cmd, struct logical_volume *lv)
 		if (lv_is_not_synced(lv)) {
 			lv->status &= ~LV_NOTSYNCED;
 			if (!_vg_write_commit(lv, NULL))
-				return 0;
+				return_0;
 		}
 
-		if (!_reactivate_lv(lv, active, exclusive)) {
+		if (!_reactivate_lv(lv, active)) {
 			log_error("Failed to reactivate %s to resynchronize mirror.",
 				  display_lvname(lv));
 			return 0;
@@ -406,7 +394,7 @@ static int _lvchange_resync(struct cmd_context *cmd, struct logical_volume *lv)
 	}
 
 	if (!_vg_write_commit(lv, "intermediate")) {
-		if (!_reactivate_lv(lv, active, exclusive))
+		if (!_reactivate_lv(lv, active))
 			stack;
 		return 0;
 	}
@@ -415,7 +403,7 @@ static int _lvchange_resync(struct cmd_context *cmd, struct logical_volume *lv)
 	memlock_unlock(lv->vg->cmd);
 
 	if (!activate_and_wipe_lvlist(&device_list, WIPE_MODE_DO_ZERO, 0, PROMPT))
-		return 0;
+		return_0;
 
 	/* Put metadata sub-LVs back in place */
 	if (!_attach_metadata_devices(seg, &device_list)) {
@@ -427,9 +415,9 @@ static int _lvchange_resync(struct cmd_context *cmd, struct logical_volume *lv)
 	lv->status &= ~LV_ACTIVATION_SKIP;
 
 	if (!_vg_write_commit(lv, NULL))
-		return 0;
+		return_0;
 
-	if (!_reactivate_lv(lv, active, exclusive)) {
+	if (!_reactivate_lv(lv, active)) {
 		backup(lv->vg);
 		log_error("Failed to reactivate %s after resync.",
 			  display_lvname(lv));
@@ -592,7 +580,7 @@ static int _lvchange_persistent(struct cmd_context *cmd,
 	}
 
 	if (!_vg_write_commit(lv, NULL))
-		return 0;
+		return_0;
 
 	if (activate != CHANGE_AN) {
 		log_verbose("Re-activating logical volume %s.", display_lvname(lv));
@@ -747,11 +735,11 @@ static int _lvchange_cache(struct cmd_context *cmd,
 	    (mode != setting_seg->cache_mode) &&
 	    lv_is_cache(lv)) {
 		if (!lv_cache_wait_for_clean(lv, &is_clean))
-			return_0;
+			goto_out;
 		if (!is_clean) {
 			log_error("Cache %s is not clean, refusing to switch cache mode.",
 				  display_lvname(lv));
-			return 0;
+			goto out;
 		}
 	}
 
@@ -1163,7 +1151,7 @@ static int _lvchange_activation_skip(struct logical_volume *lv, uint32_t *mr)
 	lv_set_activation_skip(lv, 1, skip);
 
 	log_verbose("Changing activation skip flag to %s for LV %s.",
-		    display_lvname(lv), skip ? "enabled" : "disabled");
+		    skip ? "enabled" : "disabled", display_lvname(lv));
 
 	/* Request caller to commit+backup metadata */
 	*mr |= MR_COMMIT;
@@ -1185,7 +1173,7 @@ static int _lvchange_autoactivation(struct logical_volume *lv, uint32_t *mr)
 		lv->status &= ~LV_NOAUTOACTIVATE;
 
 	log_verbose("Changing autoactivation flag to %s for LV %s.",
-		    display_lvname(lv), aa_no_arg ? "no" : "yes");
+		    aa_no_arg ? "no" : "yes", display_lvname(lv));
 
 	/* Request caller to commit+backup metadata */
 	*mr |= MR_COMMIT;
@@ -1258,7 +1246,7 @@ static int _commit_reload(struct logical_volume *lv, uint32_t mr)
 
 	} else if ((mr & MR_COMMIT) &&
 		   !_vg_write_commit(lv, NULL))
-		return 0;
+		return_0;
 
 	return 1;
 }
@@ -1457,7 +1445,7 @@ static int _lvchange_properties_single(struct cmd_context *cmd,
 
 		default:
 			log_error(INTERNAL_ERROR "Failed to check for option %s",
-				  arg_long_option_name(i));
+				  arg_long_option_name(opt_enum));
 		}
 	}
 
@@ -1527,7 +1515,7 @@ static int _lvchange_properties_single(struct cmd_context *cmd,
 			break;
 		default:
 			log_error(INTERNAL_ERROR "Failed to check for option %s",
-				  arg_long_option_name(i));
+				  arg_long_option_name(opt_enum));
 		}
 
 		/* Display any logical volume change unless already displayed in step 1. */

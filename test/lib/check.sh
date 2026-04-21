@@ -336,7 +336,7 @@ lv_first_seg_field() {
 	local actual
 	actual=$(get lv_first_seg_field "$1" "$2" "${@:4}")
 	[[ "$actual" = "$3" ]] || \
-		die "lv_field: lv=$1, field=\"$2\", actual=\"$actual\", expected=\"$3\""
+		die "lv_first_seg_field: lv=$1, field=\"$2\", actual=\"$actual\", expected=\"$3\""
 }
 
 lvh_field() {
@@ -444,7 +444,7 @@ raid_leg_status() {
 	# Ignore inconsistent raid status 0/xxxxx idle
 	for i in {100..0} ; do
 		st=( $(dmsetup status --noflush "$1-$2") ) || \
-			die "Unable to get status of $vg/$lv1"
+			die "Unable to get status of $1/$2"
 		case "${st[7]}" in
 			"resync"|"recover") [ "${st[5]}" = "$3" ] && return 0 ;;
 		esac

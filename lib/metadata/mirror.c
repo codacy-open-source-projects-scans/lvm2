@@ -113,7 +113,7 @@ struct lv_segment *find_mirror_seg(struct lv_segment *seg)
 	}
 
 	if (!seg_is_mirrored(mirror_seg)) {
-		log_error("LV %s on %s is not a mirror segments.",
+		log_error("LV %s on %s is not a mirror segment.",
 			  display_lvname(mirror_seg->lv),
 			  display_lvname(seg->lv));
 		return NULL;
@@ -552,7 +552,7 @@ struct logical_volume *detach_mirror_log(struct lv_segment *mirrored_seg)
 	lv_set_visible(log_lv);
 	log_lv->status &= ~MIRROR_LOG;
 	if (!remove_seg_from_segs_using_this_lv(log_lv, mirrored_seg))
-		return_0;
+		return_NULL;
 
 	return log_lv;
 }
@@ -684,7 +684,7 @@ static int _split_mirror_images(struct logical_volume *lv,
 		return 0;
 	}
 
-	log_verbose("Detaching %d images from mirror %s.",
+	log_verbose("Detaching %u images from mirror %s.",
 		    split_count, display_lvname(lv));
 
 	if (!_move_removable_mimages_to_end(lv, split_count, removable_pvs)) {
@@ -1723,7 +1723,7 @@ static int _form_mirror(struct cmd_context *cmd, struct alloc_handle *ah,
 	/*
 	 * create mirror image LVs
 	 */
-	img_lvs = alloca(sizeof(*img_lvs) * (mirrors + 1));
+	img_lvs = alloca(sizeof(*img_lvs) * mirrors);
 	memset(img_lvs, 0, sizeof(*img_lvs) * mirrors);
 
 	if (!_create_mimage_lvs(ah, mirrors, stripes, stripe_size, lv, img_lvs, log))
@@ -2152,7 +2152,7 @@ int lv_remove_mirrors(struct cmd_context *cmd __attribute__((unused)),
 	}
 
 	if (lv_mirror_count(lv) <= mirrors) {
-		log_error("Removing more than existing: %d <= %d.",
+		log_error("Removing more than existing: %u <= %u.",
 			  seg->area_count, mirrors);
 		return 0;
 	}

@@ -106,7 +106,7 @@ void lvmlockd_init(struct cmd_context *cmd)
 		_lvmlockd_init_failed = 1;
 	}
 
-	if (!!access(LVMLOCKD_PIDFILE, F_OK)) {
+	if (access(LVMLOCKD_PIDFILE, F_OK)) {
 		log_warn("WARNING: lvmlockd process is not running.");
 		_lvmlockd_init_failed = 1;
 	} else {
@@ -305,7 +305,7 @@ static char *_owner_str(struct owner *owner)
 
 	/* Use a --lockopt setting to print all owner details? */
 
-	snprintf(log_owner_str, sizeof(log_owner_str)-1, " (host_id %u)", owner->host_id);
+	snprintf(log_owner_str, sizeof(log_owner_str), " (host_id %u)", owner->host_id);
 	return log_owner_str;
 }
 
@@ -1309,7 +1309,7 @@ static int _free_vg(struct cmd_context *cmd, struct volume_group *vg)
 
 	daemon_reply_destroy(reply);
 
-	return 1;
+	return ret;
 }
 
 static int _free_vg_dlm(struct cmd_context *cmd, struct volume_group *vg)

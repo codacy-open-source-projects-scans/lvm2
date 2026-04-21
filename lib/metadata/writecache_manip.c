@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014-2015 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2019-2024 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -57,7 +57,7 @@ int lv_is_writecache_cachevol(const struct logical_volume *lv)
 }
 
 static int _get_writecache_kernel_status(struct cmd_context *cmd,
-					 struct logical_volume *lv,
+					 const struct logical_volume *lv,
 					 struct dm_status_writecache *status_out)
 {
 	struct lv_with_info_and_seg_status status = {
@@ -66,8 +66,7 @@ static int _get_writecache_kernel_status(struct cmd_context *cmd,
 
 	status.seg_status.seg = first_seg(lv);
 
-	/* FIXME: why reporter_pool? */
-	if (!(status.seg_status.mem = dm_pool_create("reporter_pool", 1024))) {
+	if (!(status.seg_status.mem = dm_pool_create("writecache_status", 1024))) {
 		log_error("Failed to get mem for LV status.");
 		return 0;
 	}
@@ -102,7 +101,7 @@ fail:
 }
 
 static int _get_writecache_kernel_error(struct cmd_context *cmd,
-					struct logical_volume *lv,
+					const struct logical_volume *lv,
 					uint32_t *kernel_error)
 {
 	struct dm_status_writecache status = { 0 };
@@ -332,7 +331,7 @@ static int _lv_detach_writecache_cachevol_active(struct logical_volume *lv, int 
 
 	log_debug("Checking writecache errors to detach.");
 
-	if (!_get_writecache_kernel_error(cmd, (struct logical_volume *)lv_old, &kernel_error)) {
+	if (!_get_writecache_kernel_error(cmd, lv_old, &kernel_error)) {
 		log_error("Failed to get writecache error status for %s.", display_lvname(lv_old));
 		return 0;
 	}
@@ -416,20 +415,14 @@ int lv_writecache_set_cleaner(struct logical_volume *lv)
 	seg->writecache_settings.cleaner = 1;
 	seg->writecache_settings.cleaner_set = 1;
 
-	if (lv_is_active(lv)) {
-		if (!vg_write(lv->vg) || !vg_commit(lv->vg)) {
-			log_error("Failed to update VG.");
-			return 0;
-		}
-		if (!lv_writecache_message(lv, "cleaner")) {
-			log_error("Failed to set writecache cleaner for %s.", display_lvname(lv));
-			return 0;
-		}
-	} else {
-		if (!vg_write(lv->vg) || !vg_commit(lv->vg)) {
-			log_error("Failed to update VG.");
-			return 0;
-		}
+	if (!vg_write(lv->vg) || !vg_commit(lv->vg)) {
+		log_error("Failed to update VG.");
+		return 0;
+	}
+
+	if (lv_is_active(lv) && !lv_writecache_message(lv, "cleaner")) {
+		log_error("Failed to set writecache cleaner for %s.", display_lvname(lv));
+		return 0;
 	}
 	return 1;
 }
@@ -487,7 +480,7 @@ int writecache_settings_to_str_list(struct dm_writecache_settings *settings, str
 			errors++;
 
 	if (errors)
-		log_warn("Failed to create list of writecache settings.");
+		log_warn("WARNING: Failed to create list of writecache settings.");
 
 	return 1;
 }

@@ -1410,7 +1410,7 @@ int lvm_register_commands(struct cmd_context *cmd, const char *run_name)
 	}
 
 	/* Sort all commands by its name for quick binary search */
-	qsort(commands_idx, COMMAND_COUNT, sizeof(long), _command_name_compare);
+	qsort(commands_idx, COMMAND_COUNT, sizeof(*commands_idx), _command_name_compare);
 
 	for (i = 0; i < LVM_COMMAND_COUNT; ++i)
 		_set_valid_args_for_command_name(i);
@@ -3243,8 +3243,10 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	if (cmd->degraded_activation)
 		log_debug("DEGRADED MODE. Incomplete RAID LVs will be processed.");
 
-	if (!get_activation_monitoring_mode(cmd, &monitoring))
+	if (!get_activation_monitoring_mode(cmd, &monitoring)) {
+		ret = ECMD_FAILED;
 		goto_out;
+	}
 	init_dmeventd_monitor(monitoring);
 
 	log_debug("Processing command: %s", cmd->cmd_line);
@@ -3265,6 +3267,7 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	    !(cmd->cname->flags & PERMITTED_READ_ONLY)) {
 		log_error("%s: Command not permitted while global/metadata_read_only "
 			  "is set.", cmd->cmd_line);
+		ret = ECMD_FAILED;
 		goto out;
 	}
 
@@ -3336,7 +3339,7 @@ int lvm_run_command(struct cmd_context *cmd, int argc, char **argv)
 	dev_mpath_exit();
 	hints_exit(cmd);
 	lvmcache_destroy(cmd, 1, 1);
-	label_scan_destroy(cmd);
+	label_scan_drop(cmd);
 	devices_file_exit(cmd);
 
 	if ((config_string_cft = remove_config_tree_by_source(cmd, CONFIG_STRING)))

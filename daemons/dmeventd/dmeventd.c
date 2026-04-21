@@ -106,7 +106,6 @@ static int _systemd_activation = 0;
 static int _foreground = 0;
 static time_t _idle_since = 0;
 static const char *_exit_on = DEFAULT_DMEVENTD_EXIT_ON_PATH;
-static char **_initial_registrations = 0;
 
 /* FIXME Make configurable at runtime */
 
@@ -1169,6 +1168,7 @@ static int _event_wait(struct thread_status *thread)
 			dm_task_set_event_nr(thread->wait_task, info.event_nr);
 	} else {
 		switch (dm_task_get_errno(thread->wait_task)) {
+		case ENODEV:
 		case ENXIO:
 disappeared:
 			log_error("%s disappeared, detaching.",
@@ -2014,8 +2014,7 @@ static int _client_read(struct dm_event_fifos *fifos,
 
 	msg->data = NULL;
 
-	errno = 0;
-	while (bytes < size && errno != EOF) {
+	while (bytes < size) {
 		/* Watch client read FIFO for input. */
 		ret = poll(&pfd, 1,
 			   (_exit_now > DM_SIGNALED_EXIT) ? 10 : 1000);
@@ -2026,8 +2025,13 @@ static int _client_read(struct dm_event_fifos *fifos,
 		if (ret <= 0)	/* nothing to read */
 			goto bad;
 
+		if (pfd.revents & (POLLHUP | POLLERR))
+			goto bad;
+
 		ret = read(fifos->client, buf + bytes, size - bytes);
-		bytes += ret > 0 ? ret : 0;
+		if (ret <= 0)
+			goto bad;
+		bytes += ret;
 		if (!msg->data && (bytes == 2 * sizeof(uint32_t))) {
 			msg->cmd = ntohl(header[0]);
 			bytes = 0;
@@ -2217,19 +2221,35 @@ static void _process_request(struct dm_event_fifos *fifos)
 	}
 }
 
-static void _process_initial_registrations(void)
+static void _free_registrations(char **regs)
+{
+	int i;
+
+	if (regs) {
+		for (i = 0; regs[i]; ++i)
+			free(regs[i]);
+		free(regs);
+	}
+}
+
+static void _process_initial_registrations(char **regs)
 {
 	int i;
 	char *reg;
 	struct dm_event_daemon_message msg = { 0 };
 
-	for (i = 0; (reg = _initial_registrations[i]); ++i) {
+	for (i = 0; (reg = regs[i]); ++i) {
 		msg.cmd = DM_EVENT_CMD_REGISTER_FOR_EVENT;
 		if ((msg.size = strlen(reg))) {
-			msg.data = reg;
+			if (!(msg.data = strdup(reg)))
+				continue;
 			_do_process_request(&msg);
+			free(msg.data);
+			msg.data = NULL;
 		}
 	}
+
+	_free_registrations(regs);
 }
 
 /*
@@ -2528,7 +2548,8 @@ static void _daemonize(void)
 	/* coverity[leaked_handle] 'null_fd' is stdin/stdout/stderr */
 }
 
-static int _reinstate_registrations(struct dm_event_fifos *fifos)
+static int _reinstate_registrations(struct dm_event_fifos *fifos,
+				    char **regs)
 {
 	static const char _failed_parsing_msg[] = "Failed to parse existing event registration.\n";
 	static const char _delim[] = " ";
@@ -2546,8 +2567,8 @@ static int _reinstate_registrations(struct dm_event_fifos *fifos)
 		return 0;
 	}
 
-	for (i = 0; _initial_registrations[i]; ++i) {
-		if (!(strtok(_initial_registrations[i], _delim)) ||
+	for (i = 0; regs[i]; ++i) {
+		if (!(strtok(regs[i], _delim)) ||
 		    !(dso_name = strtok(NULL, _delim)) ||
 		    !(dev_name = strtok(NULL, _delim)) ||
 		    !(mask = strtok(NULL, _delim)) ||
@@ -2576,6 +2597,8 @@ static int _reinstate_registrations(struct dm_event_fifos *fifos)
 				(enum dm_event_mask) mask_value,
 				timeout_value))
 			fprintf(stderr, "Failed to reinstate monitoring for device %s.\n", dev_name);
+		free(msg.data);
+		msg.data = NULL;
 	}
 
 	return 1;
@@ -2653,9 +2676,11 @@ out:
 }
 
 /* Return   0 - fail, 1 - success, 2 - continue */
-static int _restart_dmeventd(struct dm_event_fifos *fifos)
+static int _restart_dmeventd(struct dm_event_fifos *fifos,
+			     char ***initial_regs)
 {
 	struct dm_event_daemon_message msg = { 0 };
+	char **regs = NULL;
 	int i, count = 0;
 	char *message;
 	int version;
@@ -2696,13 +2721,13 @@ static int _restart_dmeventd(struct dm_event_fifos *fifos)
 			++count;
 		}
 
-	if (!(_initial_registrations = zalloc(sizeof(char*) * (count + 1)))) {
+	if (!(regs = zalloc(sizeof(char*) * (count + 1)))) {
 		fprintf(stderr, "Memory allocation registration failed.\n");
 		goto bad;
 	}
 
 	for (i = 0; i < count; ++i) {
-		if (!(_initial_registrations[i] = strdup(message))) {
+		if (!(regs[i] = strdup(message))) {
 			fprintf(stderr, "Memory allocation for message failed.\n");
 			goto bad;
 		}
@@ -2719,6 +2744,8 @@ static int _restart_dmeventd(struct dm_event_fifos *fifos)
 		}
 		if (msg.data && strstr(msg.data, "exec_method=systemd"))
 			_systemd_activation = 1;
+		free(msg.data);
+		msg.data = NULL;
 	}
 #ifdef __linux__
 	/*
@@ -2737,6 +2764,8 @@ static int _restart_dmeventd(struct dm_event_fifos *fifos)
 		fprintf(stderr, "Old dmeventd refused to die.\n");
 		goto bad;
 	}
+	free(msg.data);
+	msg.data = NULL;
 
 	if (!_systemd_activation &&
 	    ((e = getenv(SD_ACTIVATION_ENV_VAR_NAME)) && !strcmp(e, "1")))
@@ -2747,23 +2776,29 @@ static int _restart_dmeventd(struct dm_event_fifos *fifos)
 	/* Give a few seconds dmeventd to finish */
 	_wait_for_new_pid();
 
-	if (!_systemd_activation)
-		return 2; // continue with dmeventd start up
+	if (!_systemd_activation) {
+		*initial_regs = regs;
+		return 2; /* continue with dmeventd start up */
+	}
 
 	/* Reopen fifos. */
 	if (!init_fifos(fifos)) {
 		fprintf(stderr, "Could not initiate communication with new instance of dmeventd.\n");
+		_free_registrations(regs);
 		return 0;
 	}
 
-	if (!_reinstate_registrations(fifos)) {
+	if (!_reinstate_registrations(fifos, regs)) {
 		fprintf(stderr, "Failed to reinstate monitoring with new instance of dmeventd.\n");
 		goto bad;
 	}
 
+	_free_registrations(regs);
 	fini_fifos(fifos);
 	return 1;
 bad:
+	free(msg.data);
+	_free_registrations(regs);
 	fini_fifos(fifos);
 	return 0;
 }
@@ -2798,6 +2833,7 @@ int main(int argc, char *argv[])
 		.client_path = DM_EVENT_FIFO_CLIENT,
 		.server_path = DM_EVENT_FIFO_SERVER
 	};
+	char **initial_registrations = NULL;
 	time_t now, idle_exit_timeout = DMEVENTD_IDLE_EXIT_TIMEOUT;
 
 	optopt = optind = opterr = 0;
@@ -2879,7 +2915,7 @@ int main(int argc, char *argv[])
 	if (restart) {
 		dm_event_log_set(debug_level, 0);
 
-		if ((restart = _restart_dmeventd(&fifos)) < 2)
+		if ((restart = _restart_dmeventd(&fifos, &initial_registrations)) < 2)
 			return restart ? EXIT_SUCCESS : EXIT_FAILURE;
 	}
 
@@ -2928,8 +2964,8 @@ int main(int argc, char *argv[])
 
 	_idle_since = _get_curr_time();
 
-	if (_initial_registrations)
-		_process_initial_registrations();
+	if (initial_registrations)
+		_process_initial_registrations(initial_registrations);
 
 	for (;;) {
 		if (_idle_since) {

@@ -83,7 +83,7 @@ static int _config_validate(struct cmd_context *cmd, struct dm_config_tree *cft)
 	struct cft_check_handle *handle;
 
 	if (!(handle = get_config_tree_check_handle(cmd, cft)))
-		return 1;
+		return 1; /* FIXME: Currently intentional, may hide real error! */
 
 	handle->force_check = 1;
 	handle->skip_if_checked = 1;
@@ -320,19 +320,23 @@ int dumpconfig(struct cmd_context *cmd, int argc, char **argv)
 	if (tree_spec.listmode) {
 		if (arg_is_set(cmd, withcomments_ARG)) {
 			log_error("--withcomments has no effect with --type list or --list");
-			return EINVALID_CMD_LINE;
+			r = EINVALID_CMD_LINE;
+			goto out;
 		}
 		if (arg_is_set(cmd, withlocalpreamble_ARG)) {
 			log_error("--withlocalpreamble has no effect with --type list or --list");
-			return EINVALID_CMD_LINE;
+			r = EINVALID_CMD_LINE;
+			goto out;
 		}
 		if (arg_is_set(cmd, withgeneralpreamble_ARG)) {
 			log_error("--withgeneralpreamble has no effect with --type list or --list");
-			return EINVALID_CMD_LINE;
+			r = EINVALID_CMD_LINE;
+			goto out;
 		}
 		if (arg_is_set(cmd, valuesonly_ARG)) {
 			log_error("--valuesonly has no effect with --type list or --list.");
-			return EINVALID_CMD_LINE;
+			r = EINVALID_CMD_LINE;
+			goto out;
 		}
 	}
 

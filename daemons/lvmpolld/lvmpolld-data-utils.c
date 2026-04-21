@@ -263,7 +263,7 @@ static void _pdlv_locked_dump(struct buffer *buff, const struct lvmpolld_lv *pdl
 		buffer_append(buff, tmp);
 	if (dm_snprintf(tmp, sizeof(tmp), "\t\tlvname=\"%s\"\n", pdlv->lvname) > 0)
 		buffer_append(buff, tmp);
-	if (dm_snprintf(tmp, sizeof(tmp), "\t\tlvmpolld_internal_timeout=%d\n", pdlv->pdtimeout) > 0)
+	if (dm_snprintf(tmp, sizeof(tmp), "\t\tlvmpolld_internal_timeout=%u\n", pdlv->pdtimeout) > 0)
 		buffer_append(buff, tmp);
 	if (dm_snprintf(tmp, sizeof(tmp), "\t\tlvm_command_interval=\"%s\"\n", pdlv->sinterval ?: "<undefined>") > 0)
 		buffer_append(buff, tmp);
@@ -314,7 +314,7 @@ pid_t pdst_kill_pdlv(struct lvmpolld_store *pdst, const char *id)
 
 	pdst_lock(pdst);
 	pdlv = pdst_locked_lookup(pdst, id);
-	if (pdlv && !pdlv_locked_polling_finished(pdlv) && pdlv->cmd_pid > 0) {
+	if (pdlv && !pdlv_get_polling_finished(pdlv) && pdlv->cmd_pid > 0) {
 		kill(pdlv->cmd_pid, SIGTERM);
 		pid = pdlv->cmd_pid;
 	}

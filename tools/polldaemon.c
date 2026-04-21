@@ -205,7 +205,8 @@ int wait_for_single_lv(struct cmd_context *cmd, const struct poll_operation_id *
 
 		if (lv && match_uuid && strcmp(match_uuid, (char *)&lv->lvid))
 			lv = NULL;
-		if (lv && parms->lv_type && !(lv->status & parms->lv_type))
+		if (lv && (parms->lv_type & ~CONVERTING) &&
+		    !(lv->status & (parms->lv_type & ~CONVERTING)))
 			lv = NULL;
 
 		if (!lv) {
@@ -459,10 +460,13 @@ static int _report_progress(struct cmd_context *cmd, const struct poll_operation
 		lv = NULL;
 
 	/*
-	 * CONVERTING is set only during mirror upconversion but we may need to
-	 * read LV's progress info even when it's not converting (linear->mirror)
+	 * CONVERTING is not stored on-disk, it's derived at import from the
+	 * presence of a sync layer.  Initial mirror sync (linear->mirror)
+	 * has no sync layer, so skip CONVERTING in the filter to let
+	 * lvconvert poll/wait for sync progress in that case too.
 	 */
-	if (lv && (parms->lv_type ^ CONVERTING) && !(lv->status & parms->lv_type))
+	if (lv && (parms->lv_type & ~CONVERTING) &&
+	    !(lv->status & (parms->lv_type & ~CONVERTING)))
 		lv = NULL;
 
 	if (!lv) {
@@ -514,6 +518,12 @@ static int _lvmpolld_init_poll_vg(struct cmd_context *cmd, const char *vgname,
 		id.display_name = lpdp->parms->poll_fns->get_copy_name_from_lv(lv);
 		if (!id.display_name && !lpdp->parms->aborting)
 			continue;
+
+		if (!id.display_name) {
+			log_error("Device name for LV %s not found in metadata.",
+				  display_lvname(lv));
+			return ECMD_FAILED;
+		}
 
 		id.vg_name = lv->vg->name;
 		id.lv_name = lv->name;

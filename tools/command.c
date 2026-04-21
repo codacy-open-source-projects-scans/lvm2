@@ -525,7 +525,7 @@ static int _is_desc_line(char *str)
 
 static int _is_autotype_line(char *str)
 {
-	if (!strncmp(str, "AUTOTYPE:", 6))
+	if (!strncmp(str, "AUTOTYPE:", 9))
 		return 1;
 	return 0;
 }
@@ -676,7 +676,12 @@ static void _add_oo_definition_line(const char *name, const char *line)
 	char *colon;
 	const char *start;
 
-	oo = &_oo_lines[_oo_line_count++];
+	if (_oo_line_count >= MAX_OO_LINES) {
+		log_error("Parsing command defs: too many OO definitions.");
+		return;
+	}
+
+	oo = &_oo_lines[_oo_line_count];
 
 	if (!(oo->name = strdup(name))) {
 		log_error("Failed to duplicate name %s.", name);
@@ -687,19 +692,24 @@ static void _add_oo_definition_line(const char *name, const char *line)
 		*colon = '\0';
 	else {
 		log_error("Parsing command defs: invalid OO definition.");
+		free(oo->name);
 		return;
 	}
 
-	if (!(start = strchr(line, ':'))) {
+	if (!(start = strchr(line, ':')) || !start[1] || !start[2]) {
 		log_error("Parsing command defs: invalid OO line.");
+		free(oo->name);
 		return;
 	}
 	start += 2;
 
 	if (!(oo->line = strdup(start))) {
 		log_error("Failed to duplicate line %s.", start);
+		free(oo->name);
 		return;
 	}
+
+	_oo_line_count++;
 }
 
 /* Support OO_FOO: continuing on multiple lines. */
@@ -1315,7 +1325,7 @@ static void _create_opt_names_alpha(void)
 	for (i = 0; i < ARG_COUNT; i++)
 		opt_names_alpha[i] = &opt_names[i];
 
-	qsort(opt_names_alpha, ARG_COUNT, sizeof(long), _long_name_compare);
+	qsort(opt_names_alpha, ARG_COUNT, sizeof(*opt_names_alpha), _long_name_compare);
 }
 
 static int _copy_line(const char **line, size_t max_line, int *position)

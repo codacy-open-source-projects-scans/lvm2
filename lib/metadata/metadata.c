@@ -45,17 +45,17 @@ static struct physical_volume *_pv_read(struct cmd_context *cmd,
 					struct volume_group *vg,
 					struct lvmcache_info *info);
 
-static int _check_pv_ext(struct cmd_context *cmd, struct volume_group *vg)
+static void _check_pv_ext(struct cmd_context *cmd, struct volume_group *vg)
 {
 	struct lvmcache_info *info;
 	uint32_t ext_version, ext_flags;
 	struct pv_list *pvl;
 
 	if (vg_is_foreign(vg))
-		return 1;
+		return;
 
 	if (vg_is_shared(vg))
-		return 1;
+		return;
 
 	dm_list_iterate_items(pvl, &vg->pvs) {
 		if (is_missing_pv(pvl->pv))
@@ -88,8 +88,6 @@ static int _check_pv_ext(struct cmd_context *cmd, struct volume_group *vg)
 				 dev_name(pvl->pv->dev), vg->name);
 		}
 	}
-
-	return 1;
 }
 
 /*
@@ -544,7 +542,7 @@ int move_pvs_used_by_lv(struct volume_group *vg_from,
 
 int validate_new_vg_name(struct cmd_context *cmd, const char *vg_name)
 {
-	static char vg_path[PATH_MAX];
+	char vg_path[PATH_MAX];
 	name_error_t name_error;
 
 	name_error = validate_name_detailed(vg_name);
@@ -615,7 +613,7 @@ int vg_rename(struct cmd_context *cmd, struct volume_group *vg,
 			return 0;
 		}
 
-                /* Mark the PVs that still hold metadata with the old VG name */
+		/* Mark the PVs that still hold metadata with the old VG name */
 		log_debug_metadata("Marking PV %s as moved to VG %s", dev_name(pvl->pv->dev), new_name);
 		pvl->pv->status |= PV_MOVED_VG;
 	}
@@ -710,11 +708,7 @@ int vg_remove_direct(struct volume_group *vg)
 
 int vg_remove(struct volume_group *vg)
 {
-	int ret;
-
-	ret = vg_remove_direct(vg);
-
-	return ret;
+	return vg_remove_direct(vg);
 }
 
 int check_dev_block_size_for_vg(struct device *dev, const struct volume_group *vg,
@@ -821,7 +815,7 @@ int vg_extend_each_pv(struct volume_group *vg, struct pvcreate_params *pp)
 			prev_lbs = logical_block_size;
 			continue;
 		}
-		
+
 		if (prev_lbs != logical_block_size) {
 			inconsistent_existing_lbs = 1;
 			break;
@@ -1134,7 +1128,7 @@ uint32_t extents_from_percent_size(struct volume_group *vg, const struct dm_list
 	case PERCENT_NONE:
 		if (!roundup && (size % vg->extent_size)) {
 			if (!(size -= size % vg->extent_size)) {
-				log_error("Specified size is smaller then physical extent boundary.");
+				log_error("Specified size is smaller than physical extent boundary.");
 				return 0;
 			}
 			log_print_unless_silent("Rounding size to boundary between physical extents: %s.",
@@ -1168,7 +1162,7 @@ uint32_t extents_from_percent_size(struct volume_group *vg, const struct dm_list
 	}
 
 	if (!(count = percent_of_extents(size, extents, roundup)))
-		log_error("Converted  %s%%%s into 0 extents.",
+		log_error("Converted %s%%%s into 0 extents.",
 			  display_percent(vg->cmd, size), get_percent_string(percent));
 	else
 		log_verbose("Converted %s%%%s into %" PRIu32 " extents.",
@@ -1190,11 +1184,11 @@ static dm_bitset_t _bitset_with_random_bits(struct dm_pool *mem, uint32_t num_bi
 		return NULL;
 	}
 
-        if (!dm_pool_begin_object(mem, 512)) {
-                log_error("dm_pool_begin_object failed for random list of bits.");
+	if (!dm_pool_begin_object(mem, 512)) {
+		log_error("dm_pool_begin_object failed for random list of bits.");
 		dm_pool_free(mem, bs);
-                return NULL;
-        }
+		return NULL;
+	}
 
 	/* Perform loop num_set_bits times, selecting one bit each time */
 	while (i++ < num_bits) {
@@ -1215,12 +1209,12 @@ static dm_bitset_t _bitset_with_random_bits(struct dm_pool *mem, uint32_t num_bi
 		if (dm_snprintf(buf, sizeof(buf), "%u ", bit_selected) < 0) {
 			log_error("snprintf random bit failed.");
 			dm_pool_free(mem, bs);
-                	return NULL;
+			return NULL;
 		}
 		if (!dm_pool_grow_object(mem, buf, strlen(buf))) {
 			log_error("Failed to generate list of random bits.");
 			dm_pool_free(mem, bs);
-                	return NULL;
+			return NULL;
 		}
 	}
 
@@ -1330,7 +1324,6 @@ static int _vg_adjust_ignored_mdas(struct volume_group *vg)
 		else
 			return 1;
 	}
-
 
 	/* Not an error to have vg_mda_count larger than total mdas. */
 	if (vg->mda_copies == VGMETADATACOPIES_ALL ||
@@ -1919,8 +1912,8 @@ static int _lv_each_dependency(struct logical_volume *lv,
 	struct dm_list *snh;
 
 	struct logical_volume *deps[] = {
-		lv->snapshot ? lv->snapshot->origin : 0,
-		lv->snapshot ? lv->snapshot->cow : 0 };
+		lv->snapshot ? lv->snapshot->origin : NULL,
+		lv->snapshot ? lv->snapshot->cow : NULL };
 	for (i = 0; i < DM_ARRAY_SIZE(deps); ++i) {
 		if (deps[i] && !fn(deps[i], data))
 			return_0;
@@ -2365,7 +2358,6 @@ int vg_validate(struct volume_group *vg)
 			r = 0;
 	}
 
-
 	if (!check_pv_segments(vg)) {
 		log_error(INTERNAL_ERROR "PV segments corrupted in %s.",
 			  vg->name);
@@ -2789,18 +2781,6 @@ out:
 	return r;
 }
 
-static int _pv_in_pv_list(struct physical_volume *pv, struct dm_list *head)
-{
-	struct pv_list *pvl;
-
-	dm_list_iterate_items(pvl, head) {
-		if (pvl->pv == pv)
-			return 1;
-	}
-
-	return 0;
-}
-
 static int _check_historical_lv_is_valid(struct historical_logical_volume *hlv)
 {
 	struct glv_list *glvl;
@@ -2960,7 +2940,6 @@ int vg_write(struct volume_group *vg)
 	} else
 		log_debug_metadata("Skipping validation of volume group structure.");
 
-
 	if (vg->status & PARTIAL_VG) {
 		log_error("Cannot update partial volume group %s.", vg->name);
 		return 0;
@@ -3010,7 +2989,7 @@ int vg_write(struct volume_group *vg)
 	dm_list_iterate_items(pvl, &vg->pvs) {
 		int update_pv_header = 0;
 
-		if (_pv_in_pv_list(pvl->pv, &vg->pv_write_list))
+		if (find_pv_in_pv_list(&vg->pv_write_list, pvl->pv))
 			continue;
 
 		if (!pvl->pv->fmt->ops->pv_needs_rewrite(pvl->pv->fmt, pvl->pv, &update_pv_header))
@@ -3125,7 +3104,11 @@ static int _vg_commit_mdas(struct volume_group *vg)
 	DM_LIST_INIT(ignored);
 	int good = 0;
 
-	/* Rearrange the metadata_areas_in_use so ignored mdas come first. */
+	/*
+	 * Commit ignored mdas first, so that the non-ignored (active)
+	 * copies are committed last and represent the final state on
+	 * disk if something interrupts the process.
+	 */
 	dm_list_iterate_items_safe(mda, tmda, &vg->fid->metadata_areas_in_use)
 		if (_mda_is_ignored(mda))
 			dm_list_move(&ignored, &mda->list);
@@ -3171,7 +3154,7 @@ int vg_commit(struct volume_group *vg)
 		/* This *is* the original now that it's committed. */
 		_vg_move_cached_precommitted_to_committed(vg);
 
-		if (vg->needs_write_and_commit){
+		if (vg->needs_write_and_commit) {
 			/* Print buffered messages that have been finished with this commit. */
 			dm_list_iterate_items(sl, &vg->msg_list)
 				log_print_unless_silent("%s", sl->str);
@@ -3301,7 +3284,7 @@ struct volume_group *vg_read_orphans(struct cmd_context *cmd, const char *orphan
 	vg = fmt->orphan_vg;
 
 	dm_list_iterate_items_safe(pvl, tpvl, &vg->pvs)
-		if (pvl->pv->status & UNLABELLED_PV )
+		if (pvl->pv->status & UNLABELLED_PV)
 			dm_list_move(&head.list, &pvl->list);
 		else
 			pv_set_fid(pvl->pv, NULL);
@@ -3415,7 +3398,7 @@ static int _check_devs_used_correspond_with_lv(struct dm_pool *mem, struct dm_li
 				if (!(dev->flags & DEV_USED_FOR_LV)) {
 					if (!found_inconsistent) {
 						if (!dm_pool_begin_object(mem, 32))
-                                                        return_0;
+								return_0;
 						found_inconsistent = 1;
 					} else {
 						if (!dm_pool_grow_object(mem, DEV_LIST_DELIM, sizeof(DEV_LIST_DELIM) - 1))
@@ -4033,11 +4016,11 @@ void vg_set_fid(struct volume_group *vg,
 static int _convert_key_to_string(const char *key, size_t key_len,
 				  unsigned sub_key, char *buf, size_t buf_len)
 {
-	memcpy(buf, key, key_len);
-	buf += key_len;
-	buf_len -= key_len;
-	if ((dm_snprintf(buf, buf_len, "_%u", sub_key) == -1))
-		return_0;
+	if (dm_snprintf(buf, buf_len, "%.*s_%u",
+			(int) key_len, key, sub_key) < 0) {
+		log_error("Cannot create key from %s.", key);
+		return 0;
+	}
 
 	return 1;
 }
@@ -4045,7 +4028,7 @@ static int _convert_key_to_string(const char *key, size_t key_len,
 int fid_add_mda(struct format_instance *fid, struct metadata_area *mda,
 		 const char *key, size_t key_len, const unsigned sub_key)
 {
-	static char full_key[PATH_MAX];
+	char full_key[PATH_MAX];
 
 	dm_list_add(_mda_is_ignored(mda) ? &fid->metadata_areas_ignored :
 		                           &fid->metadata_areas_in_use, &mda->list);
@@ -4093,7 +4076,7 @@ struct metadata_area *fid_get_mda_indexed(struct format_instance *fid,
 					  const char *key, size_t key_len,
 					  const unsigned sub_key)
 {
-	static char full_key[PATH_MAX];
+	char full_key[PATH_MAX];
 	struct metadata_area *mda = NULL;
 
 	if (!fid) {
@@ -4117,7 +4100,7 @@ struct metadata_area *fid_get_mda_indexed(struct format_instance *fid,
 int fid_remove_mda(struct format_instance *fid, struct metadata_area *mda,
 		   const char *key, size_t key_len, const unsigned sub_key)
 {
-	static char full_key[PATH_MAX];
+	char full_key[PATH_MAX];
 	struct metadata_area *mda_indexed = NULL;
 
 	/* At least one of mda or key must be specified. */
@@ -4234,19 +4217,6 @@ void mda_set_ignored(struct metadata_area *mda, unsigned mda_ignored)
 			   mda->ops->mda_metadata_locn_offset ? mda->ops->mda_metadata_locn_offset(locn) : UINT64_C(0));
 }
 
-int mdas_empty_or_ignored(struct dm_list *mdas)
-{
-	struct metadata_area *mda;
-
-	if (dm_list_empty(mdas))
-		return 1;
-	dm_list_iterate_items(mda, mdas) {
-		if (_mda_is_ignored(mda))
-			return 1;
-	}
-	return 0;
-}
-
 int pv_change_metadataignore(struct physical_volume *pv, uint32_t mda_ignored)
 {
 	const char *pv_name = pv_dev_name(pv);
@@ -4361,7 +4331,8 @@ const struct logical_volume *lv_committed(const struct logical_volume *lv)
 	return found_lv;
 }
 
-int vg_strip_outdated_historical_lvs(struct volume_group *vg) {
+int vg_strip_outdated_historical_lvs(struct volume_group *vg)
+{
 	struct glv_list *glvl, *tglvl;
 	time_t current_time = time(NULL);
 	uint64_t threshold = find_config_tree_int(vg->cmd, metadata_lvs_history_retention_time_CFG, NULL);
@@ -4762,7 +4733,6 @@ static struct volume_group *_vg_read(struct cmd_context *cmd,
 	 */
 	fid->ref_count++;
 
-
 	/*
 	 * label_scan found PVs for this VG and set up lvmcache to describe the
 	 * VG/PVs that we use here to read the VG.  It created 'vginfo' for the
@@ -4816,7 +4786,7 @@ static struct volume_group *_vg_read(struct cmd_context *cmd,
 			continue;
 		}
 
-		/* 
+		/*
 		 * Use the newest copy of the metadata found on any mdas.
 		 * Above, We could check if the scan found an old metadata
 		 * seqno in this mda and just skip reading it again; then these

@@ -578,11 +578,10 @@ static char **alloc_pvs_path(struct pvs *pvs, int num)
 	if (!num)
 		return NULL;
 
-	pvs->path = malloc(sizeof(char *) * num);
+	pvs->path = calloc(num, sizeof(char *));
 	if (!pvs->path)
 		return NULL;
 
-	memset(pvs->path, 0x0, sizeof(char *) * num);
 	return pvs->path;
 }
 
@@ -3249,7 +3248,6 @@ static void *lockspace_thread_main(void *arg_in)
 			 * for this fence result
 			 */
 			if (act->op == LD_OP_FENCE_RESULT) {
-				list_del(&act->list);
 				list_add(&act->list, &act_fence);
 				log_debug("S %s apply fence result %d for host %u %u",
 					  ls->name, act->result, act->owner.host_id, act->owner.generation);
@@ -4157,13 +4155,13 @@ static int work_init_vg(struct action *act)
 			break;
 		}
 	}
-	pthread_mutex_unlock(&lockspaces_mutex);
-
-	if (rv == -EEXIST) {
+	if (rv == -EEXIST)
 		log_error("Existing lockspace name %s matches new %s VG names %s %s",
 			  ls->name, ls_name, ls->vg_name, act->vg_name);
+	pthread_mutex_unlock(&lockspaces_mutex);
+
+	if (rv == -EEXIST)
 		return rv;
-	}
 
 	if (act->lm_type == LD_LM_SANLOCK)
 		rv = lm_init_vg_sanlock(ls_name, act->vg_name, act->flags, act->vg_args, act->align_mb,
@@ -4209,16 +4207,15 @@ static int work_setlockargs_vg_final(struct action *act)
 		vg_ls_name(act->vg_name, ls_name);
 
 		/*
-		 * Wait for the lockspace thread to be cleared.
+		 * Check if the lockspace thread has been cleared.
 		 * It was stopped in setlockargs_before but has
 		 * likely not been fully cleaned up yet.
+		 * Return EAGAIN for caller to retry later.
 		 */
-		while (1) {
-			pthread_mutex_lock(&lockspaces_mutex);
-			found = find_lockspace_name(ls_name) ? 1 : 0;
-			pthread_mutex_unlock(&lockspaces_mutex);
-			if (!found)
-				break;
+		pthread_mutex_lock(&lockspaces_mutex);
+		found = find_lockspace_name(ls_name) ? 1 : 0;
+		pthread_mutex_unlock(&lockspaces_mutex);
+		if (found) {
 			log_debug("S %s work_setlockargs_vg_final ls not cleared, retry", ls_name);
 			return -EAGAIN;
 		}
@@ -5431,10 +5428,10 @@ static uint32_t str_to_opts(const char *str)
 		flags |= LD_AF_FORCE;
 	if (strstr(str, "ex_disable"))
 		flags |= LD_AF_EX_DISABLE;
+	else if (strstr(str, "disable"))
+		flags |= LD_AF_DISABLE;
 	if (strstr(str, "enable"))
 		flags |= LD_AF_ENABLE;
-	if (strstr(str, "disable"))
-		flags |= LD_AF_DISABLE;
 	if (strstr(str, "nodelay"))
 		flags |= LD_AF_NODELAY;
 	if (strstr(str, "repair"))
@@ -5978,7 +5975,7 @@ static void client_recv_action(struct client *cl)
 		memset(&pvs, 0x0, sizeof(pvs));
 
 		pvs.num = daemon_request_int(req, "path_num", 0);
-		log_error("pvs_num = %d", pvs.num);
+		log_debug("pvs_num = %d", pvs.num);
 
 		if (!pvs.num)
 			goto skip_pvs_path;
@@ -5986,6 +5983,8 @@ static void client_recv_action(struct client *cl)
 		/* Receive the pv list which is transferred from LVM command */
 		if (!alloc_pvs_path(&pvs, pvs.num)) {
 			log_error("fail to allocate pvs path");
+			dm_config_destroy(req.cft);
+			buffer_destroy(&req.buffer);
 			rv = -ENOMEM;
 			goto out;
 		}
@@ -5997,6 +5996,9 @@ static void client_recv_action(struct client *cl)
 
 		if (!alloc_and_copy_pvs_path(&act->pvs, &pvs)) {
 			log_error("fail to allocate pvs path");
+			free(pvs.path);
+			dm_config_destroy(req.cft);
+			buffer_destroy(&req.buffer);
 			rv = -ENOMEM;
 			goto out;
 		}
@@ -6341,7 +6343,7 @@ static int match_dm_uuid(char *dm_uuid, char *lv_lock_uuid)
 		j++;
 	}
 
-	for (i = 36, j = 0; i < 69; i++) {
+	for (i = 36, j = 0; i < 68; i++) {
 		buf2[j] = dm_uuid[i];
 		j++;
 	}

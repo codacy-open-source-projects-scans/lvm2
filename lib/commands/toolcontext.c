@@ -97,7 +97,7 @@ static const char *_read_system_id_from_file(struct cmd_context *cmd, const char
 	const char *system_id = NULL;
 	FILE *fp;
 
-	if (!file || !strlen(file) || !file[0])
+	if (!file || !*file)
 		return_NULL;
 
 	if (!(fp = fopen(file, "r"))) {
@@ -538,6 +538,7 @@ static const char *_set_time_format(struct cmd_context *cmd)
 				}
 				if (!chars_to_check[i])
 					goto_bad;
+				p_fmt++;
 			}
 			else if (isprint(c))
 				p_fmt++;
@@ -652,7 +653,7 @@ static int _init_device_ids_refresh(struct cmd_context *cmd)
 		if (dm_snprintf(path, sizeof(path), "%sdevices/virtual/dmi/id/product_uuid", sysfs_dir) < 0)
 			return_0;
 		if (get_sysfs_value(path, uuid, sizeof(uuid), 0) && uuid[0])
-			cmd->product_uuid = dm_pool_strdup(cmd->libmem, uuid);;
+			cmd->product_uuid = dm_pool_strdup(cmd->libmem, uuid);
 		if (cmd->product_uuid)
 			cmd->device_ids_check_product_uuid = 1;
 	}
@@ -852,10 +853,13 @@ static int _process_config(struct cmd_context *cmd)
 
 static int _set_tag(struct cmd_context *cmd, const char *tag)
 {
-	log_very_verbose("Setting host tag: %s", dm_pool_strdup(cmd->libmem, tag));
+	char *t;
 
-	if (!str_list_add(cmd->libmem, &cmd->tags, tag)) {
-		log_error("_set_tag: str_list_add %s failed", tag);
+	log_very_verbose("Setting host tag: %s.", tag);
+
+	if (!(t = dm_pool_strdup(cmd->mem, tag)) ||
+	    !str_list_add(cmd->mem, &cmd->tags, t)) {
+		log_error("_set_tag: str_list_add %s failed.", tag);
 		return 0;
 	}
 
@@ -1045,14 +1049,14 @@ static struct dm_config_tree *_merge_config_files(struct cmd_context *cmd, struc
 	if (cft->root) {
 		if (!(cft = config_open(CONFIG_MERGED_FILES, NULL, 0))) {
 			log_error("Failed to create config tree");
-			return 0;
+			return NULL;
 		}
 	}
 
 	dm_list_iterate_items(cfl, &cmd->config_files) {
 		/* Merge all config trees into cmd->cft using merge/tag rules */
 		if (!merge_config_tree(cmd, cft, cfl->cft, CONFIG_MERGE_TYPE_TAGS))
-			return_0;
+			return_NULL;
 	}
 
 	return cft;
@@ -1315,7 +1319,7 @@ bad:
  */
 int init_filters(struct cmd_context *cmd, unsigned load_persistent_cache)
 {
-	struct dev_filter *pfilter, *filter = NULL, *filter_components[2] = {0};
+	struct dev_filter *pfilter, *filter = NULL;
 
 	if (!cmd->initialized.connections) {
 		log_error(INTERNAL_ERROR "connections must be initialized before filters");
@@ -1350,22 +1354,8 @@ int init_filters(struct cmd_context *cmd, unsigned load_persistent_cache)
 	cmd->initialized.filters = 1;
 	return 1;
 bad:
-	if (!filter) {
-		/*
-		 * composite filter not created - destroy
-		 * each component directly
-		 */
-		if (filter_components[0])
-			filter_components[0]->destroy(filter_components[0]);
-		if (filter_components[1])
-			filter_components[1]->destroy(filter_components[1]);
-	} else {
-		/*
-		 * composite filter created - destroy it - this
-		 * will also destroy any of its components
-		 */
+	if (filter)
 		filter->destroy(filter);
-	}
 
 	cmd->initialized.filters = 0;
 	return 0;
@@ -1617,7 +1607,7 @@ int init_run_by_dmeventd(struct cmd_context *cmd)
 	init_disable_dmeventd_monitoring(1); /* Lock settings */
 	cmd->run_by_dmeventd = 1;
 
-	return 0;
+	return 1;
 }
 
 void destroy_config_context(struct cmd_context *cmd)
@@ -1726,8 +1716,12 @@ struct cmd_context *create_toolcontext(unsigned is_clvmd,
 	/*
 	 * Environment variable LVM_SYSTEM_DIR overrides this below.
 	 */
-	strncpy(cmd->system_dir, (system_dir) ? system_dir : DEFAULT_SYS_DIR,
-		sizeof(cmd->system_dir) - 1);
+	if (!dm_strncpy(cmd->system_dir, system_dir ? : DEFAULT_SYS_DIR,
+			sizeof(cmd->system_dir))) {
+		log_error("Configured system directory %s is too long.",
+			  cmd->system_dir);
+		goto out;
+	}
 
 	if (!_get_env_vars(cmd))
 		goto_out;
@@ -1912,7 +1906,7 @@ int refresh_toolcontext(struct cmd_context *cmd)
 	activation_release();
 	hints_exit(cmd);
 	lvmcache_destroy(cmd, 0, 0);
-	label_scan_destroy(cmd);
+	label_scan_drop(cmd);
 	label_exit();
 	_destroy_segtypes(&cmd->segtypes);
 	_destroy_formats(cmd, &cmd->formats);

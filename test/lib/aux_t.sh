@@ -562,6 +562,7 @@ kill_tagged_processes() {
 teardown() {
 	local cfg
 	local TEST_LEAKED_DEVICES=""
+	local had_devices=0
 	echo -n "## teardown..."
 	unset LVM_LOG_FILE_EPOCH
 
@@ -608,6 +609,9 @@ teardown() {
 
 	echo "ok"
 
+	# Check for device marker files before teardown_devs removes them
+	[[ -f DEVICES || -f LOOP || -f SCSI_DEBUG_DEV || -f RAMDISK || -f MD_DEV ]] && had_devices=1
+
 	[[ -d "$DM_DEV_DIR/mapper" ]] && teardown_devs
 
 	fi
@@ -629,30 +633,40 @@ teardown() {
 		rm -rf "${TESTDIR:?}" || echo BLA
 	fi
 
-	# Remove any dangling symlink in /dev/disk (our tests can confuse udev)
-	find /dev/disk -type l -exec test ! -e {} \; -print0 2>/dev/null | xargs -0 rm -f || true
+	# No devices were prepared - skip expensive /dev scans
+	[[ "$had_devices" -eq 0 ]] && return
+
+	# Remove any dangling symlink in /dev/disk/by-*/ (our tests can confuse udev)
+	# -xtype l matches symlinks whose target no longer exists
+	find /dev/disk -maxdepth 2 -xtype l -delete 2>/dev/null || true
 
 	# Remove any metadata archives and backups from this test on system
 	rm -f /etc/lvm/archive/"${PREFIX}"* /etc/lvm/backup/"${PREFIX}"*
 
-	# Check if this test is leaking some 'symlinks' with our name (udev)
-	LEAKED_LINKS=( $(find /dev -path "/dev/mapper/${PREFIX}*" -type l -exec test ! -e {} \; -print -o \
-		-path "/dev/${PREFIX}*/" -type l -exec test ! -e {} \; -print  2>/dev/null) ) || true
-
-	[[ "${#LEAKED_LINKS[@]}" -eq 0 ]] || echo "## removing stray symlinks the names beginning with ${PREFIX}"
-
 	if [[ "${LVM_TEST_PARALLEL:-0}" = 0  ]]; then
-		# for non parallel testing erase any dangling links prefixed with LVMTEST
-		find /dev -path "/dev/mapper/${COMMON_PREFIX}*" -type l -exec test ! -e {} \; -print0 -o \
-			-path "/dev/${COMMON_PREFIX}*" -type l -exec test ! -e {} \; -print0 2>/dev/null | xargs -0 rm -f || true
 		LEAKED_PREFIX=${COMMON_PREFIX}
 	else
-		rm -f "${LEAKED_LINKS[@]}" || true
 		LEAKED_PREFIX=${PREFIX}
 	fi
 
+	# Find dangling symlinks with test prefix and remove them
+	# -xtype l matches symlinks whose target no longer exists
+	local ALL_DANGLING
+	ALL_DANGLING=( $(find /dev/mapper -maxdepth 1 -name "${LEAKED_PREFIX}*" -xtype l -print 2>/dev/null
+		find /dev -maxdepth 1 -name "${LEAKED_PREFIX}*" -xtype l -print 2>/dev/null) ) || true
+
+	# Check which of the dangling links belong to this test specifically
+	LEAKED_LINKS=()
+	for i in "${ALL_DANGLING[@]-}"; do
+		case "$i" in *"${PREFIX}"*) LEAKED_LINKS+=( "$i" ) ;; esac
+	done
+
+	[[ "${#LEAKED_LINKS[@]}" -eq 0 ]] || echo "## removing stray symlinks the names beginning with ${PREFIX}"
+
+	rm -f "${ALL_DANGLING[@]-}" || true
+
 	# Remove empty dirs with test prefix
-	find /dev -type d -name "${LEAKED_PREFIX}*" -empty -delete 2>/dev/null || true
+	find /dev -maxdepth 1 -type d -name "${LEAKED_PREFIX}*" -empty -delete 2>/dev/null || true
 
 	# Fail test with leaked links as most likely somewhere is missing synchronization...
 	[[ "${#LEAKED_LINKS[@]}" -eq 0 ]] || die "Test leaked these symlinks ${LEAKED_LINKS[*]}"

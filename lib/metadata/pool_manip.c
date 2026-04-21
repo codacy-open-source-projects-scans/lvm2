@@ -99,9 +99,9 @@ int attach_pool_lv(struct lv_segment *seg,
 	struct glv_list *glvl;
 
 	if (!seg_is_thin_volume(seg) && !seg_is_cache(seg)) {
-		log_error(INTERNAL_ERROR "Unable to attach pool to %s/%s"
+		log_error(INTERNAL_ERROR "Unable to attach pool to %s"
 			  " that is not cache or thin volume.",
-			  pool_lv->vg->name, seg->lv->name);
+			  display_lvname(seg->lv));
 		return 0;
 	}
 
@@ -398,8 +398,9 @@ struct lv_segment *find_pool_seg(const struct lv_segment *seg)
 		return NULL;
 	}
 
-	if ((lv_is_thin_type(seg->lv) && !seg_is_pool(pool_seg))) {
-		log_error("%s on %s is not a %s pool segment",
+	if ((lv_is_thin_type(seg->lv) || lv_is_cache_type(seg->lv)) &&
+	    !seg_is_pool(pool_seg)) {
+		log_error("%s on %s is not a %s pool segment.",
 			  display_lvname(pool_seg->lv), display_lvname(seg->lv),
 			  lv_is_thin_type(seg->lv) ? "thin" : "cache");
 		return NULL;
@@ -807,19 +808,20 @@ int handle_pool_metadata_spare(struct volume_group *vg, uint32_t extents,
 	seg = last_seg(lv);
 	seg_mirrors = lv_mirror_count(lv);
 
-	log_debug("Extending pool metadata spare from %u to %u extents.",
-		  lv->le_count, extents);
 	/* Check spare LV is big enough and preserve segtype */
-	if ((lv->le_count < extents) && seg &&
-	    /* coverity[format_string_injection] lv name is already validated */
-	    !lv_extend(lv, seg->segtype,
-		       seg->area_count / seg_mirrors,
-		       seg->stripe_size,
-		       seg_mirrors,
-		       seg->region_size,
-		       extents - lv->le_count,
-		       pvh, lv->alloc, 0))
-		return_0;
+	if ((lv->le_count < extents) && seg) {
+		log_debug("Extending pool metadata spare from %u to %u extents.",
+			  lv->le_count, extents);
+		/* coverity[format_string_injection] lv name is already validated */
+		if (!lv_extend(lv, seg->segtype,
+			       seg->area_count / seg_mirrors,
+			       seg->stripe_size,
+			       seg_mirrors,
+			       seg->region_size,
+			       extents - lv->le_count,
+			       pvh, lv->alloc, 0))
+			return_0;
+	}
 
 	return 1;
 }
@@ -837,7 +839,7 @@ int update_pool_metadata_min_max(struct cmd_context *cmd,
 
 	if (*metadata_size > max_metadata_size) {
 		if (metadata_lv) {
-			log_print_unless_silent("Size %s of pool metadata volume %s is bigger then maximum usable size %s.",
+			log_print_unless_silent("Size %s of pool metadata volume %s is bigger than maximum usable size %s.",
 						display_size(cmd, *metadata_size),
 						display_lvname(metadata_lv),
 						display_size(cmd, max_metadata_size));
@@ -889,8 +891,9 @@ int vg_remove_pool_metadata_spare(struct volume_group *vg)
 
 	/* Cut off suffix _pmspare */
 	if (!_dm_strncpy(new_name, lv->name, sizeof(new_name)) ||
-	    !(c = strchr(new_name, '_'))) {
-		log_error(INTERNAL_ERROR "LV %s has no suffix for pool metadata spare.",
+	    !(c = strrchr(new_name, '_')) ||
+	    strcmp(c, "_pmspare")) {
+		log_error(INTERNAL_ERROR "LV %s has no _pmspare suffix.",
 			  display_lvname(lv));
 		return 0;
 	}

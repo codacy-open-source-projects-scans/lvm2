@@ -48,8 +48,8 @@ struct settings {
 	unsigned metadata_offset_set:1;
 	unsigned mda_offset_set:1;
 	unsigned mda_size_set:1;
-	unsigned mda2_offset_set;
-	unsigned mda2_size_set;
+	unsigned mda2_offset_set:1;
+	unsigned mda2_size_set:1;
 	unsigned device_size_set:1;
 	unsigned data_offset_set:1;
 	unsigned seqno_set:1;
@@ -308,7 +308,7 @@ static uint64_t mda2_offset_from_size(struct device *dev, uint64_t mda2_size)
 	uint64_t extra_bytes;
 	uint64_t mda2_offset;
 
-	if (dev_get_size(dev, &dev_sectors))
+	if (!dev_get_size(dev, &dev_sectors))
 		stack;
 
 	dev_bytes = dev_sectors * 512;
@@ -329,7 +329,7 @@ static uint64_t mda2_size_from_offset(struct device *dev, uint64_t mda2_offset)
 	uint64_t extra_bytes;
 	uint64_t mda2_size;
 
-	if (dev_get_size(dev, &dev_sectors))
+	if (!dev_get_size(dev, &dev_sectors))
 		stack;
 
 	dev_bytes = dev_sectors * 512;
@@ -455,7 +455,7 @@ static int _dump_all_text(struct cmd_context *cmd, struct settings *set, const c
 	 * followed by the "seqno = N" field.
 	 */
 
-	memset(id_first, 0, sizeof(id_str));
+	memset(id_first, 0, sizeof(id_first));
 
 	/*
 	 * A count of 512 byte chunks within the metadata area.
@@ -1718,7 +1718,7 @@ static int _dump_search(struct cmd_context *cmd, const char *dump, struct settin
 		uint64_t dev_bytes;
 		uint64_t extra_bytes;
 
-		if (dev_get_size(dev, &dev_sectors))
+		if (!dev_get_size(dev, &dev_sectors))
 			stack;
 
 		dev_bytes = dev_sectors * 512;
@@ -2900,7 +2900,7 @@ fail_close:
 /* all sizes and offsets in bytes */
 
 static int _check_metadata_file(struct cmd_context *cmd, struct metadata_file *mf,
-				char *text_buf, int text_size)
+				char *text_buf, uint64_t text_size)
 {
 	char *vgid;
 	int namelen;

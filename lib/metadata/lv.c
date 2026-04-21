@@ -79,9 +79,9 @@ static int _lv_is_single_seg(const struct logical_volume *lv, const char *segtyp
 
 	dm_list_iterate_items(seg, &lv->segments) {
 		if (cnt++)
-			return 0; /* More then 1 segment */
+			return 0; /* More than 1 segment */
 		if (strcmp(seg->segtype->name, segtype_name))
-			return 0; /* Other then expected */
+			return 0; /* Other than expected */
 	}
 
 	return 1;
@@ -90,13 +90,13 @@ static int _lv_is_single_seg(const struct logical_volume *lv, const char *segtyp
 /* LV is 'error' if it's using single error segment */
 int lv_is_error(const struct logical_volume *lv)
 {
-        return _lv_is_single_seg(lv, SEG_TYPE_NAME_ERROR);
+	return _lv_is_single_seg(lv, SEG_TYPE_NAME_ERROR);
 }
 
 /* LV is 'zero' if it's using single zero segment */
 int lv_is_zero(const struct logical_volume *lv)
 {
-        return _lv_is_single_seg(lv, SEG_TYPE_NAME_ZERO);
+	return _lv_is_single_seg(lv, SEG_TYPE_NAME_ZERO);
 }
 
 /* Orphan pvmove is left public 'pvmoveXXX' named LV with single error target */
@@ -181,7 +181,7 @@ static struct dm_list *_format_pvsegs(struct dm_pool *mem, const struct lv_segme
 			}
 		}
 		list_item_len += strlen(extent_str);
-		/* trialing 0 */
+		/* trailing 0 */
 		list_item_len += 1;
 
 		if (!(list_item = dm_pool_zalloc(mem, list_item_len))) {
@@ -299,7 +299,7 @@ char *lvseg_segtype_dup(struct dm_pool *mem, const struct lv_segment *seg)
 char *lvseg_discards_dup(struct dm_pool *mem, const struct lv_segment *seg)
 {
 	if (lv_is_thin_pool(seg->lv))
-		return  dm_pool_strdup(mem, get_pool_discards_name(seg->discards));
+		return dm_pool_strdup(mem, get_pool_discards_name(seg->discards));
 
 	log_error("Cannot query non thin-pool segment of LV %s for discards property.",
 		  display_lvname(seg->lv));
@@ -320,7 +320,7 @@ char *lvseg_kernel_discards_dup_with_info_and_seg_status(struct dm_pool *mem, co
 		default:
 			log_error("Kernel reports unknown discards status %u.",
 				  lvdm->seg_status.thin_pool->discards);
-			return 0;
+			return NULL;
 		}
 		s = get_pool_discards_name(d);
 	} else if (lvdm->seg_status.type == SEG_STATUS_CACHE) {
@@ -1441,7 +1441,7 @@ char *lv_attr_dup_with_info_and_seg_status(struct dm_pool *mem, const struct lv_
 
 	if (!(repstr = dm_pool_zalloc(mem, 11))) {
 		log_error("dm_pool_alloc failed");
-		return 0;
+		return NULL;
 	}
 
 	/* Blank if this is a "free space" LV. */
@@ -1674,7 +1674,7 @@ char *lv_attr_dup(struct dm_pool *mem, const struct logical_volume *lv)
 	};
 
 	if (!(status.seg_status.mem = dm_pool_create("reporter_pool", 1024)))
-		return_0;
+		return_NULL;
 
 	if (!(status.info_ok = lv_info_with_seg_status(lv->vg->cmd, first_seg(lv), &status, 1, 1)))
 		goto_bad;

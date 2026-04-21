@@ -28,7 +28,6 @@ typedef int (*fn_on_lv_t)(struct logical_volume *lv, void *data);
 static int _eliminate_extracted_lvs_optional_write_vg(struct volume_group *vg,
 						      struct dm_list *removal_lvs,
 						      int vg_write_requested);
-#define	ARRAY_SIZE(a) (sizeof(a) / sizeof(*(a)))
 
 static int _check_restriping(uint32_t new_stripes, struct logical_volume *lv)
 {
@@ -709,7 +708,7 @@ static int _clear_lvs(struct volume_group *vg, struct dm_list *lv_list)
 	return activate_and_wipe_lvlist(lv_list, WIPE_MODE_DO_ZERO, 0, PROMPT);
 }
 
-/* External interface to clear logical volumes on @lv_list */
+/* Check if RAID @lv has any visible sub LVs */
 int lv_raid_has_visible_sublvs(const struct logical_volume *lv)
 {
 	unsigned s;
@@ -1237,13 +1236,13 @@ uint32_t lv_raid_data_copies(const struct segment_type *segtype, uint32_t area_c
 /* Return data images count for @total_rimages depending on @seg's type */
 static uint32_t _data_rimages_count(const struct lv_segment *seg, const uint32_t total_rimages)
 {
-	if (!seg_is_thin(seg) && total_rimages <= seg->segtype->parity_devs)
-		return_0;
+	if (total_rimages <= seg->segtype->parity_devs)
+		return 0;
 
 	return total_rimages - seg->segtype->parity_devs;
 }
 
-/* Get total area len of @lv, i.e. sum of area_len of all segments */
+/* Get rimage length of @lv (raid: le_count of first data sub LV) */
 static uint32_t _lv_total_rimage_len(struct logical_volume *lv)
 {
 	uint32_t s;
@@ -1527,7 +1526,7 @@ static int _lv_alloc_reshape_space(struct logical_volume *lv,
 	out_of_place_les_per_disk = (uint32_t) max(out_of_place_les_per_disk / (unsigned long long) lv->vg->extent_size, 1ULL);
 
 	if (!lv_is_active(lv)) {
-		log_error("Can't remove reshape space from inactive LV %s.",
+		log_error("Can't allocate reshape space for inactive LV %s.",
 			  display_lvname(lv));
 		return 0;
 	}
@@ -1599,6 +1598,7 @@ static int _lv_alloc_reshape_space(struct logical_volume *lv,
 				  display_lvname(lv));
 			if (!_lv_alloc_reshape_post_extend(lv, segtype_sav, stripe_size_sav, lv_size_cur))
 				return_0;
+			return 0;
 		}
 
 		/* pay attention to lv_extend maybe having allocated more because of layout specific rounding */
@@ -6157,7 +6157,7 @@ static const uint64_t _r5_to_r6[][2] = {
 /* Return segment type flag for raid5 -> raid6 conversions */
 static uint64_t _get_r56_flag(const struct segment_type *segtype, unsigned idx)
 {
-	unsigned elems = ARRAY_SIZE(_r5_to_r6);
+	unsigned elems = DM_ARRAY_SIZE(_r5_to_r6);
 
 	while (elems--)
 		if (segtype->flags & _r5_to_r6[elems][idx])

@@ -32,10 +32,9 @@ struct logical_volume *data_lv_from_thin_pool(struct logical_volume *pool_lv)
 		return NULL;
 	}
 
-	return seg_thinpool->areas[0].u.lv.lv;
+	return seg_lv(seg_thinpool, 0);
 }
 
-/* TODO: drop unused no_update */
 int attach_thin_pool_message(struct lv_segment *pool_seg, dm_thin_message_t type,
 			     struct logical_volume *lv, uint32_t delete_id,
 			     int no_update)
@@ -538,6 +537,9 @@ int thin_pool_prepare_metadata(struct logical_volume *metadata_lv,
 	if (fclose(f))
 		log_sys_debug("fclose", md_path);
 
+	if (!deactivate_lv(cmd, metadata_lv))
+		stack;
+
 	return r;
 }
 
@@ -608,7 +610,7 @@ static int _check_pool_create(const struct logical_volume *lv)
 			return 0;
 		}
 		if (!thin_pool_below_threshold(first_seg(lv))) {
-			log_error("Free space in pool %s is above threshold, new volumes are not allowed.",
+			log_error("Pool %s usage is above threshold, new volumes are not allowed.",
 				  display_lvname(lv));
 			return 0;
 		}
@@ -913,7 +915,7 @@ int update_thin_pool_params(struct cmd_context *cmd,
 			log_verbose("Setting chunk size %s.", display_size(cmd, *chunk_size));
 		} else if (*chunk_size < estimate_chunk_size) {
 			/* Suggest bigger chunk size */
-			log_warn("WARNING: Chunk size is smaller then suggested minimum size %s.",
+			log_warn("WARNING: Chunk size is smaller than suggested minimum size %s.",
 				 display_size(cmd, estimate_chunk_size));
 		}
 	}
@@ -1054,6 +1056,8 @@ int check_new_thin_pool(struct logical_volume *pool_lv)
 	struct cmd_context *cmd = pool_lv->vg->cmd;
 	uint64_t transaction_id;
 	struct lv_status_thin_pool *status = NULL;
+	int was_active = lv_is_active(pool_lv);
+	int r = 0;
 
 	/* For transaction_id check LOCAL activation is required */
 	if (!activate_lv_temporary(cmd, pool_lv)) {
@@ -1066,7 +1070,7 @@ int check_new_thin_pool(struct logical_volume *pool_lv)
 	if (!lv_thin_pool_status(pool_lv, 1, &status)) {
 		log_error("Cannot read thin pool %s transaction id locally, perhaps skipped in lvm.conf volume_list?",
 			  display_lvname(pool_lv));
-		return 0;
+		goto out;
 	}
 
 	transaction_id = status->thin_pool->transaction_id;
@@ -1076,23 +1080,29 @@ int check_new_thin_pool(struct logical_volume *pool_lv)
 	if (first_seg(pool_lv)->transaction_id != transaction_id) {
 		log_error("Cannot use thin pool %s with transaction id "
 			  FMTu64 " for thin volumes. "
-			  "Expected transaction id %" PRIu64 ".",
+			  "Expected transaction id " FMTu64 ".",
 			  display_lvname(pool_lv), transaction_id,
 			  first_seg(pool_lv)->transaction_id);
-		return 0;
+		goto out;
 	}
+
+	r = 1;
+out:
+	/* On error preserve pool state - avoid deactivating foreign-used pool */
+	if (!r && was_active)
+		return 0;
 
 	log_verbose("Deactivating public thin pool %s.",
 		    display_lvname(pool_lv));
 
 	/* Prevent any 'race' with in-use thin pool and always deactivate */
-	if (!deactivate_lv(pool_lv->vg->cmd, pool_lv)) {
+	if (!deactivate_lv(cmd, pool_lv)) {
 		log_error("Aborting. Could not deactivate thin pool %s.",
 			  display_lvname(pool_lv));
 		return 0;
 	}
 
-	return 1;
+	return r;
 }
 
 int validate_thin_pool_chunk_size(struct cmd_context *cmd, uint32_t chunk_size)

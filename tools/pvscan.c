@@ -169,8 +169,7 @@ static int _pvscan_display_single(struct cmd_context *cmd, struct volume_group *
 		params->size_total += (uint64_t) pv_pe_count(pv) * pv_pe_size(pv);
 	}
 
-	_pvscan_display_pv(cmd, pv, params);
-	return ECMD_PROCESSED;
+	return _pvscan_display_pv(cmd, pv, params);
 }
 
 int pvscan_display_cmd(struct cmd_context *cmd, int argc, char **argv)
@@ -303,7 +302,7 @@ static int _write_lookup_file(struct cmd_context *cmd, struct volume_group *vg)
 		return 0;
 	}
 
-	fd = open(path, O_CREAT | O_EXCL | O_TRUNC | O_RDWR, S_IRUSR | S_IWUSR);
+	fd = open(path, O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR);
 	if (fd < 0) {
 		/* not a problem, can happen when multiple pvscans run at once */
 		log_debug("Did not create %s: %d", path, errno);
@@ -313,11 +312,11 @@ static int _write_lookup_file(struct cmd_context *cmd, struct volume_group *vg)
 	log_debug("write_lookup_file %s", path);
 
 	dm_list_iterate_items(pvl, &vg->pvs) {
-		memcpy(&line, &pvl->pv->id.uuid, ID_LEN);
+		memcpy(line, &pvl->pv->id.uuid, ID_LEN);
 		line[ID_LEN] = '\n';
 		line[ID_LEN+1] = '\0';
 
-		if (write(fd, &line, ID_LEN+1) < 0)
+		if (write(fd, line, ID_LEN+1) != ID_LEN+1)
 			log_error_pvscan(cmd, "Failed to write lookup entry %s %s", path, line);
 	}
 
@@ -663,7 +662,7 @@ static int _pvscan_aa_quick(struct cmd_context *cmd, struct pvscan_aa_params *pp
 			    int *no_quick)
 {
 	struct dm_list devs; /* device_list */
-	struct volume_group *vg;
+	struct volume_group *vg = NULL;
 	struct pv_list *pvl;
 	const char *vgid;
 	struct lockd_state lks = { 0 };
@@ -712,7 +711,8 @@ static int _pvscan_aa_quick(struct cmd_context *cmd, struct pvscan_aa_params *pp
 
 	if (!(vgid = lvmcache_vgid_from_vgname(cmd, vgname))) {
 		log_error_pvscan(cmd, "activation for VG %s failed to find vgid.", vgname);
-		return ECMD_FAILED;
+		ret = ECMD_FAILED;
+		goto out;
 	}
 
 	/*
@@ -732,7 +732,8 @@ static int _pvscan_aa_quick(struct cmd_context *cmd, struct pvscan_aa_params *pp
 		 * cases that would be caught here.
 		 */
 		log_error_pvscan(cmd, "activation for VG %s cannot read (%x).", vgname, error_flags);
-		return ECMD_FAILED;
+		ret = ECMD_FAILED;
+		goto out;
 	}
 
 	/*

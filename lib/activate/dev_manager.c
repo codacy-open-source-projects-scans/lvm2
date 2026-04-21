@@ -158,7 +158,7 @@ static struct dm_task *_setup_task_run(int task, struct dm_info *info,
 		if (driver_version(vsn, sizeof(vsn)) &&
 		    (sscanf(vsn, "%u.%u", &maj, &min) == 2) &&
 		    (maj == 4 ? min >= 19 : maj > 4) &&
-		    !dm_task_set_newuuid(dmt, " ")) // new uuid has no meaning here
+		    !dm_task_set_newuuid(dmt, " ")) /* new uuid has no meaning here */
 			log_warn("WARNING: Failed to query uuid with LIST.");
 		break;
 	default:
@@ -429,7 +429,7 @@ static int _info_run(const char *dlid, struct dm_info *dminfo,
  * 'mirror_status_str' with the correct device table in order to check
  * for blocking.
  *
- * Returns: 1 if mirror should be ignored, 0 if safe to use
+ * Returns: 1 if safe to use, 0 if mirror is blocked
  */
 static int _ignore_blocked_mirror_devices(struct cmd_context *cmd,
 					  struct device *dev,
@@ -2263,9 +2263,9 @@ int dev_manager_vdo_pool_size_config(struct dev_manager *dm,
 	}
 
 	cfg->virtual_size = length;
-	cfg->physical_size *= 8; // From 4K unit to 512B
-	cfg->block_map_cache_size_mb /= 256; // From 4K unit to MiB
-	cfg->index_memory_size_mb = first_seg(lv)->vdo_params.index_memory_size_mb; // Preserved
+	cfg->physical_size *= 8; /* From 4K unit to 512B */
+	cfg->block_map_cache_size_mb /= 256; /* From 4K unit to MiB */
+	cfg->index_memory_size_mb = first_seg(lv)->vdo_params.index_memory_size_mb; /* Preserved */
 
 inactive:
 	r = 1;
@@ -2519,7 +2519,7 @@ static int _check_tool_version(struct cmd_context *cmd, const char *tool,
 			if ((nl = strchr(buf, '\n')))
 				nl[0] = 0; /* cut newline away */
 
-			log_verbose("Found version of %s %s is %s then requested %u.%u.%u.",
+			log_verbose("Found version of %s %s is %s than requested %u.%u.%u.",
 				    argv[0], buf, ret ? "better" : "older", maj, min, patch);
 		} else
 			log_warn("WARNING: Cannot parse output '%s' from %s.", buf, argv[0]);
@@ -2659,7 +2659,7 @@ static int _pool_register_callback(struct dev_manager *dm,
 	}
 
 	if (!(data = dm_pool_zalloc(dm->mem, sizeof(*data)))) {
-		log_error("Failed to allocated path for callback.");
+		log_error("Failed to allocate path for callback.");
 		return 0;
 	}
 
@@ -3630,7 +3630,7 @@ static int _add_new_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 			if ((seg_is_thin_volume(seg) && _lv_has_thin_device_id(dm->mem, lv, NULL, seg->device_id)) ||
 			    (!seg_is_thin_volume(seg) && lv_has_target_type(dm->mem, lv, NULL, TARGET_NAME_SNAPSHOT_MERGE))) {
 				log_debug_activation("Merging of snapshot volume %s to origin %s is in progress.",
-						     display_lvname(seg->lv), display_lvname(seg->lv));
+						     display_lvname(seg->lv), display_lvname(lv));
 				merge_in_progress = 1; /* Merge is already running */
 			} /* Merge is not yet running, so check if it can be started */
 			else if (laopts->resuming) {

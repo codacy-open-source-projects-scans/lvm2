@@ -516,7 +516,7 @@ static int _extend_pv(struct physical_volume *pv, struct volume_group *vg,
 		return 0;
 	}
 
-	if (!(peg = _alloc_pv_segment(pv->fmt->cmd->mem, pv,
+	if (!(peg = _alloc_pv_segment(vg->vgmem, pv,
 				      old_pe_count,
 				      new_pe_count - old_pe_count,
 				      NULL, 0)))
@@ -571,7 +571,7 @@ static int _pv_resize(struct physical_volume *pv, struct volume_group *vg, uint6
 		if (!(new_pe_count = pv_size(pv) / vg->extent_size)) {
 			log_error("Size must leave space for at least one physical "
 				  "extent of %" PRIu32 " sectors on PV %s.",
-				   pv_pe_size(pv), pv_dev_name(pv));
+				   vg->extent_size, pv_dev_name(pv));
 			return 0;
 		}
 

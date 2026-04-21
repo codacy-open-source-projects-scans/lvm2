@@ -594,7 +594,8 @@ static int _read_raid_params(struct cmd_context *cmd,
 		lp->min_recovery_rate = arg_uint_value(cmd, minrecoveryrate_ARG, 0) / 2;
 		lp->max_recovery_rate = arg_uint_value(cmd, maxrecoveryrate_ARG, 0) / 2;
 
-		if (lp->min_recovery_rate > lp->max_recovery_rate) {
+		if (lp->max_recovery_rate &&
+		    lp->min_recovery_rate > lp->max_recovery_rate) {
 			log_print_unless_silent("Minimum recovery rate cannot be higher than maximum, adjusting.");
 			lp->max_recovery_rate = lp->min_recovery_rate;
 		}
@@ -705,7 +706,7 @@ static int _read_mirror_and_raid_params(struct cmd_context *cmd,
 	}
 
 	if (seg_is_mirror(lp) && !_read_mirror_params(cmd, lp))
-                return_0;
+		return_0;
 
 	if (seg_is_raid(lp) && !_read_raid_params(cmd, lp))
 		return_0;
@@ -738,7 +739,7 @@ static int _read_vdo_params(struct cmd_context *cmd,
 	    !lp->pool_data_vdo)
 		return 1;
 
-	// prefilling settings here
+	/* prefilling settings here */
 	if (!fill_vdo_target_params(cmd, &lp->vcp.vdo_params, &lp->vdo_pool_header_size, NULL))
 		return_0;
 
@@ -758,7 +759,7 @@ static int _read_vdo_params(struct cmd_context *cmd,
 		lp->vdo_pool_header_size = 0;
 	}
 
-	// override with optional vdo settings
+	/* override with optional vdo settings */
 	if (!get_vdo_settings(cmd, &lp->vcp.vdo_params, NULL))
 		return_0;
 
@@ -830,7 +831,7 @@ static int _lvcreate_params(struct cmd_context *cmd,
 	dm_list_init(&lp->tags);
 	lp->target_attr = ~0;
 	lp->yes = arg_count(cmd, yes_ARG);
-	lp->force = (force_t) (int) arg_count(cmd, force_ARG);
+	lp->force = arg_force_value(cmd);
 	lp->permission = arg_uint_value(cmd, permission_ARG,
 					LVM_READ | LVM_WRITE);
 
@@ -851,7 +852,7 @@ static int _lvcreate_params(struct cmd_context *cmd,
 	} else if (arg_is_set(cmd, snapshot_ARG) &&
 		   (arg_is_set(cmd, virtualoriginsize_ARG) ||
 		   !arg_is_set(cmd, virtualsize_ARG)))
-		/* Snapshot has higher priority then thin */
+		/* Snapshot has higher priority than thin */
 		segtype_str = SEG_TYPE_NAME_SNAPSHOT; /* --thinpool makes thin volume */
 	else if (arg_is_set(cmd, cache_ARG) || arg_is_set(cmd, cachepool_ARG))
 		segtype_str = SEG_TYPE_NAME_CACHE;
@@ -1146,7 +1147,7 @@ static int _lvcreate_params(struct cmd_context *cmd,
 					-1))
 		return_0;
 	else if (seg_is_vdo(lp)) {
-		/* Only supported with --type thin, -T, --thin, -V */
+		/* Only supported with --type vdo, -V */
 		if (arg_outside_list_is_set(cmd, "is unsupported with VDOs",
 					    LVCREATE_ARGS,
 					    PERSISTENT_ARGS,
@@ -1158,7 +1159,7 @@ static int _lvcreate_params(struct cmd_context *cmd,
 					    -1))
 			return_0;
 
-		/* If size/extents given with thin, then we are also creating a thin-pool */
+		/* If size/extents given with VDO, then we are also creating a VDO pool */
 		if (arg_is_set(cmd, size_ARG) || arg_is_set(cmd, extents_ARG)) {
 			if (arg_is_set(cmd, pooldatasize_ARG)) {
 				log_error("Please specify either size or pooldatasize.");
@@ -1846,56 +1847,71 @@ int lvcreate(struct cmd_context *cmd, int argc, char **argv)
 	int ret;
 
 	if (!_lvcreate_params(cmd, argc, argv, &lp, &lcp)) {
-		stack;
-		return EINVALID_CMD_LINE;
+		ret = EINVALID_CMD_LINE;
+		goto_out;
 	}
 
 	if (!_check_pool_parameters(cmd, NULL, &lp, &lcp)) {
-		stack;
-		return EINVALID_CMD_LINE;
+		ret = EINVALID_CMD_LINE;
+		goto_out;
 	}
 
 	pp.lp = &lp;
 	pp.lcp = &lcp;
 
-        if (!(handle = init_processing_handle(cmd, NULL))) {
+	if (!(handle = init_processing_handle(cmd, NULL))) {
 		log_error("Failed to initialize processing handle.");
-		return ECMD_FAILED;
+		ret = ECMD_FAILED;
+		goto out;
 	}
 
 	handle->custom_handle = &pp;
 
 	ret = process_each_vg(cmd, 0, NULL, lp.vg_name, NULL, READ_FOR_UPDATE, 0, handle,
 			      &_lvcreate_single);
-
+out:
 	_destroy_lvcreate_params(&lp);
 	destroy_processing_handle(cmd, handle);
 	return ret;
 }
 
-static int _lvcreate_and_attach_writecache_single(struct cmd_context *cmd,
-		const char *vg_name, struct volume_group *vg, struct processing_handle *handle)
+typedef int (*lvcreate_attach_fn_t)(struct cmd_context *cmd,
+				    struct logical_volume *lv,
+				    struct processing_handle *handle);
+
+struct lvcreate_attach_params {
+	struct processing_params pp;
+	lvcreate_attach_fn_t attach_fn;
+	const char *attach_name;
+};
+
+static int _lvcreate_and_attach_single(struct cmd_context *cmd,
+				       const char *vg_name, struct volume_group *vg,
+				       struct processing_handle *handle)
 {
-	struct processing_params *pp = (struct processing_params *) handle->custom_handle;
-	struct lvcreate_params *lp = pp->lp;
+	struct lvcreate_attach_params *lap =
+		(struct lvcreate_attach_params *) handle->custom_handle;
+	struct lvcreate_params *lp = lap->pp.lp;
 	struct logical_volume *lv;
 	int ret;
 
+	handle->custom_handle = &lap->pp;
 	ret = _lvcreate_single(cmd, vg_name, vg, handle);
+	handle->custom_handle = lap;
 
 	if (ret == ECMD_FAILED)
 		return ret;
 
 	if (!(lv = find_lv(vg, lp->lv_name))) {
-		log_error("Failed to find LV %s to add writecache.", lp->lv_name);
+		log_error("Failed to find LV %s to add %s.", lp->lv_name, lap->attach_name);
 		return ECMD_FAILED;
 	}
 
 	/* coverity[format_string_injection] lv name is already validated */
-	ret = lvconvert_writecache_attach_single(cmd, lv, handle);
+	ret = lap->attach_fn(cmd, lv, handle);
 
 	if (ret == ECMD_FAILED) {
-		log_error("Removing new LV after failing to add writecache.");
+		log_error("Removing new LV after failing to add %s.", lap->attach_name);
 		if (!deactivate_lv(cmd, lv))
 			log_error("Failed to deactivate new LV %s.", display_lvname(lv));
 		if (!lv_remove_with_dependencies(cmd, lv, DONT_PROMPT, 0))
@@ -1906,7 +1922,8 @@ static int _lvcreate_and_attach_writecache_single(struct cmd_context *cmd,
 	return ECMD_PROCESSED;
 }
 
-int lvcreate_and_attach_writecache_cmd(struct cmd_context *cmd, int argc, char **argv)
+static int _lvcreate_and_attach_cmd(struct cmd_context *cmd, int argc, char **argv,
+				    lvcreate_attach_fn_t attach_fn, const char *attach_name)
 {
 	struct processing_handle *handle = NULL;
 	struct lvcreate_params lp = {
@@ -1921,101 +1938,42 @@ int lvcreate_and_attach_writecache_cmd(struct cmd_context *cmd, int argc, char *
 		.ignore_type = 1,
 	};
 	struct lvcreate_cmdline_params lcp = { 0 };
-	struct processing_params pp = {
-		.lp = &lp,
-		.lcp = &lcp,
-	};
-	int ret;
-	if (!_lvcreate_params(cmd, argc, argv, &lp, &lcp)) {
-		stack;
-		return EINVALID_CMD_LINE;
-	}
-
-        if (!(handle = init_processing_handle(cmd, NULL))) {
-		log_error("Failed to initialize processing handle.");
-		return ECMD_FAILED;
-	}
-
-	handle->custom_handle = &pp;
-
-	ret = process_each_vg(cmd, 0, NULL, lp.vg_name, NULL, READ_FOR_UPDATE, 0, handle,
-			      &_lvcreate_and_attach_writecache_single);
-
-	_destroy_lvcreate_params(&lp);
-	destroy_processing_handle(cmd, handle);
-	return ret;
-}
-
-static int _lvcreate_and_attach_cache_single(struct cmd_context *cmd,
-		const char *vg_name, struct volume_group *vg, struct processing_handle *handle)
-{
-	struct processing_params *pp = (struct processing_params *) handle->custom_handle;
-	struct lvcreate_params *lp = pp->lp;
-	struct logical_volume *lv;
-	int ret;
-
-	ret = _lvcreate_single(cmd, vg_name, vg, handle);
-
-	if (ret == ECMD_FAILED)
-		return ret;
-
-	if (!(lv = find_lv(vg, lp->lv_name))) {
-		log_error("Failed to find LV %s to add cache.", lp->lv_name);
-		return ECMD_FAILED;
-	}
-
-	/* coverity[format_string_injection] lv name is already validated */
-	ret = lvconvert_cachevol_attach_single(cmd, lv, handle);
-
-	if (ret == ECMD_FAILED) {
-		log_error("Removing new LV after failing to add cache.");
-		if (!deactivate_lv(cmd, lv))
-			log_error("Failed to deactivate new LV %s.", display_lvname(lv));
-		if (!lv_remove_with_dependencies(cmd, lv, DONT_PROMPT, 0))
-			log_error("Failed to remove new LV %s.", display_lvname(lv));
-		return ECMD_FAILED;
-	}
-
-	return ECMD_PROCESSED;
-}
-
-int lvcreate_and_attach_cache_cmd(struct cmd_context *cmd, int argc, char **argv)
-{
-	struct processing_handle *handle = NULL;
-	struct lvcreate_params lp = {
-		.major = -1,
-		.minor = -1,
-		/*
-		 * Tell lvcreate to ignore --type since we are using lvcreate
-		 * to create a linear LV and using lvconvert to add cache.
-		 * (Would be better if lvcreate code was split up so we could
-		 * call a specific function that just created a linear/striped LV.)
-		 */
-		.ignore_type = 1,
-	};
-	struct lvcreate_cmdline_params lcp = { 0 };
-	struct processing_params pp = {
-		.lp = &lp,
-		.lcp = &lcp,
+	struct lvcreate_attach_params lap = {
+		.pp = { .lp = &lp, .lcp = &lcp },
+		.attach_fn = attach_fn,
+		.attach_name = attach_name,
 	};
 	int ret;
 
 	if (!_lvcreate_params(cmd, argc, argv, &lp, &lcp)) {
-		stack;
-		return EINVALID_CMD_LINE;
+		ret = EINVALID_CMD_LINE;
+		goto_out;
 	}
 
 	if (!(handle = init_processing_handle(cmd, NULL))) {
 		log_error("Failed to initialize processing handle.");
-		return ECMD_FAILED;
+		ret = ECMD_FAILED;
+		goto out;
 	}
 
-	handle->custom_handle = &pp;
+	handle->custom_handle = &lap;
 
 	ret = process_each_vg(cmd, 0, NULL, lp.vg_name, NULL, READ_FOR_UPDATE, 0, handle,
-			      &_lvcreate_and_attach_cache_single);
-
+			      &_lvcreate_and_attach_single);
+out:
 	_destroy_lvcreate_params(&lp);
 	destroy_processing_handle(cmd, handle);
 	return ret;
+}
+
+int lvcreate_and_attach_writecache_cmd(struct cmd_context *cmd, int argc, char **argv)
+{
+	return _lvcreate_and_attach_cmd(cmd, argc, argv,
+					lvconvert_writecache_attach_single, "writecache");
+}
+
+int lvcreate_and_attach_cache_cmd(struct cmd_context *cmd, int argc, char **argv)
+{
+	return _lvcreate_and_attach_cmd(cmd, argc, argv,
+					lvconvert_cachevol_attach_single, "cache");
 }

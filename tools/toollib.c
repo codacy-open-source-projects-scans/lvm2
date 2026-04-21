@@ -344,6 +344,7 @@ int process_each_segment_in_pv(struct cmd_context *cmd,
 
 	if (dm_list_empty(&pv->segments)) {
 		ret = process_single_pvseg(cmd, NULL, &_free_pv_segment, handle);
+		_update_selection_result(handle, &whole_selected);
 		if (ret != ECMD_PROCESSED)
 			stack;
 		if (ret > ret_max)
@@ -4857,7 +4858,7 @@ int process_each_pv(struct cmd_context *cmd,
 	}
 
 	if (!lvmcache_get_vgnameids(cmd, &all_vgnameids, only_this_vgname, 1)) {
-		ret_max = ret;
+		ret_max = ECMD_FAILED;
 		goto_out;
 	}
 

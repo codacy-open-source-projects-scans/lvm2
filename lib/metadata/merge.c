@@ -97,7 +97,7 @@ int lv_merge_segments(struct logical_volume *lv)
 		  display_lvname(seg->lv), (msg), (val), lvseg_name(seg)); \
 	if ((*error_count)++ > ERROR_MAX) \
 		return; \
-} while(0)
+} while (0)
 
 /* Check segment LV for reshape flags. */
 static int _check_raid_seg_reshape_flags(struct lv_segment *seg)
@@ -284,7 +284,7 @@ static void _check_raid_seg(struct lv_segment *seg, int *error_count)
 		if (seg->area_count > DEFAULT_RAID1_MAX_IMAGES) {
 			log_error("LV %s invalid: maximum supported areas %u "
 				  "(is %u) for %s segment.",
-				  seg->lv->name, DEFAULT_RAID1_MAX_IMAGES,
+				  display_lvname(seg->lv), DEFAULT_RAID1_MAX_IMAGES,
 				  seg->area_count, lvseg_name(seg));
 			if ((*error_count)++ > ERROR_MAX)
 				return;
@@ -292,7 +292,7 @@ static void _check_raid_seg(struct lv_segment *seg, int *error_count)
 	} else if (seg->area_count > DEFAULT_RAID_MAX_IMAGES) {
 		log_error("LV %s invalid: maximum supported areas %u "
 			  "(is %u) for %s segment.",
-			  seg->lv->name, DEFAULT_RAID_MAX_IMAGES,
+			  display_lvname(seg->lv), DEFAULT_RAID_MAX_IMAGES,
 			  seg->area_count, lvseg_name(seg));
 		if ((*error_count)++ > ERROR_MAX)
 			return;
@@ -451,7 +451,7 @@ static void _check_lv_segment(struct logical_volume *lv, struct lv_segment *seg,
 				seg_error("region size is zero");
 			/* Avoid regionsize check in case of 'mirrored' mirror log or larger than mlog regionsize will fail */
 			else if (!strstr(seg->lv->name, "_mlog") && (seg->region_size > seg->lv->size))
-				seg_error("region size is bigger then LV itself");
+				seg_error("region size is bigger than LV itself");
 			else if (!is_power_of_2(seg->region_size))
 				seg_error("region size is non power of 2");
 		}
@@ -494,7 +494,7 @@ static void _check_lv_segment(struct logical_volume *lv, struct lv_segment *seg,
 			seg_error("has invalid chunk size.");
 
 		if (seg->zero_new_blocks != THIN_ZERO_YES &&
-                    seg->zero_new_blocks != THIN_ZERO_NO)
+		    seg->zero_new_blocks != THIN_ZERO_NO)
 			seg_error("zero_new_blocks is invalid");
 	} else { /* !thin_pool */
 		if (seg->zero_new_blocks != THIN_ZERO_UNSELECTED)
@@ -804,7 +804,6 @@ int check_lv_segments_incomplete_vg(struct logical_volume *lv)
 					/* Can't check more of such segment */
 					continue;
 				}
-
 
 /* FIXME I don't think this ever holds?
 				if (seg_le(seg, s) != le) {

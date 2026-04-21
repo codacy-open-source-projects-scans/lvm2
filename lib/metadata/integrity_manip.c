@@ -203,7 +203,7 @@ int lv_extend_integrity_in_raid(struct logical_volume *lv, struct dm_list *pvh)
 
 		/* the calculated meta_bytes value is always a multiple of 4MB, do not round again */
 		lv_size_bytes = lv_iorig->size * 512;
-		meta_bytes = _lv_size_bytes_to_integrity_meta_bytes(lv_size_bytes, 0, 0);
+		meta_bytes = _lv_size_bytes_to_integrity_meta_bytes(lv_size_bytes, 0, vg->extent_size);
 		meta_sectors = meta_bytes / 512;
 		meta_extents = meta_sectors / vg->extent_size;
 		if (!meta_extents)
@@ -291,7 +291,7 @@ int lv_remove_integrity_from_raid(struct logical_volume *lv, char **remove_image
 		if (!remove_layer_from_lv(lv_image, lv_iorig))
 			return_0;
 
-		if (!remove_seg_from_segs_using_this_lv(seg_image->integrity_meta_dev, seg_image))
+		if (!remove_seg_from_segs_using_this_lv(lv_imeta, seg_image))
 			return_0;
 
 		iorig_lvs[s] = lv_iorig;
@@ -334,11 +334,15 @@ int lv_remove_integrity_from_raid(struct logical_volume *lv, char **remove_image
 
 		log_debug("Removing unused integrity LVs %s %s", lv_iorig->name, lv_imeta->name);
 
-		if (!lv_remove(lv_iorig))
+		if (!lv_remove(lv_iorig)) {
 			log_error("Failed to remove unused iorig LV %s.", lv_iorig->name);
+			return 0;
+		}
 
-		if (!lv_remove(lv_imeta))
+		if (!lv_remove(lv_imeta)) {
 			log_error("Failed to remove unused imeta LV %s.", lv_imeta->name);
+			return 0;
+		}
 	}
 
 	if (!vg_write(vg) || !vg_commit(vg))
@@ -798,7 +802,7 @@ bad:
 			lv_iorig = seg_lv(seg_image, 0);
 			if (lv_image->status & INTEGRITY) {
 				if (!remove_layer_from_lv(lv_image, lv_iorig) ||
-				    !remove_seg_from_segs_using_this_lv(seg_image->integrity_meta_dev,
+				    !remove_seg_from_segs_using_this_lv(imeta_lvs[s],
 									seg_image)) {
 					log_error("Aborting. Cannot remove integrity layer from LV %s.", display_lvname(lv_image));
 					return 0;
@@ -986,7 +990,7 @@ int lv_integrity_mismatches(struct cmd_context *cmd,
 		.seg_status.type = SEG_STATUS_NONE,
 	};
 
-	if (lv_is_raid(lv) && lv_raid_has_integrity((struct logical_volume *)lv))
+	if (lv_is_raid(lv) && lv_raid_has_integrity(lv))
 		return lv_raid_integrity_total_mismatches(cmd, lv, mismatches);
 
 	if (!lv_is_integrity(lv))
@@ -994,8 +998,7 @@ int lv_integrity_mismatches(struct cmd_context *cmd,
 
 	status.seg_status.seg = first_seg(lv);
 
-	/* FIXME: why reporter_pool? */
-	if (!(status.seg_status.mem = dm_pool_create("reporter_pool", 1024))) {
+	if (!(status.seg_status.mem = dm_pool_create("integrity_status", 1024))) {
 		log_error("Failed to get mem for LV status.");
 		return 0;
 	}
@@ -1044,7 +1047,7 @@ int integrity_settings_to_str_list(struct dm_integrity_settings *settings, struc
 		if (!setting_str_list_add("allow_discards", settings->allow_discards, NULL, result, mem))
 			errors++;
 	if (errors)
-		log_warn("Failed to create list of integrity settings.");
+		log_warn("WARNING: Failed to create list of integrity settings.");
 
 	return 1;
 }
