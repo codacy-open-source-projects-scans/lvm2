@@ -28,7 +28,7 @@ struct logical_volume *data_lv_from_thin_pool(struct logical_volume *pool_lv)
 	struct lv_segment *seg_thinpool = first_seg(pool_lv);
 
 	if (!seg_thinpool || !seg_is_thin_pool(seg_thinpool)) {
-		log_error(INTERNAL_ERROR "data_lv_from_thin_pool arg not thin pool %s", pool_lv->name);
+		log_error(INTERNAL_ERROR "LV %s is not a thin pool.", display_lvname(pool_lv));
 		return NULL;
 	}
 
@@ -511,7 +511,7 @@ int thin_pool_prepare_metadata(struct logical_volume *metadata_lv,
 
 	/* Build path for 'thin_restore' app with this 'hidden/deleted' tmpfile */
 	(void) dm_snprintf(md_path, sizeof(md_path), "%s/%u/fd/%u",
-			   cmd->proc_dir, getpid(), fileno(f));
+			   cmd->proc_dir, (unsigned) getpid(), (unsigned) fileno(f));
 
 	argv[++args] = "-i";
 	argv[++args] = md_path;
@@ -995,7 +995,7 @@ const char *get_pool_discards_name(thin_discards_t discards)
 {
 	switch (discards) {
 	case THIN_DISCARDS_PASSDOWN:
-                return "passdown";
+		return "passdown";
 	case THIN_DISCARDS_NO_PASSDOWN:
 		return "nopassdown";
 	case THIN_DISCARDS_IGNORE:

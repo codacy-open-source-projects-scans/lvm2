@@ -194,7 +194,7 @@ int get_pvs_online(struct dm_list *pvs_online, const char *vgname)
 	if (closedir(dir))
 		log_sys_debug("closedir", PVS_ONLINE_DIR);
 
-	log_debug("Found PVs online %d for %s", dm_list_size(pvs_online), vgname ?: "all");
+	log_debug("Found PVs online %u for %s", dm_list_size(pvs_online), vgname ?: "all");
 
 	return 1;
 }
@@ -279,7 +279,7 @@ int online_pvid_file_create(struct cmd_context *cmd, struct device *dev, const c
 
 	if (vgname) {
 		if ((len2 = dm_snprintf(buf + len1, sizeof(buf) - len1, "vg:%s\n", vgname)) < 0) {
-			log_print_unless_silent("Incomplete online file for %s %d:%d vg %s.", dev_name(dev), major, minor, vgname);
+			log_print_unless_silent("Incomplete online file for %s %u:%u vg %s.", dev_name(dev), major, minor, vgname);
 			/* can still continue without vgname */
 			len2 = 0;
 		}
@@ -346,14 +346,14 @@ check_duplicate:
 	online_pvid_file_read(path, &file_major, &file_minor, file_vgname, file_devname);
 
 	if ((file_major == major) && (file_minor == minor)) {
-		log_debug("Existing online file for %d:%d", major, minor);
+		log_debug("Existing online file for %u:%u", major, minor);
 		return 1;
 	}
 
 	/* Don't know how vgname might not match, but it's not good so fail. */
 
 	if ((file_major != major) || (file_minor != minor))
-		log_error_pvscan(cmd, "PV %s %d:%d is duplicate for PVID %s on %d:%d %s.",
+		log_error_pvscan(cmd, "PV %s %u:%u is duplicate for PVID %s on %u:%u %s.",
 			         dev_name(dev), major, minor, dev->pvid, file_major, file_minor, file_devname);
 
 	if (file_vgname[0] && vgname && strcmp(file_vgname, vgname))
@@ -445,7 +445,7 @@ int get_pvs_lookup(struct dm_list *pvs_online, const char *vgname)
 		dm_list_add(pvs_online, &po->list);
 	}
 
-	log_debug("Found PVs online lookup %d for %s.", dm_list_size(pvs_online), vgname);
+	log_debug("Found PVs online lookup %u for %s.", dm_list_size(pvs_online), vgname);
 
 	if (fclose(fp))
 		log_sys_debug("fclose", lookup_path);

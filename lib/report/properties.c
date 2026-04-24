@@ -288,7 +288,6 @@ GET_PV_STR_PROPERTY_FN(pv_device_id_type, pv->device_id_type)
 #define _lv_initial_image_sync_get prop_not_implemented_get
 #define _lv_image_synced_get prop_not_implemented_get
 #define _lv_image_synced_set prop_not_implemented_set
-#define _lv_image_synced_get prop_not_implemented_get
 #define _lv_merging_set prop_not_implemented_set
 #define _lv_merging_get prop_not_implemented_get
 #define _lv_converting_set prop_not_implemented_set
@@ -596,9 +595,9 @@ GET_LVSEG_NUM_PROPERTY_FN(reshape_len_le, lvseg->reshape_len)
 #define _reshape_len_le_set prop_not_implemented_set
 GET_LVSEG_NUM_PROPERTY_FN(data_offset, lvseg->data_offset)
 #define _data_offset_set prop_not_implemented_set
-GET_LVSEG_NUM_PROPERTY_FN(new_data_offset, lvseg->data_offset)
+#define _new_data_offset_get prop_not_implemented_get
 #define _new_data_offset_set prop_not_implemented_set
-GET_LVSEG_NUM_PROPERTY_FN(parity_chunks, lvseg->data_offset)
+#define _parity_chunks_get prop_not_implemented_get
 #define _parity_chunks_set prop_not_implemented_set
 GET_LVSEG_NUM_PROPERTY_FN(stripes, lvseg->area_count)
 #define _stripes_set prop_not_implemented_set

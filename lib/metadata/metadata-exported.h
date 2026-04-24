@@ -153,9 +153,9 @@
 #define LV_RESHAPE_DATA_OFFSET	UINT64_C(0x2000000000000000)    /* LV reshape flag data offset (out of place reshaping) */
 
 
-#define LV_VDO			UINT64_C(0x0000000020000000)    /* LV - Internal user only */
-#define LV_VDO_POOL		UINT64_C(0x0000000040000000)    /* LV - Internal user only */
-#define LV_VDO_POOL_DATA	UINT64_C(0x8000000000000000)    /* LV - Internal user only */
+#define LV_VDO			UINT64_C(0x0000000020000000)    /* LV - Internal use only */
+#define LV_VDO_POOL		UINT64_C(0x0000000040000000)    /* LV - Internal use only */
+#define LV_VDO_POOL_DATA	UINT64_C(0x8000000000000000)    /* LV - Internal use only */
 
 #define LV_CACHE_VOL		UINT64_C(0x0010000000000000)	/* LV - also a PV flag */
 #define LV_CACHE_USES_CACHEVOL	UINT64_C(0x4000000000000000)	/* LV - also a PV flag */
@@ -711,7 +711,7 @@ void pvcreate_params_set_defaults(struct pvcreate_params *pp);
 
 /*
  * Flags that indicate which warnings a library function should issue.
- */ 
+ */
 #define WARN_PV_READ      0x00000001
 #define WARN_INCONSISTENT 0x00000002
 #define SKIP_RESCAN       0x00000004
@@ -1413,7 +1413,7 @@ struct vdo_pool_size_config {
 	uint32_t index_memory_size_mb;
 };
 
-int check_vdo_constrains(struct cmd_context *cmd, const struct vdo_pool_size_config *cfg);
+int check_vdo_constraints(struct cmd_context *cmd, const struct vdo_pool_size_config *cfg);
 /* --  metadata/vdo_manip.c */
 
 struct logical_volume *find_pvmove_lv(struct volume_group *vg,

@@ -108,7 +108,7 @@ struct lv_segment *find_mirror_seg(struct lv_segment *seg)
 	struct lv_segment *mirror_seg;
 
 	if (!(mirror_seg = get_only_segment_using_this_lv(seg->lv))) {
-		log_error("Failed to find mirror_seg for %s", display_lvname(seg->lv));
+		log_error("Failed to find mirror segment for %s.", display_lvname(seg->lv));
 		return NULL;
 	}
 
@@ -130,7 +130,8 @@ struct lv_segment *find_mirror_seg(struct lv_segment *seg)
  */
 uint32_t adjusted_mirror_region_size(struct cmd_context *cmd,
 				     uint32_t extent_size, uint32_t extents,
-				     uint32_t region_size, int internal, int clustered)
+				     uint32_t region_size, int internal,
+				     int clustered __attribute__((unused)))
 {
 	uint64_t region_max;
 
@@ -822,7 +823,7 @@ static int _split_mirror_images(struct logical_volume *lv,
 
 	if (lv_is_active(lv_lock_holder(lv))) {
 		if (!_activate_lv_like_model(lv, new_lv)) {
-			log_error("Failed to rename newly split LV in the kernel");
+			log_error("Failed to rename newly split LV in the kernel.");
 			return 0;
 		}
 
@@ -842,7 +843,7 @@ static int _split_mirror_images(struct logical_volume *lv,
 		sync_local_dev_names(lv->vg->cmd);
 
 		if (!_activate_lv_like_model(lv, new_lv)) {
-			log_error("Failed to rename newly split LV in the kernel");
+			log_error("Failed to rename newly split LV in the kernel.");
 			return 0;
 		}
 	}
@@ -1016,9 +1017,6 @@ static int _remove_mirror_images(struct logical_volume *lv,
 	 * of images left to remove will be taken from the unspecified.
 	 */
 	new_area_count = old_area_count - num_removed;
-
-	if (num_removed && old_area_count == new_area_count)
-		return 1;
 
 	/* Remove mimage LVs from the segment */
 	dm_list_init(&tmp_orphan_lvs);

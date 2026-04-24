@@ -101,6 +101,7 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 	}
 
 	if (!pvcreate_each_device(cmd, handle, &pp)) {
+		unlock_vg(cmd, NULL, vp_new.vg_name);
 		destroy_processing_handle(cmd, handle);
 		return_ECMD_FAILED;
 	}
@@ -130,12 +131,12 @@ int vgcreate(struct cmd_context *cmd, int argc, char **argv)
 		goto_bad;
 
 	if (vp_new.max_lv != vg->max_lv)
-		log_warn("WARNING: Setting maxlogicalvolumes to %d "
-			 "(0 means unlimited)", vg->max_lv);
+		log_warn("WARNING: Setting maxlogicalvolumes to %u (0 means unlimited).",
+			 vg->max_lv);
 
 	if (vp_new.max_pv != vg->max_pv)
-		log_warn("WARNING: Setting maxphysicalvolumes to %d "
-			 "(0 means unlimited)", vg->max_pv);
+		log_warn("WARNING: Setting maxphysicalvolumes to %u (0 means unlimited).",
+			 vg->max_pv);
 
 	if (arg_is_set(cmd, addtag_ARG)) {
 		dm_list_iterate_items(current_group, &cmd->arg_value_groups) {

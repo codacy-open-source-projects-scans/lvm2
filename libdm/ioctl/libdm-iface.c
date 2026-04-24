@@ -566,7 +566,7 @@ int dm_task_get_driver_version(struct dm_task *dmt, char *version, size_t size)
 	_dm_version_patchlevel = v[2];
 	if (version &&
 	    (snprintf(version, size, "%u.%u.%u", v[0], v[1], v[2]) < 0)) {
-		log_error("Buffer for version is to short.");
+		log_error("Buffer for version is too short.");
 		if (size > 0)
 			version[0] = '\0';
 		return 0;
@@ -744,7 +744,7 @@ DM_EXPORT_NEW_SYMBOL(int, dm_task_get_info, 1_02_97)
 	info->live_table = dmt->dmi.v4->flags & DM_ACTIVE_PRESENT_FLAG ? 1 : 0;
 	info->inactive_table = dmt->dmi.v4->flags & DM_INACTIVE_PRESENT_FLAG ?
 	    1 : 0;
-	info->deferred_remove = dmt->dmi.v4->flags & DM_DEFERRED_REMOVE;
+	info->deferred_remove = dmt->dmi.v4->flags & DM_DEFERRED_REMOVE ? 1 : 0;
 	info->internal_suspend = (dmt->dmi.v4->flags & DM_INTERNAL_SUSPEND_FLAG) ? 1 : 0;
 	info->target_count = dmt->dmi.v4->target_count;
 	info->open_count = dmt->dmi.v4->open_count;
@@ -1225,7 +1225,7 @@ static char *_add_target(struct target *t, char *out, char *end)
 	}
 	else {
 		memcpy(out, t->params, len);
-		out += len + backslash_count;
+		out += len;
 	}
 
 	/* align next block */
@@ -1416,12 +1416,12 @@ static struct dm_ioctl *_flatten(struct dm_task *dmt, unsigned repeat_count)
 	/* Does driver support device number referencing? */
 	if (_dm_version_minor < 3 && !DEV_NAME(dmt) && !DEV_UUID(dmt) && dmi->dev) {
 		if (!_lookup_dev_name(dmi->dev, dmi->name, sizeof(dmi->name))) {
-			log_error("Unable to find name for device (%" PRIu32
-				  ":%" PRIu32 ")", dmt->major, dmt->minor);
+			log_error("Unable to find name for device (%d:%d).",
+				  dmt->major, dmt->minor);
 			goto bad;
 		}
-		log_verbose("device (%" PRIu32 ":%" PRIu32 ") is %s "
-			    "for compatibility with old kernel",
+		log_verbose("device (%d:%d) is %s "
+			    "for compatibility with old kernel.",
 			    dmt->major, dmt->minor, dmi->name);
 	}
 
@@ -1848,27 +1848,27 @@ static int _reload_with_suppression_v4(struct dm_task *dmt)
 			t2->params[len] = '\0';
 
 		if (t1->start != t2->start) {
-			log_debug("reload %u:%u diff start %llu %llu type %s %s", task->major, task->minor,
+			log_debug("reload %d:%d diff start %llu %llu type %s %s.", task->major, task->minor,
 				   (unsigned long long)t1->start, (unsigned long long)t2->start, t1->type, t2->type);
 			goto no_match;
 		}
 		if (t1->length != t2->length) {
-			log_debug("reload %u:%u diff length %llu %llu type %s %s", task->major, task->minor,
+			log_debug("reload %d:%d diff length %llu %llu type %s %s.", task->major, task->minor,
 				  (unsigned long long)t1->length, (unsigned long long)t2->length, t1->type, t2->type);
 			goto no_match;
 		}
 		if (strcmp(t1->type, t2->type)) {
-			log_debug("reload %u:%u diff type %s %s", task->major, task->minor, t1->type, t2->type);
+			log_debug("reload %d:%d diff type %s %s.", task->major, task->minor, t1->type, t2->type);
 			goto no_match;
 		}
 		if (strcmp(t1->params, t2->params)) {
 			if (dmt->skip_reload_params_compare) {
-				log_debug("reload %u:%u diff params ignore for type %s",
+				log_debug("reload %d:%d diff params ignore for type %s.",
 					  task->major, task->minor, t1->type);
 				log_debug("reload params1 %s", t1->params);
 				log_debug("reload params2 %s", t2->params);
 			} else {
-				log_debug("reload %u:%u diff params for type %s",
+				log_debug("reload %d:%d diff params for type %s.",
 					  task->major, task->minor, t1->type);
 				log_debug("reload params1 %s", t1->params);
 				log_debug("reload params2 %s", t2->params);
@@ -2221,7 +2221,7 @@ static int _dm_ioctl_exec_retry(int fd, struct dm_task *dmt)
 	do {
 		if (retries) {
 			log_debug_activation("EBUSY retry %u/%u for %s.",
-					     retries, DM_IOCTL_RETRIES,
+					     retries, (unsigned) DM_IOCTL_RETRIES,
 					     dmt->dmi.v4->name);
 			usleep(DM_RETRY_USLEEP_DELAY);
 		}
@@ -2432,7 +2432,7 @@ static int _can_retry_buffer_full(struct dm_task *dmt)
 	case DM_DEVICE_TARGET_MSG:
 		break;
 	default:
-		log_error("WARNING: libdevmapper buffer too small for data.");
+		log_error("libdevmapper buffer too small for data.");
 		return 0;
 	}
 

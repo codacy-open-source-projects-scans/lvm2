@@ -231,7 +231,7 @@ void process_event(struct dm_task *dmt,
 		if (state->percent > state->percent_check)
 			needs_policy = 1;
 		state->percent_check = (state->percent / CHECK_STEP + 1) * CHECK_STEP;
-		if (state->percent_check == DM_PERCENT_100)
+		if (state->percent_check >= DM_PERCENT_100)
 			state->percent_check--; /* Can't get bigger than 100% */
 	} else
 		state->percent_check = CHECK_MINIMUM;
@@ -323,7 +323,7 @@ int register_device(const char *device,
 	if (strncmp(cmd_str, "lvm ", 4) == 0) {
 		if (!(state->cmd_str = dm_pool_strdup(state->mem, cmd_str + 4))) {
 			log_error("Failed to copy lvm VDO command.");
-				goto bad;
+			goto bad;
 		}
 	} else if (cmd_str[0] == '/') {
 		if (!(state->cmd_str = dm_pool_strdup(state->mem, cmd_str))) {
@@ -345,7 +345,7 @@ int register_device(const char *device,
 		_init_thread_signals(state);
 	} else if (cmd[0] == 0) {
 		name = "volume"; /* What to use with 'others?' */
-	} else/* Unsupported command format */
+	} else /* Unsupported command format */
 		goto inval;
 
 	state->max_fails = 1;

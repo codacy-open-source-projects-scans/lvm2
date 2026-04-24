@@ -172,20 +172,20 @@ static int _thin_pool_text_export(const struct lv_segment *seg, struct formatter
 		outf(f, "discards = \"%s\"", get_pool_discards_name(seg->discards));
 		break;
 	default:
-		log_error(INTERNAL_ERROR "Invalid discards value %d.", seg->discards);
+		log_error(INTERNAL_ERROR "Invalid discards value %u.", seg->discards);
 		return 0;
 	}
 
 	if (seg->zero_new_blocks == THIN_ZERO_YES)
 		outf(f, "zero_new_blocks = 1");
 	else if (seg->zero_new_blocks != THIN_ZERO_NO) {
-		log_error(INTERNAL_ERROR "Invalid zero new blocks value %d.",
+		log_error(INTERNAL_ERROR "Invalid zero new blocks value %u.",
 			  seg->zero_new_blocks);
 		return 0;
 	}
 
 	if (seg->crop_metadata != THIN_CROP_METADATA_UNSELECTED)
-		outf(f, "crop_metadata = %u", (seg->crop_metadata == THIN_CROP_METADATA_YES) ? 1 : 0);
+		outf(f, "crop_metadata = %u", (seg->crop_metadata == THIN_CROP_METADATA_YES) ? 1U : 0U);
 
 	dm_list_iterate_items(tmsg, &seg->thin_messages) {
 		/* Extra validation */
@@ -206,7 +206,7 @@ static int _thin_pool_text_export(const struct lv_segment *seg, struct formatter
 		if (!cnt)
 			outnl(f);
 
-		outf(f, "message%d {", ++cnt);
+		outf(f, "message%u {", ++cnt);
 		out_inc_indent(f);
 
 		switch (tmsg->type) {
@@ -215,7 +215,7 @@ static int _thin_pool_text_export(const struct lv_segment *seg, struct formatter
 			outf(f, "create = \"%s\"", tmsg->u.lv->name);
 			break;
 		case DM_THIN_MESSAGE_DELETE:
-			outf(f, "delete = %d", tmsg->u.delete_id);
+			outf(f, "delete = %u", tmsg->u.delete_id);
 			break;
 		default:
 			log_error(INTERNAL_ERROR "Passed unsupported message.");
@@ -524,7 +524,7 @@ static int _thin_text_export(const struct lv_segment *seg, struct formatter *f)
 {
 	outf(f, "thin_pool = \"%s\"", seg->pool_lv->name);
 	outf(f, "transaction_id = %" PRIu64, seg->transaction_id);
-	outf(f, "device_id = %d", seg->device_id);
+	outf(f, "device_id = %u", seg->device_id);
 
 	if (seg->external_lv)
 		outf(f, "external_origin = \"%s\"", seg->external_lv->name);
@@ -540,7 +540,7 @@ static int _thin_text_export(const struct lv_segment *seg, struct formatter *f)
 #ifdef DEVMAPPER_SUPPORT
 static int _thin_add_target_line(struct dev_manager *dm,
 				 struct dm_pool *mem,
-				 struct cmd_context *cmd __attribute__((unused)),
+				 struct cmd_context *cmd,
 				 void **target_state __attribute__((unused)),
 				 struct lv_segment *seg,
 				 const struct lv_activate_opts *laopts,
@@ -610,7 +610,7 @@ static int _thin_add_target_line(struct dev_manager *dm,
 static int _thin_target_percent(void **target_state __attribute__((unused)),
 				dm_percent_t *percent,
 				struct dm_pool *mem,
-				struct cmd_context *cmd __attribute__((unused)),
+				struct cmd_context *cmd,
 				struct lv_segment *seg,
 				char *params,
 				uint64_t *total_numerator,

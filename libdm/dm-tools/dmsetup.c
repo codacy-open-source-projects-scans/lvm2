@@ -723,7 +723,7 @@ static int _do_usleep_wait(void)
 			return_0;
 		dm_timestamp_get(_now);
 		this_interval = _interval;
-		log_error("Using "FMTu64" as first interval.", this_interval);
+		log_debug("Using "FMTu64" as first interval.", this_interval);
 	} else {
 		dm_timestamp_get(_now);
 		delta_t = dm_timestamp_delta(_now, _start_timestamp);
@@ -891,13 +891,13 @@ static int _display_info_cols(struct dm_task *dmt, struct dm_info *info)
 
 	if (_report_type & DR_TREE)
 		if (!(obj.tree_node = dm_tree_find_node(_dtree, info->major, info->minor))) {
-			log_error("Cannot find node %d:%d.", info->major, info->minor);
+			log_error("Cannot find node %u:%u.", info->major, info->minor);
 			goto out;
 		}
 
 	if (_report_type & DR_DEPS)
 		if (!(obj.deps_task = _get_deps_task(info->major, info->minor))) {
-			log_error("Cannot get deps for %d:%d.", info->major, info->minor);
+			log_error("Cannot get deps for %u:%u.", info->major, info->minor);
 			goto out;
 		}
 
@@ -1015,7 +1015,7 @@ static void _display_info_long(struct dm_task *dmt, struct dm_info *info)
 		printf("Open count:        %d\n", info->open_count);
 
 	printf("Event number:      %" PRIu32 "\n", info->event_nr);
-	printf("Major, minor:      %d, %d\n", info->major, info->minor);
+	printf("Major, minor:      %u, %u\n", info->major, info->minor);
 
 	if (info->target_count != -1)
 		printf("Number of targets: %d\n", info->target_count);
@@ -1552,8 +1552,10 @@ static int _message(CMD_ARGS)
 	argc--;
 	argv++;
 
-	if (argc <= 0)
+	if (argc <= 0) {
 		log_error("No message supplied.");
+		goto out;
+	}
 
 	for (i = 0; i < argc; i++)
 		sz += strlen(argv[i]) + 1;
@@ -1707,14 +1709,14 @@ static int _udevflags(CMD_ARGS)
 				 * This is just a fallback. Each new DM flag
 				 * should have its symbolic name assigned.
 				 */
-				printf("DM_UDEV_FLAG%d='1'\n", i);
+				printf("DM_UDEV_FLAG%u='1'\n", i);
 			else
 				/*
 				 * We can't assign symbolic names to subsystem
 				 * flags. Their semantics vary based on the
 				 * subsystem that is currently used.
 				 */
-				printf("DM_SUBSYSTEM_UDEV_FLAG%d='1'\n",
+				printf("DM_SUBSYSTEM_UDEV_FLAG%u='1'\n",
 					i - DM_UDEV_FLAGS_SHIFT / 2);
 		}
 
@@ -1907,7 +1909,7 @@ static int _udevcomplete_all(CMD_ARGS)
 	}
 
 	if (!_switches[YES_ARG]) {
-		log_warn("WARNING: This operation will destroy all semaphores %s%.0d%swith keys "
+		log_warn("WARNING: This operation will destroy all semaphores %s%.0u%swith keys "
 			 "that have a prefix %" PRIu16 " (0x%" PRIx16 ").",
 			 age ? "older than " : "", age, age ? " minutes " : "",
 			 DM_COOKIE_MAGIC, DM_COOKIE_MAGIC);
@@ -1941,7 +1943,7 @@ static int _udevcomplete_all(CMD_ARGS)
 				log_error("Could not cleanup notification semaphore "
 					  "with semid %d and cookie value "
 					  FMTu32 " (0x" FMTx32 ").", sid,
-					  sdata.sem_perm.__key, sdata.sem_perm.__key);
+					  (unsigned) sdata.sem_perm.__key, (unsigned) sdata.sem_perm.__key);
 				continue;
 			}
 
@@ -1966,7 +1968,7 @@ static int _udevcookies(CMD_ARGS)
 	char *otimes, *ctimes;
 
 	if ((max_id = semctl(0, 0, SEM_INFO, &sinfo)) < 0) {
-		log_sys_error("sem_ctl", "SEM_INFO");
+		log_sys_error("semctl", "SEM_INFO");
 		return 0;
 	}
 
@@ -1980,7 +1982,7 @@ static int _udevcookies(CMD_ARGS)
 			if ((val = semctl(sid, 0, GETVAL)) < 0) {
 				log_error("semid %d: sem_ctl failed for "
 					  "cookie 0x%" PRIx32 ": %s",
-					  sid, sdata.sem_perm.__key,
+					  sid, (unsigned) sdata.sem_perm.__key,
 					  strerror(errno));
 				continue;
 			}
@@ -1990,7 +1992,7 @@ static int _udevcookies(CMD_ARGS)
 			if ((ctimes = ctime_r((const time_t *) &sdata.sem_ctime, (char *)&ctime_str)))
 				ctime_str[strlen(ctimes)-1] = '\0';
 
-			printf("0x%-10x %-10d %-10d %s  %s\n", sdata.sem_perm.__key,
+			printf("0x%-10x %-10d %-10d %s  %s\n", (unsigned) sdata.sem_perm.__key,
 				sid, val, otimes ? : "unknown",
 				ctimes? : "unknown");
 		}
@@ -2611,7 +2613,7 @@ static int _targets(CMD_ARGS)
 	do {
 		last_target = target;
 
-		printf("%-16s v%d.%d.%d\n", target->name, target->version[0],
+		printf("%-16s v%u.%u.%u\n", target->name, target->version[0],
 		       target->version[1], target->version[2]);
 
 		target = (struct dm_versions *)((char *) target + target->next);
@@ -2641,7 +2643,7 @@ static int _target_version(CMD_ARGS)
 		goto_out;
 
 	target = dm_task_get_versions(dmt);
-	printf("%-16s v%d.%d.%d\n", target->name, target->version[0],
+	printf("%-16s v%u.%u.%u\n", target->name, target->version[0],
 	       target->version[1], target->version[2]);
 
 	r = 1;
@@ -2745,7 +2747,7 @@ static int _deps(CMD_ARGS)
 
 	if (multiple_devices && !_switches[VERBOSE_ARG])
 		printf("%s: ", name);
-	printf("%d dependencies\t:", deps->count);
+	printf("%u dependencies\t:", deps->count);
 
 	for (i = 0; i < deps->count; i++) {
 		major = (int) MAJOR(deps->device[i]);
@@ -3300,7 +3302,7 @@ static int _dm_blk_name_disp(struct dm_report *rh,
 	const struct dm_info *info = data;
 
 	if (!dm_device_get_name(info->major, info->minor, 1, dev_name, PATH_MAX)) {
-		log_error("Could not resolve block device name for %d:%d.",
+		log_error("Could not resolve block device name for %u:%u.",
 			  info->major, info->minor);
 		return 0;
 	}
@@ -3403,7 +3405,7 @@ static int _dm_info_devno_disp(struct dm_report *rh, struct dm_pool *mem,
 		}
 	}
 	else {
-		if (dm_snprintf(buf, sizeof(buf), "%d:%d",
+		if (dm_snprintf(buf, sizeof(buf), "%u:%u",
 				info->major, info->minor) < 0) {
 			log_error("dm_pool_alloc failed");
 			goto out_abandon;
@@ -3510,7 +3512,7 @@ static int _dm_tree_parents_devs_disp(struct dm_report *rh, struct dm_pool *mem,
 			log_error("dm_pool_grow_object failed");
 			goto out_abandon;
 		}
-		if (dm_snprintf(buf, sizeof(buf), "%d:%d",
+		if (dm_snprintf(buf, sizeof(buf), "%u:%u",
 				info->major, info->minor) < 0) {
 			log_error("dm_snprintf failed");
 			goto out_abandon;
@@ -5521,7 +5523,7 @@ static int _stats_print_one_region(struct dm_stats *dms, int clear,
 static int _stats_print(CMD_ARGS)
 {
 	struct dm_stats *dms;
-	char *name, *stbuff = NULL;
+	char *name;
 	uint64_t region_id;
 	unsigned clear = (unsigned) _switches[CLEAR_ARG];
 	int allregions = _switches[ALL_REGIONS_ARG];
@@ -5572,15 +5574,6 @@ static int _stats_print(CMD_ARGS)
 		region_id = dm_stats_get_current_region(dms);
 		if (!_stats_print_one_region(dms, clear, region_id))
 			goto_out;
-
-		/*FIXME: line control for large regions */
-		if (!(stbuff = dm_stats_print_region(dms, region_id, 0, 0, clear))) {
-			log_error("Could not print statistics region.");
-			goto out;
-		}
-
-		printf("%s", stbuff);
-		dm_stats_buffer_destroy(dms, stbuff);
 	}
 
 	r = 1;
@@ -5757,8 +5750,8 @@ static int _stats_ungroup(CMD_ARGS)
 	if (!(r = dm_stats_delete_group(dms, group_id, 0)))
 		log_error("Could not delete group " FMTu64 " on %s.",
 			  group_id, name);
-
-	printf("Removed group ID "FMTu64" on %s\n", group_id, name);
+	else
+		printf("Removed group ID "FMTu64" on %s\n", group_id, name);
 
 out:
 	dm_stats_destroy(dms);

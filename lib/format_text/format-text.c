@@ -365,9 +365,10 @@ static uint64_t _next_rlocn_offset(struct volume_group *vg, struct raw_locn *rlo
 	 * metadata area, then start at beginning.
 	 */
 	if (mdah->size - old_last < alignment) {
-		log_debug_metadata("VG %s %u new metadata start align from %llu to beginning %u",
+		log_debug_metadata("VG %s %u new metadata start align from %llu to beginning %u.",
 				   vg->name, vg->seqno,
-				   (unsigned long long)(old_last + 1), MDA_HEADER_SIZE);
+				   (unsigned long long) (old_last + 1),
+				   (unsigned) MDA_HEADER_SIZE);
 		return MDA_HEADER_SIZE;
 	}
 
@@ -382,7 +383,7 @@ static uint64_t _next_rlocn_offset(struct volume_group *vg, struct raw_locn *rlo
 
 	new_start = next_start + adjust;
 
-	log_debug_metadata("VG %s %u new metadata start align from %llu to %llu (+%llu)",
+	log_debug_metadata("VG %s %u new metadata start align from %llu to %llu (+%llu).",
 			   vg->name, vg->seqno,
 			   (unsigned long long)next_start,
 			   (unsigned long long)new_start,
@@ -393,9 +394,9 @@ static uint64_t _next_rlocn_offset(struct volume_group *vg, struct raw_locn *rlo
 	 * alignment bytes of the end, then start at the beginning.
 	 */
 	if (new_start > mdah->size - alignment) {
-		log_debug_metadata("VG %s %u new metadata start align from %llu to beginning %u",
+		log_debug_metadata("VG %s %u new metadata start align from %llu to beginning %u.",
 				   vg->name, vg->seqno,
-				   (unsigned long long)new_start, MDA_HEADER_SIZE);
+				   (unsigned long long)new_start, (unsigned) MDA_HEADER_SIZE);
 		return MDA_HEADER_SIZE;
 	}
 
@@ -454,7 +455,7 @@ static struct volume_group *_vg_read_raw_area(struct cmd_context *cmd,
 				&when, &desc);
 
 	if (!vg && (!use_previous_vg || !*use_previous_vg)) {
-		log_warn("WARNING: Failed to read metadata text at %llu off %llu size %llu VG %s on %s",
+		log_warn("WARNING: Failed to read metadata text at %llu off %llu size %llu VG %s on %s.",
 			 (unsigned long long)(area->start + rlocn->offset),
 			 (unsigned long long)rlocn->offset,
 			 (unsigned long long)rlocn->size,
@@ -464,7 +465,7 @@ static struct volume_group *_vg_read_raw_area(struct cmd_context *cmd,
 		return NULL;
 	}
 
-	log_debug_metadata("Found metadata text at %llu off %llu size %llu VG %s on %s",
+	log_debug_metadata("Found metadata text at %llu off %llu size %llu VG %s on %s.",
 			   (unsigned long long)(area->start + rlocn->offset),
 			   (unsigned long long)rlocn->offset,
 			   (unsigned long long)rlocn->size,
@@ -1346,7 +1347,7 @@ static int _vg_write_file(struct format_instance *fid __attribute__((unused)),
 	if (!(fp = fdopen(fd, "w"))) {
 		log_sys_error("fdopen", temp_file);
 		if (close(fd))
-			log_sys_error("fclose", temp_file);
+			log_sys_error("close", temp_file);
 		return 0;
 	}
 
@@ -1443,7 +1444,6 @@ static int _vg_commit_file(struct format_instance *fid, struct volume_group *vg,
 				log_error("%s: rename to %s failed: %s",
 					  tc->path_live, new_name,
 					  strerror(errno));
-				sync_dir(new_name);
 				return 0;
 			}
 		}
@@ -2227,6 +2227,7 @@ static int _add_metadata_area_to_pv(struct physical_volume *pv,
 					 "layout not supported by %s format.",
 					  mda_index, dev_name(pv->dev),
 					  pv->fmt->name);
+		return 0;
 	}
 
 	if (!(mda = dm_pool_zalloc(pv->fid->mem, sizeof(struct metadata_area)))) {

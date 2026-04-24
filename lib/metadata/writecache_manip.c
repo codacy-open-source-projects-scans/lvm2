@@ -82,7 +82,7 @@ static int _get_writecache_kernel_status(struct cmd_context *cmd,
 	}
 
 	if (status.seg_status.type != SEG_STATUS_WRITECACHE) {
-		log_error("Invalid device mapper status type (%d) for %s",
+		log_error("Invalid device mapper status type (%u) for %s",
 			  (uint32_t)status.seg_status.type, display_lvname(lv));
 		goto fail;
 	}
@@ -117,7 +117,7 @@ bool lv_writecache_is_clean(struct cmd_context *cmd, struct logical_volume *lv, 
 {
 	struct dm_status_writecache status = { 0 };
 
-	if (!_get_writecache_kernel_status(cmd, lv, &status)) 
+	if (!_get_writecache_kernel_status(cmd, lv, &status))
 		return false;
 
 	if (dirty_blocks)

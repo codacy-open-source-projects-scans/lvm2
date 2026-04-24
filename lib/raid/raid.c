@@ -30,14 +30,14 @@ static void _raid_display(const struct lv_segment *seg)
 	unsigned s;
 
 	for (s = 0; s < seg->area_count; ++s) {
-		log_print("  Raid Data LV%2d", s);
+		log_print("  Raid Data LV%2u", s);
 		display_stripe(seg, s, "    ");
 	}
 
 	if (seg->meta_areas)
 		for (s = 0; s < seg->area_count; ++s)
 			if (seg_metalv(seg, s))
-				log_print("  Raid Metadata LV%2d\t%s", s, seg_metalv(seg, s)->name);
+				log_print("  Raid Metadata LV%2u\t%s", s, seg_metalv(seg, s)->name);
 
 	log_print(" ");
 }
@@ -299,9 +299,9 @@ static int _raid_target_present(struct cmd_context *cmd,
 				const struct lv_segment *seg __attribute__((unused)),
 				unsigned *attributes);
 
-static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
+static int _raid_add_target_line(struct dev_manager *dm,
 				 struct dm_pool *mem __attribute__((unused)),
-				 struct cmd_context *cmd __attribute__((unused)),
+				 struct cmd_context *cmd,
 				 void **target_state __attribute__((unused)),
 				 struct lv_segment *seg,
 				 const struct lv_activate_opts *laopts __attribute__((unused)),
@@ -336,8 +336,8 @@ static int _raid_add_target_line(struct dev_manager *dm __attribute__((unused)),
 	 * It is not strictly a userspace limitation.
 	 */
 	if (seg->area_count > DEFAULT_RAID_MAX_IMAGES) {
-		log_error("Unable to handle more than %u devices in a "
-			  "single RAID array", DEFAULT_RAID_MAX_IMAGES);
+		log_error("Unable to handle more than %u devices in a single RAID array.",
+			  (unsigned) DEFAULT_RAID_MAX_IMAGES);
 		return 0;
 	}
 

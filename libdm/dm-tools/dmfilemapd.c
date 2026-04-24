@@ -338,7 +338,7 @@ static int _parse_args(int argc, char **argv, struct filemap_monitor *fm)
 		errno = 0;
 		_foreground = (int) strtol(argv[0], &endptr, 10);
 		if (errno || *endptr) {
-			_early_log("Could not parse debug argument: %s.",
+			_early_log("Could not parse foreground argument: %s.",
 				   argv[0]);
 			return 0;
 		}
@@ -619,7 +619,7 @@ check_unlinked:
 		return 0;
 
 	/* Should not happen with normal /proc. */
-	if ((fd > 0) && !same) {
+	if ((fd >= 0) && !same) {
 		log_error("File descriptor mismatch: %d and %s (read from %s) "
 			  "are not the same file!", fm->fd, link_buf, path_buf);
 		return 0;

@@ -261,8 +261,10 @@ static int _daemon_read(struct dm_event_fifos *fifos,
 			msg->cmd = ntohl(header[0]);
 			bytes = 0;
 
-			if (!(size = msg->size = ntohl(header[1])))
-				break;
+			if (!(size = msg->size = ntohl(header[1]))) {
+				log_error("Missing event server response data.");
+				goto bad;
+			}
 
 			if (!(buf = msg->data = malloc(msg->size + 1))) {
 				log_error("Unable to allocate message data.");
@@ -372,13 +374,16 @@ int daemon_talk(struct dm_event_fifos *fifos,
 	 * Set command and pack the arguments
 	 * into ASCII message string.
 	 */
-	if ((msg_size =
-	     ((cmd == DM_EVENT_CMD_HELLO) ?
-	      dm_asprintf(&(msg->data), "%d:%d HELLO", getpid(), _sequence_nr) :
-	      dm_asprintf(&(msg->data), "%d:%d %s %s %u %" PRIu32,
-			  getpid(), _sequence_nr,
-			  dso_name ? : "-", dev_name ? : "-", evmask, timeout)))
-	    < 0) {
+	if (cmd == DM_EVENT_CMD_HELLO)
+		msg_size = dm_asprintf(&(msg->data), "%d:%d HELLO",
+				       getpid(), _sequence_nr);
+	else
+		msg_size = dm_asprintf(&(msg->data), "%d:%d %s %s %u %" PRIu32,
+				       getpid(), _sequence_nr,
+				       dso_name ? : "-", dev_name ? : "-",
+				       evmask, timeout);
+
+	if (msg_size < 0) {
 		log_error("_daemon_talk: message allocation failed.");
 		return -ENOMEM;
 	}
@@ -400,7 +405,7 @@ int daemon_talk(struct dm_event_fifos *fifos,
 		free(msg->data);
 		msg->data = NULL;
 
-		if (!_daemon_read(fifos, msg)) {
+		if (!_daemon_read(fifos, msg) || !msg->data) {
 			stack;
 			return -EIO;
 		}
@@ -995,7 +1000,7 @@ void dm_event_log(const char *subsys, int level, const char *file,
 				now / 60, now % 60, now_nsec / 1000,
 				// TODO: Maybe use shorter ID
 				// ((int)(pthread_self()) >> 6) & 0xffff,
-				(int)pthread_self(), subsys,
+				(unsigned) pthread_self(), subsys,
 				(_debug_level > 3) ? "" : indent);
 		}
 		if (_debug_level > 3)

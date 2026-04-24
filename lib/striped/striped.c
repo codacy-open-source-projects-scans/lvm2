@@ -51,7 +51,7 @@ static void _striped_display(const struct lv_segment *seg)
 				  seg->stripe_size / 2);
 
 		for (s = 0; s < seg->area_count; s++) {
-			log_print("  Stripe %d:", s);
+			log_print("  Stripe %u:", s);
 			display_stripe(seg, s, "    ");
 		}
 	}
@@ -166,7 +166,7 @@ static int _striped_target_status_compatible(const char *type)
 
 static int _striped_add_target_line(struct dev_manager *dm,
 				struct dm_pool *mem __attribute__((unused)),
-				struct cmd_context *cmd __attribute__((unused)),
+				struct cmd_context *cmd,
 				void **target_state __attribute__((unused)),
 				struct lv_segment *seg,
 				const struct lv_activate_opts *laopts __attribute__((unused)),

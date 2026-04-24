@@ -635,7 +635,7 @@ static int _init_device_ids_refresh(struct cmd_context *cmd)
 
 	/* 0 disables, 1 enables single refresh, 10-600 enables refresh period */
 	if ((val > 1 && val < 10) || (val > 600)) {
-		log_error("Invalid device_ids_refresh value %u", val);
+		log_error("Invalid device_ids_refresh value %d.", val);
 		return 0;
 	}
 
@@ -684,7 +684,7 @@ static int _process_config(struct cmd_context *cmd)
 	if ((old_umask = umask((mode_t) cmd->default_settings.umask)) !=
 	    (mode_t) cmd->default_settings.umask)
 		log_verbose("Set umask from %04o to %04o",
-                            old_umask, cmd->default_settings.umask);
+				    old_umask, cmd->default_settings.umask);
 
 	/* dev dir */
 	if (dm_snprintf(cmd->dev_dir, sizeof(cmd->dev_dir), "%s/",
@@ -724,7 +724,7 @@ static int _process_config(struct cmd_context *cmd)
 	/* proc dir */
 	if (dm_snprintf(cmd->proc_dir, sizeof(cmd->proc_dir), "%s",
 			 find_config_tree_str(cmd, global_proc_CFG, NULL)) < 0) {
-		log_error("Device directory given in config file too long");
+		log_error("Proc directory given in config file too long");
 		return 0;
 	}
 
@@ -802,13 +802,13 @@ static int _process_config(struct cmd_context *cmd)
 	else if (strcmp(cmd->stripe_filler, "error") &&
 		 strcmp(cmd->stripe_filler, "zero")) {
 		if (stat(cmd->stripe_filler, &st)) {
-			log_warn("WARNING: activation/missing_stripe_filler = \"%s\"."
+			log_warn("WARNING: activation/missing_stripe_filler = \"%s\" "
 				 "is invalid,", cmd->stripe_filler);
 			log_warn("         stat failed: %s", strerror(errno));
 			log_warn("Falling back to \"error\" missing_stripe_filler.");
 			cmd->stripe_filler = "error";
 		} else if (!S_ISBLK(st.st_mode)) {
-			log_warn("WARNING: activation/missing_stripe_filler = \"%s\"."
+			log_warn("WARNING: activation/missing_stripe_filler = \"%s\" "
 				 "is not a block device.", cmd->stripe_filler);
 			log_warn("Falling back to \"error\" missing_stripe_filler.");
 			cmd->stripe_filler = "error";
@@ -1336,7 +1336,7 @@ int init_filters(struct cmd_context *cmd, unsigned load_persistent_cache)
 	/*
 	 * persistent filter is a cache of the previous result real filter result.
 	 * If a dev is found in persistent filter, the pass/fail result saved by
-	 * the pfilter is used.  If a dev does not existing in the persistent
+	 * the pfilter is used.  If a dev does not exist in the persistent
 	 * filter, the dev is passed on to the real filter, and when the result
 	 * of the real filter is saved in the persistent filter.
 	 *
@@ -1363,15 +1363,15 @@ bad:
 
 struct format_type *get_format_by_name(struct cmd_context *cmd, const char *format)
 {
-        struct format_type *fmt;
+	struct format_type *fmt;
 
-        dm_list_iterate_items(fmt, &cmd->formats)
-                if (!strcasecmp(fmt->name, format) ||
-                    !strcasecmp(fmt->name + 3, format) ||
-                    (fmt->alias && !strcasecmp(fmt->alias, format)))
-                        return fmt;
+	dm_list_iterate_items(fmt, &cmd->formats)
+		if (!strcasecmp(fmt->name, format) ||
+		    !strcasecmp(fmt->name + 3, format) ||
+		    (fmt->alias && !strcasecmp(fmt->alias, format)))
+			return fmt;
 
-        return NULL;
+	return NULL;
 }
 
 /* FIXME: there's only one format, get rid of the list of formats */
@@ -1880,7 +1880,7 @@ int refresh_filters(struct cmd_context *cmd)
 
 	_destroy_filters(cmd);
 	if (!(r = init_filters(cmd, 0)))
-                stack;
+		stack;
 
 	/*
 	 * During repair code must not reset suspended flag.
@@ -2012,7 +2012,7 @@ int refresh_toolcontext(struct cmd_context *cmd)
 	cmd->initialized.config = 1;
 
 	if (!dm_list_empty(&cmd->pending_delete)) {
-		log_debug(INTERNAL_ERROR "Unprocessed pending delete for %d devices.",
+		log_debug(INTERNAL_ERROR "Unprocessed pending delete for %u devices.",
 			  dm_list_size(&cmd->pending_delete));
 		dm_list_init(&cmd->pending_delete);
 	}

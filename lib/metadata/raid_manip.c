@@ -127,7 +127,7 @@ static int _check_region_size_constraints(struct logical_volume *lv,
 static int _check_max_raid_devices(uint32_t image_count)
 {
 	if (image_count > DEFAULT_RAID_MAX_IMAGES) {
-		log_error("Unable to handle raid arrays with more than %u devices.",
+		log_error("Unable to handle raid arrays with more than %d devices.",
 			  DEFAULT_RAID_MAX_IMAGES);
 		return 0;
 	}
@@ -138,7 +138,7 @@ static int _check_max_raid_devices(uint32_t image_count)
 static int _check_max_mirror_devices(uint32_t image_count)
 {
 	if (image_count > DEFAULT_MIRROR_MAX_IMAGES) {
-		log_error("Unable to handle mirrors with more than %u devices.",
+		log_error("Unable to handle mirrors with more than %d devices.",
 			  DEFAULT_MIRROR_MAX_IMAGES);
 		return 0;
 	}
@@ -929,7 +929,7 @@ static int _shift_and_rename_image_components(struct lv_segment *seg)
 		if (seg_type(seg, s) == AREA_UNASSIGNED) {
 			if (seg_metatype(seg, s) != AREA_UNASSIGNED) {
 				log_error(INTERNAL_ERROR "Metadata segment area."
-					  " #%d should be AREA_UNASSIGNED.", s);
+					  " #%u should be AREA_UNASSIGNED.", s);
 				return 0;
 			}
 			missing++;
@@ -977,7 +977,7 @@ static char *_generate_raid_name(struct logical_volume *lv,
 
 	if (dm_snprintf(name, sizeof(name), "%s_%s%s",
 			lv->name, suffix, count_suffix) < 0) {
-		log_error("Failed to new raid name for %s.",
+		log_error("Failed to generate new raid name for %s.",
 			  display_lvname(lv));
 		return NULL;
 	}
@@ -1025,29 +1025,29 @@ static struct logical_volume *_alloc_image_component(struct logical_volume *lv,
 		break;
 	default:
 		log_error(INTERNAL_ERROR
-			  "Bad type provided to _alloc_raid_component.");
-		return 0;
+			  "Bad type provided to _alloc_image_component.");
+		return NULL;
 	}
 
 	if (dm_snprintf(img_name, sizeof(img_name), "%s_%s_%%d",
 			(alt_base_name) ? : lv->name, type_suffix) < 0) {
 		log_error("Component name for raid %s is too long.", display_lvname(lv));
-		return 0;
+		return NULL;
 	}
 
 	status = LVM_READ | LVM_WRITE | LV_REBUILD | type;
 	if (!(tmp_lv = lv_create_empty(img_name, NULL, status, ALLOC_INHERIT, lv->vg))) {
 		log_error("Failed to allocate new raid component, %s.", img_name);
-		return 0;
+		return NULL;
 	}
 
 	if (ah) {
 		if (!(segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_STRIPED)))
-			return_0;
+			return_NULL;
 
 		if (!lv_add_segment(ah, first_area, 1, tmp_lv, segtype, 0, status, 0)) {
 			log_error("Failed to add segment to LV, %s.", img_name);
-			return 0;
+			return NULL;
 		}
 	}
 
@@ -1405,7 +1405,7 @@ static int _lv_relocate_reshape_space(struct logical_volume *lv, enum alloc_wher
 			end = _reshape_len_per_dev(seg);
 			break;
 		default:
-			log_error(INTERNAL_ERROR "bogus reshape space reallocation request [%d]", where);
+			log_error(INTERNAL_ERROR "bogus reshape space reallocation request [%u]", where);
 			return 0;
 		}
 
@@ -2065,7 +2065,7 @@ static int _raid_reshape_remove_images(struct logical_volume *lv,
 		}
 
 		if (available_slvs + removed_slvs != old_image_count) {
-			log_error ("No correct kernel/lvm total LV count on %s.", display_lvname(lv));
+			log_error("No correct kernel/lvm total LV count on %s.", display_lvname(lv));
 			return 0;
 		}
 
@@ -2425,7 +2425,7 @@ static int _raid_reshape(struct logical_volume *lv,
 
 		/* Possible after a shrinking reshape and forgotten device removal */
 		log_error("Device count is incorrect. "
-			  "Forgotten \"lvconvert --stripes %d %s\" to remove %u images after reshape?",
+			  "Forgotten \"lvconvert --stripes %u %s\" to remove %u images after reshape?",
 			  devs_in_sync - seg->segtype->parity_devs, display_lvname(lv),
 			  old_image_count - devs_in_sync);
 		return 0;
@@ -3055,11 +3055,11 @@ static int _raid_extract_images(struct logical_volume *lv,
 	if (!_raid_allow_extraction(lv, extract, target_pvs))
 		return_0;
 
-	log_verbose("Extracting %u %s from %s.", extract,
+	log_verbose("Extracting %d %s from %s.", extract,
 		    (extract > 1) ? "images" : "image",
 		    display_lvname(lv));
 	if ((int) dm_list_size(target_pvs) < extract) {
-		log_error("Unable to remove %d images:  Only %d device%s given.",
+		log_error("Unable to remove %d images: Only %u device%s given.",
 			  extract, dm_list_size(target_pvs),
 			  (dm_list_size(target_pvs) == 1) ? "" : "s");
 		return 0;
@@ -3286,7 +3286,7 @@ static int _lv_raid_change_image_count(struct logical_volume *lv, int yes, uint3
 		r = 1;
 
 	if (old_count == new_count) {
-		log_warn("WARNING: %s already has image count of %d.",
+		log_warn("WARNING: %s already has image count of %u.",
 			 display_lvname(lv), new_count);
 		return r;
 	}
@@ -4230,7 +4230,7 @@ static int _convert_raid1_to_mirror(struct logical_volume *lv,
 	if (!_check_max_mirror_devices(new_image_count)) {
 		log_error("Unable to convert %s LV %s with %u images to %s.",
 			  SEG_TYPE_NAME_RAID1, display_lvname(lv), new_image_count, SEG_TYPE_NAME_MIRROR);
-		log_error("At least reduce to the maximum of %u images with \"lvconvert -m%u %s\".",
+		log_error("At least reduce to the maximum of %d images with \"lvconvert -m%d %s\".",
 			  DEFAULT_MIRROR_MAX_IMAGES, DEFAULT_MIRROR_MAX_IMAGES - 1, display_lvname(lv));
 		return 0;
 	}
@@ -4558,7 +4558,7 @@ static struct lv_segment *_convert_striped_to_raid0(struct logical_volume *lv,
 
 	/* Initialize reshape len properly after adding the image component list */
 	if (!_lv_set_reshape_len(lv, 0))
-		return_0;
+		return_NULL;
 
 	if (update_and_reload && !lv_update_and_reload(lv))
 		return NULL;
@@ -7525,7 +7525,7 @@ static int _raid_count_or_clear_failed_devices(const struct logical_volume *lv,
 		if (r && cleared_devs &&
 		    (failed_sublvs <= raid_seg->segtype->parity_devs))
 			/* TODO: maybe we want to activate RAID volume here ? */
-			log_print_unless_silent("Volume has been restored after clearing %u superblocks(s). Once online please check its content.",
+			log_print_unless_silent("Volume has been restored after clearing %d superblock(s). Once online please check its content.",
 						cleared_devs);
 	}
 

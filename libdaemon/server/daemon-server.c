@@ -482,7 +482,7 @@ static void *_client_thread(void *state)
 			dm_config_destroy(req.cft);
 		buffer_destroy(&req.buffer);
 
-		if (!r) {
+		if (!r || !res.buffer.mem) {
 			buffer_destroy(&res.buffer);
 			goto fail;
 		}
@@ -743,7 +743,7 @@ void daemon_start(daemon_state s)
 		if (_is_idle(s)) {
 			DEBUGLOG(&s, "timeout occurred");
 			if (++timeout_count >= _get_max_timeouts(s)) {
-				INFO(&s, "Inactive for %d seconds. Exiting.", timeout_count);
+				INFO(&s, "Inactive for %u seconds. Exiting.", timeout_count);
 				break;
 			}
 		}

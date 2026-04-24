@@ -571,9 +571,9 @@ static int _cache_text_export(const struct lv_segment *seg, struct formatter *f)
 }
 
 #ifdef DEVMAPPER_SUPPORT
-static int _cache_add_target_line(struct dev_manager *dm,
+static int _cache_add_target_line(struct dev_manager *dm __attribute__((unused)),
 				 struct dm_pool *mem,
-				 struct cmd_context *cmd __attribute__((unused)),
+				 struct cmd_context *cmd,
 				 void **target_state __attribute__((unused)),
 				 struct lv_segment *seg,
 				 const struct lv_activate_opts *laopts __attribute__((unused)),
@@ -612,7 +612,7 @@ static int _cache_add_target_line(struct dev_manager *dm,
 	else
 		switch (setting_seg->cache_mode) {
 		default:
-			log_error(INTERNAL_ERROR "LV %s has unknown cache mode %d.",
+			log_error(INTERNAL_ERROR "LV %s has unknown cache mode %u.",
 				  display_lvname(seg->lv), setting_seg->cache_mode);
 			/* Fall through */
 		case CACHE_MODE_WRITETHROUGH:
@@ -673,7 +673,7 @@ static int _cache_add_target_line(struct dev_manager *dm,
 			}
 		};
 
-                /* Check if cache settings are acceptable to known policies */
+		/* Check if cache settings are acceptable to known policies */
 		for (i = 0; i < DM_ARRAY_SIZE(_accepted); i++) {
 			if (strcasecmp(setting_seg->policy_name, _accepted[i].name))
 				continue;
@@ -697,7 +697,7 @@ static int _cache_add_target_line(struct dev_manager *dm,
 						if (!_accepted[i].settings[j]) {
 							log_warn("WARNING: %s cache policy does not support \"%s=" FMTu64 "\" setting, "
 								 "remove with 'lvchange --cachesettings \"%s=default\" ...'.",
-								 _accepted[i].name, cn->key, cn->v->v.i, cn->key);
+								 _accepted[i].name, cn->key, (uint64_t)cn->v->v.i, cn->key);
 							dm_config_remove_node(policy_settings, cn);
 							goto restart;
 						}

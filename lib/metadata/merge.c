@@ -284,7 +284,8 @@ static void _check_raid_seg(struct lv_segment *seg, int *error_count)
 		if (seg->area_count > DEFAULT_RAID1_MAX_IMAGES) {
 			log_error("LV %s invalid: maximum supported areas %u "
 				  "(is %u) for %s segment.",
-				  display_lvname(seg->lv), DEFAULT_RAID1_MAX_IMAGES,
+				  display_lvname(seg->lv),
+				  (unsigned) DEFAULT_RAID1_MAX_IMAGES,
 				  seg->area_count, lvseg_name(seg));
 			if ((*error_count)++ > ERROR_MAX)
 				return;
@@ -292,7 +293,8 @@ static void _check_raid_seg(struct lv_segment *seg, int *error_count)
 	} else if (seg->area_count > DEFAULT_RAID_MAX_IMAGES) {
 		log_error("LV %s invalid: maximum supported areas %u "
 			  "(is %u) for %s segment.",
-			  display_lvname(seg->lv), DEFAULT_RAID_MAX_IMAGES,
+			  display_lvname(seg->lv),
+			  (unsigned) DEFAULT_RAID_MAX_IMAGES,
 			  seg->area_count, lvseg_name(seg));
 		if ((*error_count)++ > ERROR_MAX)
 			return;
@@ -310,7 +312,7 @@ static void _check_raid_seg(struct lv_segment *seg, int *error_count)
 		if (area_len &&
 		    area_len != seg_lv(seg, s)->le_count) {
 				raid_seg_error_val("DataLV size variations",
-		    				   seg_lv(seg, s)->le_count);
+						   seg_lv(seg, s)->le_count);
 		} else
 			area_len = seg_lv(seg, s)->le_count;
 	}
@@ -331,7 +333,7 @@ static void _check_raid_seg(struct lv_segment *seg, int *error_count)
 			if (area_len &&
 			    area_len != seg_metalv(seg, s)->le_count) {
 				raid_seg_error_val("MetaLV size variations",
-		    				   seg_metalv(seg, s)->le_count);
+						   seg_metalv(seg, s)->le_count);
 			} else
 				area_len = seg_metalv(seg, s)->le_count;
 		}

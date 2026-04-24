@@ -177,7 +177,7 @@ static int _do_lvs_with_info_and_status_single(struct cmd_context *cmd,
 	int merged;
 
 	if (lv_is_merging_origin(lv))
-		/* Status is need to know which LV should be shown */
+		/* Status is needed to know which LV should be shown */
 		do_status = 1;
 
 	if (!_do_info_and_status(cmd, first_seg(lv), &status, do_info, do_status))
@@ -241,7 +241,7 @@ static int _do_segs_with_info_and_status_single(struct cmd_context *cmd,
 	int merged;
 
 	if (lv_is_merging_origin(seg->lv))
-		/* Status is need to know which LV should be shown */
+		/* Status is needed to know which LV should be shown */
 		do_status = 1;
 
 	if (!_do_info_and_status(cmd, seg, &status, do_info, do_status))
@@ -906,7 +906,7 @@ static int _get_report_options(struct cmd_context *cmd,
 
 		opts = grouped_arg_str_value(current_group->arg_values, options_ARG, NULL);
 		if (!opts || !*opts) {
-			log_error("Invalid options string: %s", opts);
+			log_error("Invalid options string: %s", opts ? : "");
 			r = EINVALID_CMD_LINE;
 			goto out;
 		}
@@ -1351,7 +1351,7 @@ static int _config_report(struct cmd_context *cmd, struct report_args *args, str
 			single_args->selection = find_config_tree_str(cmd, log_command_log_selection_CFG, NULL);
 			break;
 		default:
-			log_error(INTERNAL_ERROR "_report: unknown report type.");
+			log_error(INTERNAL_ERROR "_config_report: unknown report type.");
 			return 0;
 	}
 

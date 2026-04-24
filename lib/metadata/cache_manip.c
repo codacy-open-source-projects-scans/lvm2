@@ -164,9 +164,10 @@ int cache_set_cache_mode(struct lv_segment *seg, cache_mode_t mode)
 void cache_check_for_warns(const struct lv_segment *seg)
 {
 	struct logical_volume *origin_lv = seg_lv(seg, 0);
+	cache_mode_t mode = lv_is_cache_vol(seg->pool_lv) ?
+		seg->cache_mode : first_seg(seg->pool_lv)->cache_mode;
 
-	if (lv_is_raid(origin_lv) &&
-	    first_seg(seg->pool_lv)->cache_mode == CACHE_MODE_WRITEBACK)
+	if (lv_is_raid(origin_lv) && (mode == CACHE_MODE_WRITEBACK))
 		log_warn("WARNING: Data redundancy could be lost with writeback "
 			 "caching of raid logical volume!");
 }
@@ -723,7 +724,7 @@ static const char *_get_default_cache_policy(struct cmd_context *cmd)
 {
 	const struct segment_type *segtype = get_segtype_from_string(cmd, SEG_TYPE_NAME_CACHE);
 	unsigned attr = ~0;
-        const char *def = NULL;
+	const char *def = NULL;
 
 	if (!segtype ||
 	    !segtype->ops->target_present ||
@@ -767,12 +768,55 @@ static cache_metadata_format_t _get_default_cache_metadata_format(struct cmd_con
 	return f;
 }
 
+static int _policy_settings_from_config(struct cmd_context *cmd,
+					struct dm_pool *mem,
+					struct profile *profile,
+					const char *policy_name,
+					struct dm_config_node **result)
+{
+	const struct dm_config_node *cns;
+	struct dm_config_node *cn;
+
+	*result = NULL;
+
+	if (!(cns = find_config_tree_node(cmd, allocation_cache_settings_CFG_SECTION, profile)))
+		return 1;
+
+	for (cn = cns->child; cn; cn = cn->sib) {
+		if (!cn->child)
+			continue;
+		if (cn->v || strcmp(cn->key, policy_name) != 0)
+			continue;
+		if (!(*result = dm_config_clone_node_with_mem(mem, cn, 0)))
+			return_0;
+		(*result)->key = "policy_settings";
+		break;
+	}
+
+	return 1;
+}
+
+static void _remove_default_settings(struct dm_config_node *settings)
+{
+	struct dm_config_node *cn;
+
+restart:
+	cn = settings ? settings->child : NULL;
+	while (cn) {
+		if (cn->v && cn->v->type == DM_CFG_STRING &&
+		    !strcmp(cn->v->v.str, "default")) {
+			dm_config_remove_node(settings, cn);
+			goto restart;
+		}
+		cn = cn->sib;
+	}
+}
+
 int cache_set_policy(struct lv_segment *lvseg, const char *name,
 		     const struct dm_config_tree *settings)
 {
 	struct lv_segment *seg;
 	struct dm_config_node *cn;
-	const struct dm_config_node *cns;
 	struct dm_config_tree *old = NULL, *new = NULL, *tmp = NULL;
 	int r = 0;
 	struct profile *profile = lvseg->lv->profile;
@@ -830,37 +874,13 @@ int cache_set_policy(struct lv_segment *lvseg, const char *name,
 		    !(seg->policy_settings = dm_config_clone_node_with_mem(seg->lv->vg->vgmem, cn, 0)))
 			goto_out;
 	} else if (!seg->policy_settings) {
-		if ((cns = find_config_tree_node(seg->lv->vg->cmd, allocation_cache_settings_CFG_SECTION,
-						 profile))) {
-			/* Try to find our section for given policy */
-			for (cn = cns->child; cn; cn = cn->sib) {
-				if (!cn->child)
-					continue; /* Ignore section without settings */
-
-				if (cn->v || strcmp(cn->key, seg->policy_name) != 0)
-					continue; /* Ignore mismatching sections */
-
-				/* Clone nodes with policy name */
-				if (!(seg->policy_settings = dm_config_clone_node_with_mem(seg->lv->vg->vgmem,
-											   cn, 0)))
-					return_0;
-
-				/* Replace policy name key with 'policy_settings' */
-				seg->policy_settings->key = "policy_settings";
-				break; /* Only first match counts */
-			}
-		}
+		if (!_policy_settings_from_config(seg->lv->vg->cmd, seg->lv->vg->vgmem,
+						  profile, seg->policy_name,
+						  &seg->policy_settings))
+			return_0;
 	}
 
-restart: /* remove any 'default" nodes */
-	cn = seg->policy_settings ? seg->policy_settings->child : NULL;
-	while (cn) {
-		if (cn->v && cn->v->type == DM_CFG_STRING && !strcmp(cn->v->v.str, "default")) {
-			dm_config_remove_node(seg->policy_settings, cn);
-			goto restart;
-		}
-		cn = cn->sib;
-	}
+	_remove_default_settings(seg->policy_settings);
 
 	r = 1;
 
@@ -979,7 +999,6 @@ int cache_vol_set_params(struct cmd_context *cmd,
 	struct logical_volume *corig_lv = seg_lv(cache_seg, 0);
 	const char *policy_name = NULL;
 	struct dm_config_node *policy_settings = NULL;
-	const struct dm_config_node *cns;
 	struct dm_config_node *cn;
 	uint64_t meta_size = 0;
 	uint64_t data_size = 0;
@@ -1047,7 +1066,7 @@ int cache_vol_set_params(struct cmd_context *cmd,
 	max_meta_size = 2 * DEFAULT_CACHE_POOL_MAX_METADATA_SIZE; /* 2x for KiB to sectors */
 
 	if (pool_lv->size < (extent_size * 2)) {
-		log_error("The minimum cache size is two extents (%s bytes).",
+		log_error("The minimum cache size is two extents (%s).",
 			  display_size(cmd, extent_size * 2));
 		return 0;
 	}
@@ -1122,8 +1141,6 @@ int cache_vol_set_params(struct cmd_context *cmd,
 	/*
 	 * cache settings: get_cache_params() gets policy from --cachesettings,
 	 * or sets NULL.
-	 * FIXME: code for this is a mess, mostly copied from cache_set_policy
-	 * which is even worse.
 	 */
 
 	if (settings) {
@@ -1132,34 +1149,12 @@ int cache_vol_set_params(struct cmd_context *cmd,
 				return_0;
 		}
 	} else {
-		if ((cns = find_config_tree_node(cmd, allocation_cache_settings_CFG_SECTION, profile))) {
-			/* Try to find our section for given policy */
-			for (cn = cns->child; cn; cn = cn->sib) {
-				if (!cn->child)
-					continue; /* Ignore section without settings */
-
-				if (cn->v || strcmp(cn->key, policy_name) != 0)
-					continue; /* Ignore mismatching sections */
-
-				/* Clone nodes with policy name */
-				if (!(policy_settings = dm_config_clone_node_with_mem(mem, cn, 0)))
-					return_0;
-
-				/* Replace policy name key with 'policy_settings' */
-				policy_settings->key = "policy_settings";
-				break; /* Only first match counts */
-			}
-		}
+		if (!_policy_settings_from_config(cmd, mem, profile,
+						  policy_name, &policy_settings))
+			return_0;
 	}
-  restart: /* remove any 'default" nodes */
-	cn = policy_settings ? policy_settings->child : NULL;
-	while (cn) {
-		if (cn->v && cn->v->type == DM_CFG_STRING && !strcmp(cn->v->v.str, "default")) {
-			dm_config_remove_node(policy_settings, cn);
-			goto restart;
-		}
-		cn = cn->sib;
-	}
+
+	_remove_default_settings(policy_settings);
 
 
 	log_debug("Setting LV %s cache on %s meta start 0 len %llu data start %llu len %llu sectors",

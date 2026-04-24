@@ -227,7 +227,7 @@ static int _mirrored_transient_status(struct dm_pool *mem, struct lv_segment *se
 		}
 		log_very_verbose("Status of log (%d:%d): %c.",
 				 info.major, info.minor,
-				 sm->logs[0].health);
+				 (int) sm->logs[0].health);
 		if (sm->logs[0].health != DM_STATUS_MIRROR_ALIVE) {
 			log->status |= PARTIAL_LV;
 			++failed;
@@ -244,8 +244,8 @@ static int _mirrored_transient_status(struct dm_pool *mem, struct lv_segment *se
 		for (j = 0; j < sm->dev_count; ++j)
 			if (info.major == (int)sm->devs[j].major &&
 			    info.minor == (int)sm->devs[j].minor) {
-				log_very_verbose("Status of image %d: %c.",
-						 i, sm->devs[j].health);
+				log_very_verbose("Status of image %u: %c.",
+						 i, (int) sm->devs[j].health);
 				if (sm->devs[j].health != DM_STATUS_MIRROR_ALIVE) {
 					seg_lv(seg, i)->status |= PARTIAL_LV;
 					++failed;
@@ -253,7 +253,7 @@ static int _mirrored_transient_status(struct dm_pool *mem, struct lv_segment *se
 				break;
 			}
 		if (j == sm->dev_count) {
-			log_error("Failed to find image %d (%d:%d).",
+			log_error("Failed to find image %u (%d:%d).",
 				  i, info.major, info.minor);
 			goto out;
 		}
@@ -327,7 +327,7 @@ static int _mirrored_add_target_line(struct dev_manager *dm, struct dm_pool *mem
 
 	if (!*target_state &&
 	    !(*target_state = _mirrored_init_target(mem, cmd)))
-                return_0;
+		return_0;
 
 	mirr_state = *target_state;
 
@@ -335,7 +335,7 @@ static int _mirrored_add_target_line(struct dev_manager *dm, struct dm_pool *mem
 	 * Mirror segment could have only 1 area temporarily
 	 * if the segment is under conversion.
 	 */
- 	if (seg->area_count == 1)
+	if (seg->area_count == 1)
 		mirror_status = MIRR_DISABLED;
 
 	/*

@@ -456,7 +456,7 @@ static int _ignore_blocked_mirror_devices(struct cmd_context *cmd,
 
 	for (i = 0; i < sm->dev_count; ++i)
 		if (sm->devs[i].health != DM_STATUS_MIRROR_ALIVE) {
-			log_debug_activation("%s: Mirror image %d marked as failed.",
+			log_debug_activation("%s: Mirror image %u marked as failed.",
 					     dev_name(dev), i);
 			check_for_blocking = 1;
 		}
@@ -2137,14 +2137,14 @@ int dev_manager_thin_device_id(struct dev_manager *dm,
 	}
 
 	if (!target_type || strcmp(target_type, TARGET_NAME_THIN)) {
-		log_error("Unexpected target type %s found for thin %s.",
-			  target_type, display_lvname(lv));
+		log_error("Expected %s segment type but got %s instead.",
+			  TARGET_NAME_THIN, target_type ? target_type : "NULL");
 		goto out;
 	}
 
 	if (!params || sscanf(params, "%*u:%*u %u", device_id) != 1) {
 		log_error("Cannot parse table like parameters %s for %s.",
-			  params, display_lvname(lv));
+			  params ? params : "NULL", display_lvname(lv));
 		goto out;
 	}
 
@@ -2426,7 +2426,7 @@ static int _add_dev_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 			.major = MAJOR(dm_dev->devno),
 			.minor = MINOR(dm_dev->devno),
 		};
-		log_debug("Cached as present %s %s (%d:%d).",
+		log_debug("Cached as present %s %s (%u:%u).",
 			  name, dlid, info.major, info.minor);
 	} else if (!_info(dm->cmd, name, dlid, 0, 0, 0, &info, NULL, NULL))
 		return_0;
@@ -2439,8 +2439,8 @@ static int _add_dev_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 		 * FIXME compare info.major with lv->major if multiple major support
 		 */
 		if (info.exists && ((int) info.minor != lv->minor)) {
-			log_error("Volume %s (%" PRIu32 ":%" PRIu32")"
-				  " differs from already active device "
+			log_error("Volume %s (%" PRId32 ":%" PRId32") "
+				  "differs from already active device "
 				  "(%" PRIu32 ":%" PRIu32").",
 				  display_lvname(lv), lv->major, lv->minor,
 				  info.major, info.minor);
@@ -2449,7 +2449,7 @@ static int _add_dev_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 		if (!info.exists && _info_by_dev(lv->major, lv->minor, &info2) &&
 		    info2.exists) {
 			log_error("The requested major:minor pair "
-				  "(%" PRIu32 ":%" PRIu32") is already used.",
+				  "(%" PRId32 ":%" PRId32") is already used.",
 				  lv->major, lv->minor);
 			return 0;
 		}
@@ -2712,7 +2712,7 @@ static int _add_cvol_subdev_to_dtree(struct dev_manager *dm, struct dm_tree *dtr
 	struct lv_segment *lvseg = first_seg(lv);
 	const struct logical_volume *pool_lv = lvseg->pool_lv;
 	struct dm_info info;
-	char *name ,*dlid;
+	char *name, *dlid;
 	union lvid lvid = { .id = { lv->vg->id, _get_id_for_meta_or_data(lvseg, meta_or_data) } };
 	lvid.s[sizeof(lvid.id)] = 0;
 
@@ -3303,7 +3303,7 @@ static int _add_target_to_dtree(struct dev_manager *dm,
 	uint64_t extent_size = seg->lv->vg->extent_size;
 
 	if (!seg->segtype->ops->add_target_line) {
-		log_error(INTERNAL_ERROR "_emit_target cannot handle "
+		log_error(INTERNAL_ERROR "_add_target_to_dtree cannot handle "
 			  "segment type %s.", lvseg_name(seg));
 		return 0;
 	}

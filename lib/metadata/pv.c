@@ -181,7 +181,7 @@ static int _count_unignored(struct metadata_area *mda, void *baton)
 	uint32_t *count = baton;
 
 	if (!_mda_is_ignored(mda))
-		(*count) ++;
+		(*count)++;
 
 	return 1;
 }
@@ -189,7 +189,7 @@ static int _count_unignored(struct metadata_area *mda, void *baton)
 uint32_t pv_mda_used_count(const struct physical_volume *pv)
 {
 	struct lvmcache_info *info;
-	uint32_t used_count=0;
+	uint32_t used_count = 0;
 
 	info = lvmcache_info_from_pv_id(&pv->id, pv->dev, 0);
 	if (!info)
@@ -253,7 +253,7 @@ char *pv_attr_dup(struct dm_pool *mem, const struct physical_volume *pv)
 	int duplicate = lvmcache_dev_is_unused_duplicate(pv->dev);
 
 	if (!(repstr = dm_pool_zalloc(mem, 4))) {
-		log_error("dm_pool_alloc failed");
+		log_error("dm_pool_zalloc failed.");
 		return NULL;
 	}
 

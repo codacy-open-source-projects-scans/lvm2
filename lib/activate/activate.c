@@ -525,8 +525,8 @@ int target_version(const char *target_name, uint32_t *maj,
 	if (!(dmt = dm_task_create(DM_DEVICE_LIST_VERSIONS)))
 		return_0;
 
-        if (activation_checks() && !dm_task_enable_checks(dmt))
-                goto_out;
+	if (activation_checks() && !dm_task_enable_checks(dmt))
+		goto_out;
 
 	if (!dm_task_run(dmt)) {
 		log_debug_activation("Failed to get %s target version", target_name);
@@ -554,7 +554,7 @@ int target_version(const char *target_name, uint32_t *maj,
 		target = (struct dm_versions *)((char *) target + target->next);
 	} while (last_target != target);
 
-      out:
+out:
 	if (r)
 		log_very_verbose("Found %s target "
 				 "v%" PRIu32 ".%" PRIu32 ".%" PRIu32 ".",
@@ -1136,7 +1136,7 @@ int lv_raid_data_offset(const struct logical_volume *lv, uint64_t *data_offset)
 			     display_lvname(lv));
 
 	if (!lv_raid_status(lv, &raid_status))
-                return_0;
+		return_0;
 
 	*data_offset = raid_status->raid->data_offset;
 
@@ -1159,12 +1159,12 @@ int lv_raid_dev_health(const struct logical_volume *lv, char **dev_health)
 			     display_lvname(lv));
 
 	if (!lv_raid_status(lv, &raid_status))
-                return_0;
+		return_0;
 
 	if (!(*dev_health = dm_pool_strdup(lv->vg->cmd->mem,
 					  raid_status->raid->dev_health))) {
 		stack;
-                r = 0;
+		r = 0;
 	}
 
 	dm_pool_destroy(raid_status->mem);
@@ -1629,7 +1629,7 @@ static int _lv_suspend_lv(const struct logical_volume *lv, struct lv_activate_op
 
 /*
  * These two functions return the number of visible LVs in the state,
- * or -1 on error.  FIXME Check this.
+ * or 0 when activation is disabled.
  */
 int lvs_in_vg_activated(const struct volume_group *vg)
 {
@@ -1936,7 +1936,7 @@ int monitor_dev_for_events(struct cmd_context *cmd, const struct logical_volume 
 	 */
 	if (laopts->skip_in_use && lv_is_thin_pool(lv) &&
 	    lv_info(lv->vg->cmd, lv, 1, &info, 1, 0) && (info.open_count > 1)) {
-		log_debug_activation("Skipping unmonitor of opened %s (open:%d)",
+		log_debug_activation("Skipping unmonitor of opened %s (open:%u)",
 				     display_lvname(lv), info.open_count);
 		return 1;
 	}
@@ -2300,7 +2300,7 @@ static int _lv_suspend(struct cmd_context *cmd, const char *lvid_s,
 		if (!laopts->origin_only && lv_is_origin(lv)) {
 			dm_list_iterate_items_gen(snap_seg, &lv->snapshot_segs, origin_list) {
 				if (!(lv_pre_tmp = find_lv_in_vg_by_lvid(lv_pre->vg, &snap_seg->cow->lvid))) {
-					log_error(INTERNAL_ERROR "LV %s (%s) missing from preload metadata.",
+					log_error(INTERNAL_ERROR "LV %s (%s) missing from precommitted metadata.",
 						  display_lvname(snap_seg->cow),
 						  snap_seg->cow->lvid.id[1].uuid);
 					goto out;
@@ -2942,7 +2942,7 @@ const struct logical_volume *lv_component_is_active(const struct logical_volume 
 	const struct logical_volume *holder_lv = lv_lock_holder(lv);
 
 	if ((holder_lv != lv) && lv_is_active(holder_lv))
-                return NULL; /* Lock holding LV is active, do not check components */
+		return NULL; /* Lock holding LV is active, do not check components */
 
 	if (_component_cb((struct logical_volume *) lv, &holder_lv) == 1)
 		(void) for_each_sub_lv((struct logical_volume *) lv, _component_cb,

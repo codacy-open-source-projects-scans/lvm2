@@ -294,6 +294,7 @@ static int _do_fs_op(fs_op_t type, const char *dev_dir, const char *vg_name,
 
 		if (!_mk_link(dev_dir, vg_name, lv_name, dev, check_udev))
 			stack;
+		break;
 	default:
 		; /* NOTREACHED */
 	}
@@ -349,7 +350,7 @@ static int _other_fs_ops(fs_op_t type)
 /* Check if udev is supposed to create nodes */
 static int _check_udev(int check_udev)
 {
-    return check_udev && dm_udev_get_sync_support() && dm_udev_get_checking();
+	return check_udev && dm_udev_get_sync_support() && dm_udev_get_checking();
 }
 
 /* FIXME: duplication of the  code from libdm-common.c */

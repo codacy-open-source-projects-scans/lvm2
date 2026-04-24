@@ -165,7 +165,7 @@ static int _sysfs_get_kvdo_value(const char *dm_name, const struct dm_info *dmin
 	ssize_t size;
 	int fd, r = 0;
 
-	if (dm_snprintf(path, sizeof(path), "%sblock/dm-%d/vdo/%s",
+	if (dm_snprintf(path, sizeof(path), "%sblock/dm-%u/vdo/%s",
 			dm_sysfs_dir(), dminfo->minor, vdo_param) < 0) {
 		log_debug("Failed to build kvdo path.");
 		return 0;
@@ -269,7 +269,6 @@ static int _format_vdo_pool_data_lv(struct logical_volume *data_lv,
 	FILE *f;
 	uint64_t lb;
 	unsigned slabbits;
-	unsigned reformatting = 0;
 	int args = 0;
 	char buf[VDO_FORMAT_OUTPUT_BUF_SIZE];
 	char *buf_pos = buf;
@@ -308,8 +307,8 @@ static int _format_vdo_pool_data_lv(struct logical_volume *data_lv,
 					   vtp->index_memory_size_mb / 1024);
 	else
 		buf_pos += 1 + dm_snprintf(buf_pos, 30, "--uds-memory-size=0.%2u",
-					   (vtp->index_memory_size_mb < 512) ? 25 :
-					   (vtp->index_memory_size_mb < 768) ? 50 : 75);
+					   (vtp->index_memory_size_mb < 512) ? 25U :
+					   (vtp->index_memory_size_mb < 768) ? 50U : 75U);
 
 	if (vtp->use_sparse_index)
 		argv[++args] = "--uds-sparse";
@@ -338,12 +337,8 @@ static int _format_vdo_pool_data_lv(struct logical_volume *data_lv,
 			}
 		if ((c = strchr(buf, '\n')))
 			*c = 0; /* cut last '\n' away */
-		if (buf[0]) {
-			if (reformatting)
-				log_verbose("  %s", buf); /* Print vdo_format messages */
-			else
-				log_print_unless_silent("  %s", buf); /* Print vdo_format messages */
-		}
+		if (buf[0])
+			log_print_unless_silent("  %s", buf); /* Print vdo_format messages */
 	}
 
 	if (!pipe_close(&pdata)) {
@@ -548,7 +543,7 @@ struct logical_volume *convert_vdo_lv(struct logical_volume *lv,
 	if (!convert_vdo_pool_lv(lv, &vcp->vdo_params, &lvc.virtual_extents, vcp->do_zero, vcp->header_size))
 		return_NULL;
 
-        /* Create VDO LV with the name, we just release above */
+	/* Create VDO LV with the name, we just release above */
 	if (!(vdo_lv = lv_create_single(lv->vg, &lvc)))
 		return_NULL;
 
@@ -682,7 +677,7 @@ typedef struct mem_table_s {
 	uint64_t *value;
 } mem_table_t;
 
-static int _compare_mem_table_s(const void *a, const void *b){
+static int _compare_mem_table_s(const void *a, const void *b) {
 	return strcmp(((const mem_table_t*)a)->name, ((const mem_table_t*)b)->name);
 }
 
@@ -741,7 +736,7 @@ static int _get_memory_info(struct cmd_context *cmd, uint64_t *total_mb, uint64_
 	if (can_swap > swap_free)
 		can_swap = swap_free;
 
-	/* TODO: add more constrains, i.e. 3/4 of physical RAM... */
+	/* TODO: add more constraints, i.e. 3/4 of physical RAM... */
 
 	*total_mb = mem_total >> 10;
 	*available_mb = (mem_available + can_swap) >> 10;
@@ -778,7 +773,7 @@ static int _vdo_snprintf(char **buf, size_t *bufsize, const char *format, ...)
 	return n;
 }
 
-int check_vdo_constrains(struct cmd_context *cmd, const struct vdo_pool_size_config *cfg)
+int check_vdo_constraints(struct cmd_context *cmd, const struct vdo_pool_size_config *cfg)
 {
 	static const char _vdo_split[][8] = { "", " and", ",", "," };
 	uint64_t req_mb, total_mb, available_mb;

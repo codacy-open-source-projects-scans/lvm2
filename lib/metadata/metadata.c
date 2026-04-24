@@ -396,7 +396,7 @@ int add_pv_to_vg(struct volume_group *vg, const char *pv_name,
 
 	if (vg->pv_count && (vg->pv_count == vg->max_pv)) {
 		log_error("No space for '%s' - volume group '%s' "
-			  "holds max %d physical volume(s).", pv_name,
+			  "holds max %u physical volume(s).", pv_name,
 			  vg->name, vg->max_pv);
 		return 0;
 	}
@@ -406,7 +406,7 @@ int add_pv_to_vg(struct volume_group *vg, const char *pv_name,
 
 	if ((uint64_t) vg->extent_count + pv->pe_count > MAX_EXTENT_COUNT) {
 		log_error("Unable to add %s to %s: new extent count (%"
-			  PRIu64 ") exceeds limit (%" PRIu32 ").",
+			  PRIu64 ") exceeds limit (%u).",
 			  pv_name, vg->name,
 			  (uint64_t) vg->extent_count + pv->pe_count,
 			  MAX_EXTENT_COUNT);
@@ -574,7 +574,7 @@ int validate_vg_rename_params(struct cmd_context *cmd,
 	/* Check sanity of new name */
 	if (strlen(vg_name_new) > NAME_LEN - length - 2) {
 		log_error("New volume group path exceeds maximum length "
-			  "of %d!", NAME_LEN - length - 2);
+			  "of %u.", NAME_LEN - length - 2);
 		return 0;
 	}
 
@@ -1826,7 +1826,7 @@ int vgs_are_compatible(struct cmd_context *cmd __attribute__((unused)),
 
 	/* Check compatibility */
 	if (vg_to->extent_size != vg_from->extent_size) {
-		log_error("Extent sizes differ: %d (%s) and %d (%s)",
+		log_error("Extent sizes differ: %u (%s) and %u (%s).",
 			  vg_to->extent_size, vg_to->name,
 			  vg_from->extent_size, vg_from->name);
 		return 0;
@@ -1834,23 +1834,23 @@ int vgs_are_compatible(struct cmd_context *cmd __attribute__((unused)),
 
 	if (vg_to->max_pv &&
 	    (vg_to->max_pv < vg_to->pv_count + vg_from->pv_count)) {
-		log_error("Maximum number of physical volumes (%d) exceeded "
-			  " for \"%s\" and \"%s\"", vg_to->max_pv, vg_to->name,
-			  vg_from->name);
+		log_error("Maximum number of physical volumes (%u) exceeded "
+			  "for \"%s\" and \"%s\".",
+			  vg_to->max_pv, vg_to->name, vg_from->name);
 		return 0;
 	}
 
 	if (vg_to->max_lv &&
 	    (vg_to->max_lv < vg_visible_lvs(vg_to) + vg_visible_lvs(vg_from))) {
-		log_error("Maximum number of logical volumes (%d) exceeded "
-			  " for \"%s\" and \"%s\"", vg_to->max_lv, vg_to->name,
-			  vg_from->name);
+		log_error("Maximum number of logical volumes (%u) exceeded "
+			  "for \"%s\" and \"%s\".",
+			  vg_to->max_lv, vg_to->name, vg_from->name);
 		return 0;
 	}
 
 	/* Metadata types must be the same */
 	if (vg_to->fid->fmt != vg_from->fid->fmt) {
-		log_error("Metadata types differ for \"%s\" and \"%s\"",
+		log_error("Metadata types differ for \"%s\" and \"%s\".",
 			  vg_to->name, vg_from->name);
 		return 0;
 	}
@@ -1863,9 +1863,8 @@ int vgs_are_compatible(struct cmd_context *cmd __attribute__((unused)),
 			name2 = lvl2->lv->name;
 
 			if (!strcmp(name1, name2)) {
-				log_error("Duplicate logical volume "
-					  "name \"%s\" "
-					  "in \"%s\" and \"%s\"",
+				log_error("Duplicate logical volume name \"%s\" "
+					  "in \"%s\" and \"%s\".",
 					  name1, vg_to->name, vg_from->name);
 				return 0;
 			}
@@ -2203,7 +2202,7 @@ static int _validate_lock_args_chars(const char *lock_args)
 	int found_colon = 0;
 	int r = 1;
 
-	for (i = 0; i < strlen(lock_args); i++) {
+	for (i = 0; lock_args[i]; i++) {
 		c = lock_args[i];
 
 		if (!isalnum(c) && c != '.' && c != '_' && c != '-' && c != '+' && c != ':') {
@@ -2542,7 +2541,7 @@ int vg_validate(struct volume_group *vg)
 				}
 			} else if (seg->area_count != 1) {
 				log_error(INTERNAL_ERROR
-					  "Segment in %s has wrong number of areas: %d.",
+					  "Segment in %s has wrong number of areas: %u.",
 					  lvl->lv->name, seg->area_count);
 				r = 0;
 			}
@@ -2668,7 +2667,7 @@ int vg_validate(struct volume_group *vg)
 
 					if (!radix_tree_insert_ptr(vhash.lv_lock_args, lvl->lv->lock_args,
 								   strlen(lvl->lv->lock_args), lvl)) {
-						log_error("Failed to hash lvname.");
+						log_error("Failed to hash lock_args.");
 						r = 0;
 					}
 
@@ -2746,7 +2745,7 @@ int vg_validate(struct volume_group *vg)
 				log_error("Failed to store historical LV id.");
 				goto out;
 			}
-			if (!id_write_format(&hlv->lvid.id[1], uuid,sizeof(uuid)))
+			if (!id_write_format(&hlv->lvid.id[1], uuid, sizeof(uuid)))
 				stack;
 			log_error(INTERNAL_ERROR "Duplicate historical LV id %s detected for %s in %s.",
 				  uuid, hlv->name, vg->name);
@@ -3148,7 +3147,7 @@ int vg_commit(struct volume_group *vg)
 		 * The volume_group structure could be reused later.
 		 */
 		vg->old_name = NULL;
-	        dm_list_iterate_items(pvl, &vg->pvs)
+		dm_list_iterate_items(pvl, &vg->pvs)
 			pvl->pv->status &= ~PV_MOVED_VG;
 
 		/* This *is* the original now that it's committed. */
@@ -4065,7 +4064,8 @@ int fid_add_mdas(struct format_instance *fid, struct dm_list *mdas,
 		if (!mda_new)
 			return_0;
 		fid_remove_mda(fid, NULL, key, key_len, mda_index);
-		fid_add_mda(fid, mda_new, key, key_len, mda_index);
+		if (!fid_add_mda(fid, mda_new, key, key_len, mda_index))
+			return_0;
 		mda_index++;
 	}
 
@@ -4401,7 +4401,8 @@ int lv_on_pmem(struct logical_volume *lv)
 
 int vg_is_foreign(struct volume_group *vg)
 {
-	return vg->cmd->system_id && strcmp(vg->system_id, vg->cmd->system_id);
+	return vg->cmd->system_id && vg->system_id && vg->system_id[0] &&
+	       strcmp(vg->system_id, vg->cmd->system_id);
 }
 
 void vg_write_commit_bad_mdas(struct cmd_context *cmd, struct volume_group *vg)

@@ -1071,8 +1071,8 @@ static int _validate_stripe_params(struct cmd_context *cmd, const struct segment
 				   uint32_t *stripes, uint32_t *stripe_size)
 {
 	if (*stripes < 1 || *stripes > MAX_STRIPES) {
-		log_error("Number of stripes (%d) must be between %d and %d.",
-			  *stripes, 1, MAX_STRIPES);
+		log_error("Number of stripes (%u) must be between %u and %u.",
+			  *stripes, 1U, MAX_STRIPES);
 		return 0;
 	}
 
@@ -1680,7 +1680,7 @@ static int _get_one_integrity_setting(struct cmd_context *cmd, struct dm_integri
 
 		size_mb = settings->journal_sectors / 2048;
 		if (size_mb < 4 || size_mb > 1024) {
-			log_error("Invalid raid integrity journal size %d MiB (use 4-1024 MiB).", size_mb);
+			log_error("Invalid raid integrity journal size %u MiB (use 4-1024 MiB).", size_mb);
 			goto_bad;
 		}
 		settings->journal_sectors_set = 1;
@@ -1865,7 +1865,7 @@ int process_each_label(struct cmd_context *cmd, int argc, char **argv,
 					log_error("No physical volume label read from %s.", argv[opt]);
 					ret_max = ECMD_FAILED;
 				} else {
-					if (!(devl = malloc(sizeof(*devl))))
+					if (!(devl = dm_pool_zalloc(cmd->mem, sizeof(*devl))))
 						return_0;
 					devl->dev = dev;
 					dm_list_add(&process_duplicates, &devl->list);
@@ -2011,7 +2011,7 @@ int get_and_validate_major_minor(const struct cmd_context *cmd,
 		if (*major != -1) {
 			log_warn("WARNING: Ignoring supplied major number %d - "
 				 "kernel assigns major numbers dynamically. "
-				 "Using major number %d instead.",
+				 "Using major number %u instead.",
 				 *major, cmd->dev_types->device_mapper_major);
 		}
 		/* Stay with dynamic major:minor if minor is not specified. */
@@ -4986,7 +4986,7 @@ int pvcreate_params_from_args(struct cmd_context *cmd, struct pvcreate_params *p
 
 	if (arg_int_value(cmd, labelsector_ARG, 0) >= LABEL_SCAN_SECTORS) {
 		log_error("labelsector must be less than %lu.",
-			  LABEL_SCAN_SECTORS);
+			  (unsigned long) LABEL_SCAN_SECTORS);
 		return 0;
 	}
 
@@ -6162,7 +6162,11 @@ do_command:
 
 				/* allow deviceidtype_ARG/deviceid_ARG ? */
 				memcpy(pvid, &pvl->pv->id.uuid, ID_LEN);
-				device_id_add(cmd, pd->dev, pvid, NULL, NULL, 0);
+				if (!device_id_add(cmd, pd->dev, pvid, NULL, NULL, 0)) {
+					log_error("Failed to add device id for %s.", pd->name);
+					dm_list_move(&pp->arg_fail, &pd->list);
+					continue;
+				}
 
 			} else {
 				log_error("Failed to find PV %s", pd->name);
@@ -6202,7 +6206,11 @@ do_command:
 
 		/* allow deviceidtype_ARG/deviceid_ARG ? */
 		memcpy(pvid, &pv->id.uuid, ID_LEN);
-		device_id_add(cmd, pd->dev, pvid, NULL, NULL, 0);
+		if (!device_id_add(cmd, pd->dev, pvid, NULL, NULL, 0)) {
+			log_error("Failed to add device id for %s.", pv_name);
+			dm_list_move(&pp->arg_fail, &pd->list);
+			continue;
+		}
 
 		log_verbose("Set up physical volume for \"%s\" with %" PRIu64
 			    " available sectors.", pv_name, pv_size(pv));

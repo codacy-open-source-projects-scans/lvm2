@@ -62,7 +62,7 @@ extern struct command_name_args command_names_args[];
  * guaranteed zero-initialized by C runtime before main().
  * Currently ~6 MiB (206 commands x ~31 KB each) - placed in .bss segment.
  */
-struct command commands[COMMAND_COUNT] = { };
+struct command commands[COMMAND_COUNT];
 static struct command *commands_idx[COMMAND_COUNT];
 
 static struct cmdline_context _cmdline;
@@ -662,7 +662,7 @@ static int _size_arg(struct cmd_context *cmd __attribute__((unused)),
 		if (!_get_percent_arg(av, ++ptr))
 			return_0;
 		if ((uint64_t) v >= UINT32_MAX) {
-			log_error("Percentage is too big (>=%d%%).", UINT32_MAX);
+			log_error("Percentage is too big (>=%u%%).", UINT32_MAX);
 			return 0;
 		}
 	} else if (*ptr) {
@@ -703,10 +703,10 @@ static int _size_arg(struct cmd_context *cmd __attribute__((unused)),
 		return 0;
 	}
 
-	av->i_value = ((int32_t) v < INT32_MAX) ? (int32_t) v : INT32_MAX;
-	av->ui_value = ((uint32_t) v < UINT32_MAX) ? (uint32_t) v : UINT32_MAX;
-	av->i64_value = ((int64_t) v < INT64_MAX) ? (int64_t) v : INT64_MAX;
-	av->ui64_value = ((uint64_t) v < UINT64_MAX) ? (uint64_t) v : UINT64_MAX;
+	av->i_value = (v < (double) INT32_MAX) ? (int32_t) v : INT32_MAX;
+	av->ui_value = (v < (double) UINT32_MAX) ? (uint32_t) v : UINT32_MAX;
+	av->i64_value = (v < (double) INT64_MAX) ? (int64_t) v : INT64_MAX;
+	av->ui64_value = (v < (double) UINT64_MAX) ? (uint64_t) v : UINT64_MAX;
 
 	return 1;
 }
@@ -835,7 +835,7 @@ static int _extents_arg(struct cmd_context *cmd __attribute__((unused)),
 		return_0;
 
 	if (av->ui64_value >= UINT32_MAX) {
-		log_error("Percentage is too big (>=%d%%).", UINT32_MAX);
+		log_error("Percentage is too big (>=%u%%).", UINT32_MAX);
 		return 0;
 	}
 

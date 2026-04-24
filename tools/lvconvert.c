@@ -96,7 +96,8 @@ struct convert_poll_id_list {
 static void _set_conv_type(struct lvconvert_params *lp, conversion_type_t conv_type)
 {
 	if (lp->conv_type != CONV_OTHER)
-		log_error(INTERNAL_ERROR "Changing conv_type from %d to %d.", lp->conv_type, conv_type);
+		log_error(INTERNAL_ERROR "Changing conv_type from %u to %u.",
+			  lp->conv_type, conv_type);
 
 	lp->conv_type = conv_type;
 }
@@ -252,7 +253,7 @@ static int _read_params(struct cmd_context *cmd, struct lvconvert_params *lp)
 	 */
 	switch(lp->conv_type) {
 	case CONV_SPLIT_MIRRORS:
-                break;
+		break;
 
 	case CONV_OTHER:
 		if (arg_is_set(cmd, regionsize_ARG)) {
@@ -784,7 +785,7 @@ static int _lvconvert_mirrors_parse_params(struct cmd_context *cmd,
 
 	/* Did the user try to subtract more legs than available? */
 	if (lp->mirrors < 1) {
-		log_error("Unable to reduce images by specified amount - only %d in %s",
+		log_error("Unable to reduce images by specified amount - only %u in %s.",
 			  *old_mimage_count, lv->name);
 		return 0;
 	}
@@ -1136,14 +1137,14 @@ static int _lvconvert_mirrors_repair(struct cmd_context *cmd,
 		return_0;
 
 	if (failed_mimages > 0)
-		log_print_unless_silent("Mirror status: %d of %d images failed.",
+		log_print_unless_silent("Mirror status: %d of %u images failed.",
 					failed_mimages, original_mimages);
 
 	/*
 	 * Count the failed log devices
 	 */
 	if (failed_logs > 0)
-		log_print_unless_silent("Mirror log status: %d of %d images failed.",
+		log_print_unless_silent("Mirror log status: %d of %u images failed.",
 					failed_logs, original_logs);
 
 	/*
@@ -1167,7 +1168,7 @@ static int _lvconvert_mirrors_repair(struct cmd_context *cmd,
 	log_count = replace_logs ? original_logs : (original_logs - failed_logs);
 
 	while (replace_mimages || replace_logs) {
-		log_warn("WARNING: Trying to up-convert to %d images, %d logs.", lp->mirrors, log_count);
+		log_warn("WARNING: Trying to up-convert to %u images, %u logs.", lp->mirrors, log_count);
 		if (_lvconvert_mirrors_aux(cmd, lv, lp, NULL,
 					   lp->mirrors, log_count, pvh))
 			break;
@@ -1180,11 +1181,11 @@ static int _lvconvert_mirrors_repair(struct cmd_context *cmd,
 	}
 
 	if (replace_mimages && lv_mirror_count(lv) != original_mimages)
-		log_warn("WARNING: Failed to replace %d of %d images in volume %s.",
+		log_warn("WARNING: Failed to replace %u of %u images in volume %s.",
 			 original_mimages - lv_mirror_count(lv), original_mimages,
 			 display_lvname(lv));
 	if (replace_logs && _get_log_count(lv) != original_logs)
-		log_warn("WARNING: Failed to replace %d of %d logs in volume %s.",
+		log_warn("WARNING: Failed to replace %u of %u logs in volume %s.",
 			 original_logs - _get_log_count(lv), original_logs,
 			 display_lvname(lv));
 
@@ -1445,7 +1446,8 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 			    (!strcmp(lp->type_str, SEG_TYPE_NAME_STRIPED) && image_count == 1)) {
 				if (image_count > DEFAULT_RAID1_MAX_IMAGES) {
 					log_error("Only up to %u mirrors in %s LV %s supported currently.",
-						  DEFAULT_RAID1_MAX_IMAGES, lp->segtype->name, display_lvname(lv));
+						  (unsigned) DEFAULT_RAID1_MAX_IMAGES,
+						  lp->segtype->name, display_lvname(lv));
 					return 0;
 				}
 				if (!seg_is_raid1(seg) && lv_raid_has_integrity(lv)) {
@@ -1504,9 +1506,9 @@ static int _lvconvert_raid(struct logical_volume *lv, struct lvconvert_params *l
 		if (!arg_is_set(cmd, stripes_long_ARG))
 			lp->stripes = 0;
 		if (!type_enforced && !arg_is_set(cmd, type_ARG))
-		       lp->segtype = NULL;
+			lp->segtype = NULL;
 		if (!arg_is_set(cmd, regionsize_ARG))
-		       lp->region_size = 0;
+			lp->region_size = 0;
 
 		if (!lv_raid_convert(lv, lp->segtype,
 				     lp->yes, lp->force, lp->stripes, lp->stripe_size_supplied, lp->stripe_size,
@@ -2966,9 +2968,9 @@ static int _lvconvert_swap_pool_metadata(struct cmd_context *cmd,
 	}
 
 	if ((dm_snprintf(meta_name, sizeof(meta_name), "%s%s", lv->name, is_cachepool ? "_cmeta" : "_tmeta") < 0)) {
-                log_error("Failed to create internal lv names, pool name is too long.");
-                return 0;
-        }
+		log_error("Failed to create internal lv names, pool name is too long.");
+		return 0;
+	}
 
 	/* If LV is inactive here, ensure it's not active elsewhere. */
 	if (!lockd_lv(cmd, lv, "ex", 0))
@@ -3045,7 +3047,7 @@ static int _lvconvert_swap_pool_metadata(struct cmd_context *cmd,
 		return_0;
 
 	if (!swap_lv_identifiers(cmd, metadata_lv, prev_metadata_lv))
-                return_0;
+		return_0;
 
 	if (!attach_pool_metadata_lv(seg, metadata_lv))
 		return_0;
@@ -3426,6 +3428,7 @@ static int _lvconvert_to_pool(struct cmd_context *cmd,
 	 * Before starting a real conversion, prepare  _pmspare volume.
 	 * If there is already one present in a VG, make sure the size is right
 	 */
+	/* coverity[format_string_injection] lv name is already validated */
 	if (!handle_pool_metadata_spare(vg, metadata_lv->le_count, use_pvh, pool_metadata_spare)) {
 		log_error("Failed to set up spare metadata LV for pool.");
 		goto bad;
@@ -4349,7 +4352,7 @@ int lvconvert_combine_split_snapshot_cmd(struct cmd_context *cmd, int argc, char
 		vglv_sz = strlen(vgname) + strlen(lvname2_orig) + 2;
 		if (!(vglv = dm_pool_alloc(cmd->mem, vglv_sz)) ||
 		    dm_snprintf(vglv, vglv_sz, "%s/%s", vgname, lvname2_orig) < 0) {
-       			log_error("vg/lv string alloc failed.");
+			log_error("vg/lv string alloc failed.");
 			return ECMD_FAILED;
 		}
 
@@ -4551,7 +4554,8 @@ static int _lv_create_cachevol(struct cmd_context *cmd,
 		}
  add_dev_arg:
 		if (dev_argc >= MAX_CACHEDEVS) {
-			log_error("Cannot allocate from more than %u cache devices.", MAX_CACHEDEVS);
+			log_error("Cannot allocate from more than %u cache devices.",
+				  (unsigned) MAX_CACHEDEVS);
 			return 0;
 		}
 
@@ -6139,7 +6143,7 @@ static int _set_writecache_block_size(struct cmd_context *cmd,
 			block_size = 512;
 
 		log_print_unless_silent("Using writecache block size %u for thin pool data, logical block size %u, physical block size %u.",
-					block_size, lbs_4k ? 4096 : 512, pbs_4k ? 4096 : 512);
+					block_size, lbs_4k ? 4096U : 512U, pbs_4k ? 4096U : 512U);
 
 		goto out;
 	}
@@ -6178,7 +6182,7 @@ skip_fs:
 			block_size = 4096;
 
 		log_print_unless_silent("Using writecache block size %u for unknown file system block size, logical block size %u, physical block size %u.",
-					block_size, lbs_4k ? 4096 : 512, pbs_4k ? 4096 : 512);
+					block_size, lbs_4k ? 4096U : 512U, pbs_4k ? 4096U : 512U);
 
 		if (block_size != 512) {
 			log_warn("WARNING: Unable to detect a file system block size on %s.", display_lvname(lv));

@@ -84,7 +84,8 @@ static int _lv_is_single_seg(const struct logical_volume *lv, const char *segtyp
 			return 0; /* Other than expected */
 	}
 
-	return 1;
+	/* 0 when segment list is empty (cnt == 0), 1 for single match */
+	return cnt ? 1 : 0;
 }
 
 /* LV is 'error' if it's using single error segment */
@@ -169,7 +170,7 @@ static struct dm_list *_format_pvsegs(struct dm_pool *mem, const struct lv_segme
 		if (range_format) {
 			if (dm_snprintf(extent_str, sizeof(extent_str),
 					":%" PRIu32 "-%" PRIu32,
-					extent, extent + seg_len - 1) < 0) {
+					extent, extent + (seg_len ? seg_len - 1 : 0)) < 0) {
 				log_error("_format_pvsegs: extent range dm_snprintf failed.");
 				goto bad;
 			}
@@ -1700,8 +1701,8 @@ int lv_set_creation(struct logical_volume *lv,
 		}
 
 		lv->hostname = _utsname.nodename;
-	} else
-		lv->hostname = dm_pool_strdup(lv->vg->vgmem, hostname);
+	} else if (!(lv->hostname = dm_pool_strdup(lv->vg->vgmem, hostname)))
+		return_0;
 
 	lv->timestamp = timestamp ? : (uint64_t) time(NULL);
 

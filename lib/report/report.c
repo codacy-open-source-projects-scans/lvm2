@@ -2064,7 +2064,7 @@ static int _find_ancestors(struct _str_list_append_baton *ancestors,
 	struct lv_segment *seg;
 	void *orig_p = glv.live;
 	const char *ancestor_str;
-	char buf[NAME_LEN + sizeof(HISTORICAL_LV_PREFIX)];
+	char buf[NAME_LEN];
 
 	if (glv.is_historical) {
 		if (full && glv.historical->indirect_origin)
@@ -2157,7 +2157,7 @@ static int _find_descendants(struct _str_list_append_baton *descendants,
 	struct glv_list *glvl;
 	struct dm_list *list;
 	const char *descendant_str;
-	char buf[64];
+	char buf[NAME_LEN];
 
 	if (glv.is_historical) {
 		if (full) {
@@ -4267,7 +4267,7 @@ static int _vdo_compression_disp(struct dm_report *rh, struct dm_pool *mem,
 				 struct dm_report_field *field,
 				 const void *data, void *private)
 {
-	const struct lv_segment *seg = (const struct lv_segment *) data; \
+	const struct lv_segment *seg = (const struct lv_segment *) data;
 
 	if (seg_is_vdo(seg))
 		seg = first_seg(seg_lv(seg, 0));
@@ -4276,14 +4276,14 @@ static int _vdo_compression_disp(struct dm_report *rh, struct dm_pool *mem,
 		return _binary_disp(rh, mem, field, seg->vdo_params.use_compression,
 				    GET_FIRST_RESERVED_NAME(vdo_compression_y), private);
 
-	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64)); \
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
 }
 
 static int _vdo_deduplication_disp(struct dm_report *rh, struct dm_pool *mem,
 				   struct dm_report_field *field,
 				   const void *data, void *private)
 {
-	const struct lv_segment *seg = (const struct lv_segment *) data; \
+	const struct lv_segment *seg = (const struct lv_segment *) data;
 
 	if (seg_is_vdo(seg))
 		seg = first_seg(seg_lv(seg, 0));
@@ -4292,7 +4292,7 @@ static int _vdo_deduplication_disp(struct dm_report *rh, struct dm_pool *mem,
 		return _binary_disp(rh, mem, field, seg->vdo_params.use_deduplication,
 				    GET_FIRST_RESERVED_NAME(vdo_deduplication_y), private);
 
-	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64)); \
+	return _field_set_value(field, "", &GET_TYPE_RESERVED_VALUE(num_undef_64));
 }
 
 static int _vdo_use_metadata_hints_disp(struct dm_report *rh, struct dm_pool *mem,

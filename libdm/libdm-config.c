@@ -340,7 +340,7 @@ static int _write_value(struct config_output *out, const struct dm_config_value 
 
 	case DM_CFG_INT:
 		if (v->format_flags & DM_CONFIG_VALUE_FMT_INT_OCTAL)
-			line_append("0%" PRIo64, v->v.i);
+			line_append("0%" PRIo64, (uint64_t)v->v.i);
 		else
 			line_append(FMTd64, v->v.i);
 		break;
@@ -351,8 +351,8 @@ static int _write_value(struct config_output *out, const struct dm_config_value 
 		break;
 
 	default:
-		log_error("_write_value: Unknown value type: %d", v->type);
-
+		log_error("_write_value: Unknown value type: %u.", v->type);
+		return 0;
 	}
 
 	return 1;
@@ -1109,7 +1109,6 @@ static float _find_config_float(const void *start, node_lookup_fn find,
 	}
 
 	return fail;
-
 }
 
 static int _str_in_array(const char *str, const char * const values[])
@@ -1144,7 +1143,7 @@ static int _find_config_bool(const void *start, node_lookup_fn find,
 	const struct dm_config_value *v;
 	int b;
 
-	if (n) {
+	if (n && n->v) {
 		v = n->v;
 
 		switch (v->type) {
@@ -1420,6 +1419,7 @@ static struct dm_config_value *_clone_config_value(struct dm_pool *mem,
 	}
 
 	new_cv->type = v->type;
+	new_cv->format_flags = v->format_flags;
 
 	if (v->next && !(new_cv->next = _clone_config_value(mem, v->next)))
 		return_NULL;

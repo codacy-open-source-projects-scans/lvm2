@@ -1532,7 +1532,7 @@ static int _do_check_value_is_strictly_reserved(unsigned type, const void *res_v
 			} else if (sel_range) {
 				/* only selection value is a range */
 				if (((_uint64 val >= _uint64 res_val) && (_uint64 val <= _uint64 res_val)) ||
-				    (fs && ((fs->value->v.i >= _uint64 res_val) && (fs->value->next->v.i <= _uint64 res_val))))
+				    (fs && ((fs->value->v.i <= _uint64 res_val) && (fs->value->next->v.i >= _uint64 res_val))))
 					return 1;
 			} else {
 				/* neither selection value nor reserved value is a range */
@@ -1563,7 +1563,7 @@ static int _do_check_value_is_strictly_reserved(unsigned type, const void *res_v
 			} else if (sel_range) {
 				/* only selection value is a range */
 				if ((_dbl_greater_or_equal(_dbl val, _dbl res_val) && (_dbl_less_or_equal(_dbl val, _dbl res_val))) ||
-				    (fs && (_dbl_greater_or_equal(fs->value->v.d, _dbl res_val) && _dbl_less_or_equal(fs->value->next->v.d, _dbl res_val))))
+				    (fs && (_dbl_less_or_equal(fs->value->v.d, _dbl res_val) && _dbl_greater_or_equal(fs->value->next->v.d, _dbl res_val))))
 					return 1;
 			} else {
 				/* neither selection value nor reserved value is a range */
@@ -2079,7 +2079,7 @@ static int _compare_selection_field(struct dm_report *rh,
 	int r = 0;
 
 	if (!f->sort_value) {
-		log_error("_compare_selection_field: field without value :%d",
+		log_error("_compare_selection_field: field without value :%u.",
 			  f->props->field_num);
 		return 0;
 	}
@@ -3013,7 +3013,7 @@ static const char *_tok_value_string_list(const struct dm_report_field_type *ft,
 	dm_free(arr);
 out:
 	*end = s;
-        if (sel_str_list)
+	if (sel_str_list)
 		*sel_str_list = ssl;
 
 	return s;
@@ -3021,7 +3021,7 @@ bad:
 	*end = s;
 	if (ssl)
 		dm_pool_free(mem, ssl);
-        if (sel_str_list)
+	if (sel_str_list)
 		*sel_str_list = NULL;
 	return s;
 }
@@ -3131,7 +3131,7 @@ static char *_get_date(char *str, struct tm *tm, time_range_t *range)
 				n2 = (n1 / 100) % 100;
 				n1 = n1 / 10000;
 			} else
-                                goto_bad;
+					goto_bad;
 		} else {
 			if (len == 7) {
 				tmp_range = RANGE_MONTH;
@@ -3371,7 +3371,7 @@ static void _get_final_time(time_range_t range, struct tm *tm,
 			}
 			/* fall through */
 		case RANGE_DAY:
-			if (tm_up.tm_mday < _get_days_in_month(tm_up.tm_mon, tm_up.tm_year)) {
+			if (tm_up.tm_mday < _get_days_in_month(tm_up.tm_mon + 1, tm_up.tm_year + 1900)) {
 				tm_up.tm_mday += 1;
 				break;
 			}
@@ -3948,7 +3948,7 @@ static struct field_selection *_create_field_selection(struct dm_report *rh,
 				break;
 			case DM_REPORT_FIELD_TYPE_STRING_LIST:
 				if (!custom)
-                                        goto_bad;
+						goto_bad;
 				fs->value->v.l = *(struct selection_str_list **)custom;
 				if (_check_value_is_strictly_reserved(rh, field_num, DM_REPORT_FIELD_TYPE_STRING_LIST, fs->value->v.l, NULL)) {
 					log_error("String list value found in selection is reserved.");
@@ -4866,7 +4866,7 @@ static int _safe_repstr_output(struct dm_report *rh, const char *repstr, size_t 
 	/* Escape any JSON_ESCAPE_CHAR and JSON_QUOTE that may appear in reported string. */
 	while (repstr_current < repstr_end) {
 		if (repstr_current[0] == JSON_ESCAPE_CHAR[0] || repstr_current[0] == JSON_QUOTE[0]) {
-			// Write out all "sanitized" chars so far
+			/* Write out all "sanitized" chars so far */
 			if (repstr_next_write < repstr_current) {
 				if (!dm_pool_grow_object(rh->mem, repstr_next_write, repstr_current - repstr_next_write)) {
 					log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
@@ -4876,7 +4876,7 @@ static int _safe_repstr_output(struct dm_report *rh, const char *repstr, size_t 
 				repstr_next_write = repstr_current;
 			}
 
-			// Add an escape
+			/* Add an escape */
 			if (!dm_pool_grow_object(rh->mem, JSON_ESCAPE_CHAR, 1)) {
 				log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
 				return 0;
@@ -4886,7 +4886,7 @@ static int _safe_repstr_output(struct dm_report *rh, const char *repstr, size_t 
 		++repstr_current;
 	}
 
-	// Write out all remaining "sanitized" chars
+	/* Write out all remaining "sanitized" chars */
 	if (repstr_next_write < repstr_end) {
 		if (!dm_pool_grow_object(rh->mem, repstr_next_write, repstr_end - repstr_next_write)) {
 			log_error(UNABLE_TO_EXTEND_OUTPUT_LINE_MSG);
@@ -5588,7 +5588,7 @@ int dm_report_group_pop(struct dm_report_group *group)
 			break;
 		default:
 			return 0;
-        }
+		}
 
 	dm_list_del(&item->list);
 

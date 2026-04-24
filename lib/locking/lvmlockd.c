@@ -720,7 +720,7 @@ static int _create_sanlock_lv(struct cmd_context *cmd, struct volume_group *vg,
 
 	lv_size_bytes = (uint64_t)total_extents * extent_bytes;
 	num_mb = lv_size_bytes / ONE_MB_IN_BYTES;
-	log_debug("Creating lvmlock LV for sanlock with size %um %llub %u extents",
+	log_debug("Creating lvmlock LV for sanlock with size %dm %llub %u extents.",
 		  num_mb, (unsigned long long)lv_size_bytes, lp.extents);
 
 	dm_list_init(&lp.tags);
@@ -1767,7 +1767,7 @@ int lockd_start_vg(struct cmd_context *cmd, struct volume_group *vg, int *exists
 	}
 
 	if (!ret && !strcmp(lock_type, "sanlock")) {
-		log_debug("lockd_starg_vg result %d deactivate sanlock lv", result);
+		log_debug("lockd_start_vg result %d deactivate sanlock lv.", result);
 		if (!_deactivate_sanlock_lv(cmd, vg))
 			log_error("Failed to deactivate internal lvmlock LV for sanlock.");
 	}
@@ -2267,7 +2267,7 @@ int lockd_global(struct cmd_context *cmd, const char *def_mode)
 		if (retries < find_config_tree_int(cmd, global_lvmlockd_lock_retries_CFG, NULL)) {
 			if (result == -EIOTIMEOUT)
 				log_warn("Retrying global lock: io timeout");
-                        else
+			else
 				log_warn("Retrying global lock: held by other host%s", _owner_str(&owner));
 			sleep(1);
 			retries++;
@@ -3438,7 +3438,7 @@ void lockd_lvcreate_done(struct cmd_context *cmd, struct volume_group *vg, struc
 		return;
 
 	if (!lp->lockd_name) {
-		log_error("lockd_lvcreate_done missing name %s", lp->lockd_name ?: "-");
+		log_error("lockd_lvcreate_done missing lockd_name.");
 		return;
 	}
 

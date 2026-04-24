@@ -919,7 +919,8 @@ static int _lvchange_tag(struct cmd_context *cmd, struct logical_volume *lv,
 
 static int _lvchange_rebuild(struct logical_volume *lv)
 {
-	int pv_count, i = 0;
+	unsigned pv_count;
+	int i = 0;
 	char **rebuild_pvs;
 	const char *tmp_str;
 	struct dm_list *rebuild_pvh = NULL;
@@ -936,7 +937,7 @@ static int _lvchange_rebuild(struct logical_volume *lv)
 	    yes_no_prompt("Do you really want to rebuild %u PVs "
 			  "of logical volume %s [y/n]: ",
 			  pv_count, display_lvname(lv)) == 'n') {
-		log_error("Logical volume %s not rebuild.",
+		log_error("Logical volume %s not rebuilt.",
 			  display_lvname(lv));
 		return 0;
 	}
@@ -979,7 +980,7 @@ static int _lvchange_writemostly(struct logical_volume *lv,
 	struct lv_segment *raid_seg = first_seg(lv);
 
 	/*
-	 * Prohibit writebehind and writebehind during synchronization.
+	 * Prohibit writemostly and writebehind during synchronization.
 	 *
 	 * FIXME: we can do better once we can distinguish between
 	 *        an initial sync after a linear -> raid1 upconversion

@@ -445,14 +445,14 @@ static int _set_integrity_block_size(struct cmd_context *cmd, struct logical_vol
 			}
 
 			if (settings->block_size && (settings->block_size != use_bs)) {
-				log_error("Cannot use integrity block size %u with unknown file system block size, logical block size %u, physical block size %u.",
+				log_error("Cannot use integrity block size %u with unknown file system block size, logical block size %d, physical block size %d.",
 					   settings->block_size, lbs_4k ? 4096 : 512, pbs_4k ? 4096 : 512);
 				goto bad;
 			}
 
 			settings->block_size = use_bs;
 
-			log_print_unless_silent("Using integrity block size %u for unknown file system block size, logical block size %u, physical block size %u.",
+			log_print_unless_silent("Using integrity block size %u for unknown file system block size, logical block size %d, physical block size %d.",
 						settings->block_size, lbs_4k ? 4096 : 512, pbs_4k ? 4096 : 512);
 			goto out;
 		}
@@ -1012,7 +1012,7 @@ int lv_integrity_mismatches(struct cmd_context *cmd,
 		goto fail;
 
 	if (status.seg_status.type != SEG_STATUS_INTEGRITY) {
-		log_error("Invalid device mapper status type (%d) for %s",
+		log_error("Invalid device mapper status type (%u) for %s",
 			  (uint32_t)status.seg_status.type, display_lvname(lv));
 		goto fail;
 	}
@@ -1033,7 +1033,7 @@ int integrity_settings_to_str_list(struct dm_integrity_settings *settings, struc
 
 	if (settings->journal_watermark_set)
 		if (!setting_str_list_add("journal_watermark", settings->journal_watermark, NULL, result, mem))
-                        errors++;
+			errors++;
 
 	if (settings->commit_time_set)
 		if (!setting_str_list_add("commit_time", settings->commit_time, NULL, result, mem))
@@ -1046,8 +1046,10 @@ int integrity_settings_to_str_list(struct dm_integrity_settings *settings, struc
 	if (settings->allow_discards_set)
 		if (!setting_str_list_add("allow_discards", settings->allow_discards, NULL, result, mem))
 			errors++;
-	if (errors)
-		log_warn("WARNING: Failed to create list of integrity settings.");
+	if (errors) {
+		log_error("Failed to create list of integrity settings.");
+		return 0;
+	}
 
 	return 1;
 }

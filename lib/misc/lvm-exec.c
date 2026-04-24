@@ -19,6 +19,7 @@
 #include "lib/misc/lvm-exec.h"
 #include "lib/commands/toolcontext.h"
 
+#include <signal.h>
 #include <unistd.h>
 #include <sys/wait.h>
 
@@ -86,22 +87,22 @@ int exec_cmd(struct cmd_context *cmd, const char *const argv[],
 
 	/* Parent */
 	if (wait4(pid, &status, 0, NULL) != pid) {
-		log_error("wait4 child process %u failed: %s", pid,
-			  strerror(errno));
+		log_error("wait4 child process %u failed: %s.",
+			  (unsigned) pid, strerror(errno));
 		return 0;
 	}
 
 	if (!WIFEXITED(status)) {
-		log_error("Child %u exited abnormally", pid);
+		log_error("Child %u exited abnormally.", (unsigned) pid);
 		return 0;
 	}
 
 	if (WEXITSTATUS(status)) {
 		if (rstatus) {
 			*rstatus = WEXITSTATUS(status);
-			log_verbose("%s failed: %u", argv[0], *rstatus);
+			log_verbose("%s failed: %d.", argv[0], *rstatus);
 		} else
-			log_error("%s failed: %u", argv[0], WEXITSTATUS(status));
+			log_error("%s failed: %d.", argv[0], WEXITSTATUS(status));
 		return 0;
 	}
 
@@ -198,7 +199,11 @@ FILE *pipe_open(struct cmd_context *cmd, const char *const argv[],
 		log_sys_error("fdopen", "STDIN");
 		if (close(pipefd[0]))
 			log_sys_error("close", "STDIN");
-		return NULL; /* FIXME: kill */
+		if (kill(pdata->pid, SIGKILL))
+			log_sys_error("kill", "");
+		else if (waitpid(pdata->pid, NULL, 0) != pdata->pid)
+			log_sys_error("waitpid", "");
+		return NULL;
 	}
 
 	return pdata->fp;

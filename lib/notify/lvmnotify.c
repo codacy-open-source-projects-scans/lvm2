@@ -68,7 +68,7 @@ static int lvmdbusd_running(void)
 
 	/* Need to ensure we close lock FD now */
 	errno = 0;
-	rc = lockf(fd, F_TLOCK|F_TEST, 0);
+	rc = lockf(fd, F_TEST, 0);
 	if (-1 != rc) {
 		/* Not locked, thus not running */
 		running = 0;
@@ -79,7 +79,7 @@ static int lvmdbusd_running(void)
 			running = 1;
 		} else {
 			log_debug_dbus("Unexpected errno: %d on lockf, returning running", errno_cpy);
-			running = 1 ;
+			running = 1;
 		}
 	}
 
@@ -145,7 +145,7 @@ void lvmnotify_send(struct cmd_context *cmd)
 	ret = sd_bus_message_read(m, "i", &result);
 	if (ret < 0)
 		log_debug_dbus("Failed to parse dbus response message: %d", ret);
-	if (result)
+	else if (result)
 		log_debug_dbus("Bad return value from dbus service: %d", result);
 out:
 	sd_bus_error_free(&error);
