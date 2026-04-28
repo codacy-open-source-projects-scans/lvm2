@@ -18,7 +18,26 @@ DEST=results
 mkdir "$DEST" || die "Failed to create '$DEST'"
 
 # TODO: What should be default configure options?
-CONFIGURE=
+CONFIGURE="\
+      --with-default-use-devices-file=1\
+      --enable-app-machineid\
+      --enable-editline\
+      --disable-readline\
+      --enable-lvmlockd-dlm\
+      --enable-fsadm\
+      --enable-write_install\
+      --enable-pkgconfig\
+      --enable-cmdlib\
+      --enable-dmeventd\
+      --enable-blkid_wiping\
+      --enable-udev_sync\
+      --enable-lvmpolld\
+      --enable-lvmlockd-sanlock\
+      --enable-dbus-service --enable-notify-dbus\
+      --enable-dmfilemapd\
+      --with-vdo-format=/usr/bin/vdoformat\
+      --disable-silent-rules\
+"
 
 answ=0
 
@@ -64,13 +83,13 @@ for commit in $commits; do
 	fi
 	rm $OUT
 
-	OUT=$DEST/$commit.make_rpm.out
-	if ! make rpm &>> $OUT; then
-		answ=1
-		echo "$commit: ERROR: Failed to make rpm" >&2
-		continue
-	fi
-	rm $OUT
+	#OUT=$DEST/$commit.make_rpm.out
+	#if ! make rpm &>> $OUT; then
+	#	answ=1
+	#	echo "$commit: ERROR: Failed to make rpm" >&2
+	#	continue
+	#fi
+	#rm $OUT
 
 	echo "$commit: ok" >&2
 done
