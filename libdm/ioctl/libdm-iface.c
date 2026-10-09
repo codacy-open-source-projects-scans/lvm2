@@ -20,6 +20,7 @@
 #include <stddef.h>
 #include <fcntl.h>
 #include <dirent.h>
+#include <pthread.h>
 #include <sys/ioctl.h>
 #include <sys/utsname.h>
 #include <limits.h>
@@ -36,8 +37,8 @@
 #include "libdm/misc/dm-ioctl.h"
 
 /*
- * Ensure build compatibility.  
- * The hard-coded versions here are the highest present 
+ * Ensure build compatibility.
+ * The hard-coded versions here are the highest present
  * in the _cmd_data arrays.
  */
 
@@ -67,8 +68,6 @@
 static unsigned _dm_version = DM_VERSION_MAJOR;
 static unsigned _dm_version_minor = 0;
 static unsigned _dm_version_patchlevel = 0;
-static int _log_suppress = 0;
-static struct dm_timestamp *_dm_ioctl_timestamp = NULL;
 static int _dm_warn_inactive_suppress = 0;
 
 /*
@@ -83,8 +82,10 @@ static uint32_t _dm_device_major = 0;
 
 static int _control_fd = -1;
 static int _hold_control_fd_open = 0;
-static int _version_checked = 0;
+/* Mutex, not pthread_once: fd can be closed and reopened */
+static pthread_mutex_t _control_fd_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int _version_ok = 1;
+static pthread_once_t _version_once = PTHREAD_ONCE_INIT;
 static unsigned _ioctl_buffer_double_factor = 0;
 /* Max ioctl buffer: 16KB << 16 = 1GB */
 #define DM_IOCTL_BUFFER_MAX_DOUBLINGS 16
@@ -154,31 +155,38 @@ static char *_align(char *ptr, unsigned int a)
 static unsigned _kernel_major = 0;
 static unsigned _kernel_minor = 0;
 static unsigned _kernel_release = 0;
+static pthread_once_t _uname_once = PTHREAD_ONCE_INIT;
 
-static int _uname(void)
+static void _init_uname(void)
 {
-	static int _uts_set = 0;
-	struct utsname _uts;
+	struct utsname uts;
 	int parts;
 
-	if (_uts_set)
-		return 1;
-
-	if (uname(&_uts)) {
-		log_error("uname failed: %s", strerror(errno));
-		return 0;
+	if (uname(&uts)) {
+		log_sys_error("uname", "");
+		_kernel_major = 0;
+		return;
 	}
 
-	parts = sscanf(_uts.release, "%u.%u.%u",
+	parts = sscanf(uts.release, "%u.%u.%u",
 		       &_kernel_major, &_kernel_minor, &_kernel_release);
 
 	/* Kernels with a major number of 2 always had 3 parts. */
 	if (parts < 1 || (_kernel_major < 3 && parts < 3)) {
+		_kernel_major = 0;
+		return;
+	}
+}
+
+static int _uname(void)
+{
+	pthread_once(&_uname_once, _init_uname);
+
+	if (!_kernel_major) {
 		log_error("Could not determine kernel version used.");
 		return 0;
 	}
 
-	_uts_set = 1;
 	return 1;
 }
 
@@ -363,7 +371,7 @@ static int _create_dm_bitset(int require_module_loaded)
 		return 1;
 
 	if (!_uname())
-		return 0;
+		return_0;
 
 	/*
 	 * 2.6 kernels are limited to one major number.
@@ -404,19 +412,30 @@ static int _create_dm_bitset(int require_module_loaded)
 
 int dm_is_dm_major(uint32_t major)
 {
-	if (!_create_dm_bitset(0))
-		return 0;
+	int r = 0;
 
-	if (_dm_multiple_major_support) {
-		if (!_dm_bitset)
-			return 0;
-		return dm_bit(_dm_bitset, major) ? 1 : 0;
+	pthread_mutex_lock(&_control_fd_mutex);
+	if (!_create_dm_bitset(0)) {
+		pthread_mutex_unlock(&_control_fd_mutex);
+		return 0;
 	}
 
-	if (!_dm_device_major)
-		return 0;
+	if (_dm_multiple_major_support) {
+		if (_dm_bitset)
+			r = dm_bit(_dm_bitset, major) ? 1 : 0;
+		pthread_mutex_unlock(&_control_fd_mutex);
+		return r;
+	}
 
-	return (major == _dm_device_major) ? 1 : 0;
+	if (!_dm_device_major) {
+		pthread_mutex_unlock(&_control_fd_mutex);
+		return 0;
+	}
+
+	r = (major == _dm_device_major) ? 1 : 0;
+	pthread_mutex_unlock(&_control_fd_mutex);
+
+	return r;
 }
 
 static void _close_control_fd(void)
@@ -451,7 +470,7 @@ static int _open_control(void)
 		return 1;
 
 	if (!_uname())
-		return 0;
+		return_0;
 
 	if (dm_snprintf(control, sizeof(control), "%s/%s", dm_dir(), DM_CONTROL_NODE) < 0)
 		goto_bad;
@@ -477,7 +496,7 @@ static int _open_control(void)
 	 */
 	if (!_open_and_assign_control_fd(control))
 		goto_bad;
-	
+
 	if (!_create_dm_bitset(1)) {
 		log_error("Failed to set up list of device-mapper major numbers");
 		return 0;
@@ -493,6 +512,19 @@ bad:
 #else
 	return 1;
 #endif
+}
+
+static int _get_control_fd(void)
+{
+	int fd;
+
+	pthread_mutex_lock(&_control_fd_mutex);
+	if (_control_fd == -1)
+		_open_control();
+	fd = _control_fd;
+	pthread_mutex_unlock(&_control_fd_mutex);
+
+	return fd;
 }
 
 static void _dm_zfree_string(char *string)
@@ -544,6 +576,7 @@ void dm_task_destroy(struct dm_task *dmt)
 	dm_free(dmt->geometry);
 	dm_free(dmt->uuid);
 	dm_free(dmt->mangled_uuid);
+	dm_timestamp_destroy(dmt->ioctl_timestamp);
 	dm_free(dmt);
 }
 
@@ -562,8 +595,6 @@ int dm_task_get_driver_version(struct dm_task *dmt, char *version, size_t size)
 	}
 
 	v = dmt->dmi.v4->version;
-	_dm_version_minor = v[1];
-	_dm_version_patchlevel = v[2];
 	if (version &&
 	    (snprintf(version, size, "%u.%u.%u", v[0], v[1], v[2]) < 0)) {
 		log_error("Buffer for version is too short.");
@@ -575,7 +606,7 @@ int dm_task_get_driver_version(struct dm_task *dmt, char *version, size_t size)
 	return 1;
 }
 
-static int _check_version(char *version, size_t size, int log_suppress)
+static int _check_version(char *version, size_t size)
 {
 	struct dm_task *task;
 	int r;
@@ -586,63 +617,64 @@ static int _check_version(char *version, size_t size, int log_suppress)
 		return 0;
 	}
 
-	if (log_suppress)
-		_log_suppress = 1;
-
 	r = dm_task_run(task);
 	if (!dm_task_get_driver_version(task, version, size))
 		stack;
+
+	if (r && task->dmi.v4) {
+		unsigned *v = task->dmi.v4->version;
+		_dm_version = v[0];
+		_dm_version_minor = v[1];
+		_dm_version_patchlevel = v[2];
+	}
+
 	dm_task_destroy(task);
-	_log_suppress = 0;
 
 	return r;
 }
 
+static void _init_version(void)
+{
+	char libversion[64] = "", dmversion[64] = "";
+
+	if (_check_version(dmversion, sizeof(dmversion)))
+		return;
+
+	dm_get_library_version(libversion, sizeof(libversion));
+
+	log_error("Failed to communicate with device-mapper kernel driver (libdevmapper %s).",
+		  *libversion ? libversion : "(unknown version)");
+
+	_version_ok = 0;
+}
+
 /*
- * Find out device-mapper's major version number the first time 
+ * Find out device-mapper's major version number the first time
  * this is called and whether or not we support it.
  */
 int dm_check_version(void)
 {
-	char libversion[64] = "", dmversion[64] = "";
-	const char *compat = "";
+	pthread_once(&_version_once, _init_version);
 
-	if (_version_checked)
-		return _version_ok;
-
-	_version_checked = 1;
-
-	if (_check_version(dmversion, sizeof(dmversion), 0))
-		return 1;
-
-	dm_get_library_version(libversion, sizeof(libversion));
-
-	log_error("Incompatible libdevmapper %s%s and kernel driver %s.",
-		  *libversion ? libversion : "(unknown version)", compat,
-		  *dmversion ? dmversion : "(unknown version)");
-
-	_version_ok = 0;
-	return 0;
+	return _version_ok;
 }
 
 int dm_cookie_supported(void)
 {
 	return (dm_check_version() &&
-		((_dm_version == 4) ? _dm_version_minor >= 15 : _dm_version > 4));
+		((_dm_version == 4 && _dm_version_minor >= 15) || _dm_version > 4));
 }
 
 static int _dm_inactive_supported(void)
 {
 	int inactive_supported = 0;
 
-	if (dm_check_version() && _dm_version >= 4) {
-		if (_dm_version_minor >= 16)
+	if (dm_check_version()) {
+		if ((_dm_version == 4 && _dm_version_minor >= 16) || _dm_version > 4)
 			inactive_supported = 1; /* upstream */
-		else if (_dm_version_minor == 11 &&
-			 (_dm_version_patchlevel >= 6 &&
-			  _dm_version_patchlevel <= 40)) {
+		else if (_dm_version == 4 && _dm_version_minor == 11 &&
+			 _dm_version_patchlevel >= 6 && _dm_version_patchlevel <= 40)
 			inactive_supported = 1; /* RHEL 5.7 */
-		}
 	}
 
 	return inactive_supported;
@@ -656,9 +688,9 @@ int dm_message_supports_precise_timestamps(void)
 	 * these properties via a subsequent @stats_list: require at
 	 * least 4.33.0 in order to use these features.
 	 */
-	if (dm_check_version() && _dm_version >= 4)
-		if (_dm_version_minor >= 33)
-			return 1;
+	if (dm_check_version() &&
+	    ((_dm_version == 4 && _dm_version_minor >= 33) || _dm_version > 4))
+		return 1;
 	return 0;
 }
 
@@ -744,7 +776,7 @@ DM_EXPORT_NEW_SYMBOL(int, dm_task_get_info, 1_02_97)
 	info->live_table = dmt->dmi.v4->flags & DM_ACTIVE_PRESENT_FLAG ? 1 : 0;
 	info->inactive_table = dmt->dmi.v4->flags & DM_INACTIVE_PRESENT_FLAG ?
 	    1 : 0;
-	info->deferred_remove = dmt->dmi.v4->flags & DM_DEFERRED_REMOVE ? 1 : 0;
+	info->deferred_remove = dmt->dmi.v4->flags & DM_DEFERRED_REMOVE_FLAG ? 1 : 0;
 	info->internal_suspend = (dmt->dmi.v4->flags & DM_INTERNAL_SUSPEND_FLAG) ? 1 : 0;
 	info->target_count = dmt->dmi.v4->target_count;
 	info->open_count = dmt->dmi.v4->open_count;
@@ -800,12 +832,17 @@ static void *_align_ptr(void *ptr)
 	return (void *)(uintptr_t)_align_val((size_t)ptr);
 }
 
-static int _check_has_event_nr(void) {
-	static int _has_event_nr = -1;
+static int _has_event_nr = 0;
+static pthread_once_t _has_event_nr_once = PTHREAD_ONCE_INIT;
 
-	if (_has_event_nr < 0)
-		_has_event_nr = dm_check_version() &&
-			((_dm_version == 4) ?  _dm_version_minor >= 38 : _dm_version > 4);
+static void _init_has_event_nr(void)
+{
+	_has_event_nr = dm_check_version() &&
+		((_dm_version == 4 && _dm_version_minor >= 38) || _dm_version > 4);
+}
+
+static int _check_has_event_nr(void) {
+	pthread_once(&_has_event_nr_once, _init_has_event_nr);
 
 	return _has_event_nr;
 }
@@ -825,7 +862,7 @@ struct dm_versions *dm_task_get_versions(struct dm_task *dmt)
 int dm_task_get_device_list(struct dm_task *dmt, struct dm_list **devs_list,
 			    unsigned *devs_features)
 {
-	struct dm_names *names, *names1;
+	struct dm_names *names, *names1 = NULL;
 	struct dm_active_device *dm_dev, *dm_new_dev;
 	struct dm_list *devs;
 	unsigned next = 0;
@@ -1126,10 +1163,10 @@ int dm_task_set_event_nr(struct dm_task *dmt, uint32_t event_nr)
 
 int dm_task_set_record_timestamp(struct dm_task *dmt)
 {
-	if (!_dm_ioctl_timestamp)
-		_dm_ioctl_timestamp = dm_timestamp_alloc();
+	if (!dmt->ioctl_timestamp)
+		dmt->ioctl_timestamp = dm_timestamp_alloc();
 
-	if (!_dm_ioctl_timestamp)
+	if (!dmt->ioctl_timestamp)
 		return_0;
 
 	dmt->record_timestamp = 1;
@@ -1139,7 +1176,7 @@ int dm_task_set_record_timestamp(struct dm_task *dmt)
 
 struct dm_timestamp *dm_task_get_ioctl_timestamp(struct dm_task *dmt)
 {
-	return dmt->record_timestamp ? _dm_ioctl_timestamp : NULL;
+	return dmt->record_timestamp ? dmt->ioctl_timestamp : NULL;
 }
 
 struct target *create_target(uint64_t start, uint64_t len, const char *type,
@@ -1243,19 +1280,19 @@ static int _lookup_dev_name(uint64_t dev, char *buf, size_t len)
 	unsigned next = 0;
 	struct dm_task *dmt;
 	int r = 0;
- 
+
 	if (!(dmt = dm_task_create(DM_DEVICE_LIST)))
 		return 0;
- 
+
 	if (!dm_task_run(dmt))
 		goto out;
 
 	if (!(names = dm_task_get_names(dmt)))
 		goto out;
- 
+
 	if (!names->dev)
 		goto out;
- 
+
 	do {
 		names = (struct dm_names *)((char *) names + next);
 		if (names->dev == dev) {
@@ -1453,7 +1490,7 @@ static struct dm_ioctl *_flatten(struct dm_task *dmt, unsigned repeat_count)
 	if (dmt->skip_lockfs)
 		dmi->flags |= DM_SKIP_LOCKFS_FLAG;
 	if (dmt->deferred_remove && (dmt->type == DM_DEVICE_REMOVE || dmt->type == DM_DEVICE_REMOVE_ALL))
-		dmi->flags |= DM_DEFERRED_REMOVE;
+		dmi->flags |= DM_DEFERRED_REMOVE_FLAG;
 
 	if (dmt->secure_data) {
 		if (_dm_version_minor < 20)
@@ -1617,7 +1654,7 @@ static int _udev_complete(struct dm_task *dmt)
 static int _check_uevent_generated(struct dm_ioctl *dmi)
 {
 	if (!dm_check_version() ||
-	    ((_dm_version == 4) ? _dm_version_minor < 17 : _dm_version < 4))
+	    ((_dm_version == 4 && _dm_version_minor < 17) || _dm_version < 4))
 		/* can't check, assume uevent is generated */
 		return 1;
 
@@ -1791,9 +1828,284 @@ static int _create_and_load_v4(struct dm_task *dmt)
 	return 0;
 }
 
-uint64_t dm_task_get_existing_table_size(struct dm_task *dmt)
+uint64_t dm_task_get_existing_table_size(const struct dm_task *dmt)
 {
 	return dmt->existing_table_size;
+}
+
+/*
+ * Skip "rebuild N" or "write_mostly N" token pair.
+ * Old dm-raid may drop these from table output.
+ */
+static int _skip_raid_volatile_token(const char **pp)
+{
+	const char *p = *pp;
+
+	if (strncmp(p, "rebuild ", 8) &&
+	    strncmp(p, "write_mostly ", 13))
+		return 0;
+
+	while (*p && *p != ' ')
+		p++;
+	if (*p == ' ')
+		p++;
+	while (*p && *p != ' ')
+		p++;
+	if (*p == ' ')
+		p++;
+
+	*pp = p;
+	return 1;
+}
+
+/*
+ * Skip optional "sync" or "nosync" flag token in the active table.
+ * External tools (dmsetup) may inject these to force a resync and the
+ * kernel keeps reporting the token in STATUSTYPE_TABLE afterwards, while
+ * LVM metadata does not.  Dropping it via reload is rejected with EINVAL,
+ * so the token is ignored when comparing against the active table only.
+ */
+static int _skip_raid_sync_flag(const char **pp)
+{
+	const char *p = *pp;
+
+	if (!strncmp(p, "nosync", 6) && (!p[6] || p[6] == ' ')) {
+		p += 6;
+		if (*p == ' ')
+			p++;
+		*pp = p;
+		return 1;
+	}
+
+	if (!strncmp(p, "sync", 4) && (!p[4] || p[4] == ' ')) {
+		p += 4;
+		if (*p == ' ')
+			p++;
+		*pp = p;
+		return 1;
+	}
+
+	return 0;
+}
+
+/*
+ * Check if raid params are functionally equivalent.
+ * p1 = new table, p2 = active table (kernel STATUSTYPE_TABLE).
+ *
+ * Old dm-raid (< 1.15.1) double-counts rebuild/writemostly in
+ * the param count, and early versions drop "rebuild N" from
+ * table output once In_sync is set.  Both cause spurious string
+ * mismatches that defeat reload suppression.  We skip the param
+ * count and ignore volatile "rebuild N" / "write_mostly N" pairs.
+ *
+ * "sync" / "nosync" may also differ: an externally forced resync
+ * leaves the token in the active table only, so it is skipped there.
+ * The new table (p1) is never skipped -- a sync/nosync it carries is
+ * a deliberate force/avoid-resync request and must trigger a reload.
+ *
+ * The 'suspended' flag gates which side gets the volatile skip.
+ * Do not simplify this to always-symmetric or always-asymmetric.
+ * When NOT suspended, skip only in p2 -- a rebuild in p1 is a
+ * deliberate request that must trigger a reload.  When suspended,
+ * skip in both p1 and p2 -- LVM is in the second preload pass
+ * (the first already loaded the rebuild table via force_reload),
+ * the active table is stale, and a redundant reload here would
+ * hit "Internal error: table load while devices are suspended".
+ */
+static int _raid_params_equiv(const char *p1, const char *p2,
+			      int suspended)
+{
+	const char *s1 = strchr(p1, ' ');
+	const char *s2 = strchr(p2, ' ');
+
+	if (!s1 || !s2)
+		return 0;
+
+	/* Raid personality must match */
+	if ((s1 - p1) != (s2 - p2) ||
+	    memcmp(p1, p2, s1 - p1))
+		return 0;
+
+	/* Skip past the param count */
+	s1 = strchr(s1 + 1, ' ');
+	s2 = strchr(s2 + 1, ' ');
+
+	if (!s1 || !s2)
+		return 0;
+
+	/* Fast path */
+	if (!strcmp(s1, s2))
+		return 1;
+
+	s1++;
+	s2++;
+
+	for (;;) {
+		/*
+		 * Stale sync/nosync from an externally forced resync only
+		 * appears in the active table; never skip the new table.
+		 */
+		while (*s2 && _skip_raid_sync_flag(&s2))
+			;
+
+		if (suspended)
+			while (*s1 && _skip_raid_volatile_token(&s1))
+				;
+		while (*s2 && _skip_raid_volatile_token(&s2))
+			;
+
+		if (!*s1 && !*s2)
+			return 1;
+
+		if (!*s1 || !*s2)
+			return 0;
+
+		while (*s1 && *s2 && *s1 != ' ' && *s2 != ' ') {
+			if (*s1 != *s2)
+				return 0;
+			s1++;
+			s2++;
+		}
+
+		if ((*s1 && *s1 != ' ') || (*s2 && *s2 != ' '))
+			return 0;
+
+		if (*s1 == ' ')
+			s1++;
+		if (*s2 == ' ')
+			s2++;
+	}
+}
+
+/*
+ * Check if integrity params are functionally equivalent.
+ * p1 = new table params, p2 = active table params (kernel STATUSTYPE_TABLE).
+ *
+ * Kernel's integrity table output differs from what LVM emits:
+ *
+ * - block_size:512 -- LVM always emits, kernel omits when
+ *   sectors_per_block==1 (the default).
+ *
+ * - fix_padding -- LVM always emits, kernel only reports when
+ *   SB_FLAG_FIXED_PADDING is set in the on-disk superblock
+ *   (written once by initialize_superblock(), NOT on reload).
+ *
+ * - recalculate -- kernel reports from SB_FLAG_RECALCULATING in the
+ *   on-disk superblock, not from the constructor table line.
+ *   The kernel NEVER clears this flag; recalc_sector simply advances
+ *   past provided_data_sectors.  LVM clears integrity_recalculate in
+ *   VG metadata after the first activation (integrity_manip.c), so
+ *   subsequent activations omit it from the table line, but the kernel
+ *   still reports it from the superblock.  A reload cannot remove the
+ *   flag, so treat it as cosmetic in both directions.
+ *
+ * - kernel may add tokens LVM did not set (buffer_sectors,
+ *   journal_watermark, commit_time, etc.)
+ *
+ * Skipped tokens are listed in _integrity_skip_p1_token().
+ * We verify every non-skipped token we emit exists in the kernel output.
+ * Extra kernel tokens are acceptable.
+ */
+
+/* Tokens LVM emits that the kernel may legitimately omit */
+static int _integrity_skip_p1_token(const char *token, unsigned len)
+{
+	if (len == 14 && !memcmp(token, "block_size:512", 14))
+		return 1;
+	if (len == 11 && !memcmp(token, "fix_padding", 11))
+		return 1;
+	if (len == 11 && !memcmp(token, "recalculate", 11))
+		return 1;
+	return 0;
+}
+
+/* Find exact token in a space-separated string */
+static int _integrity_has_token(const char *str, const char *token, unsigned len)
+{
+	const char *s = str;
+
+	while (*s) {
+		const char *e = s;
+		while (*e && *e != ' ')
+			e++;
+		if ((unsigned)(e - s) == len && !memcmp(s, token, len))
+			return 1;
+		s = (*e == ' ') ? e + 1 : e;
+	}
+
+	return 0;
+}
+
+/* Advance past one space-separated token */
+static const char *_skip_one_token(const char *s)
+{
+	while (*s && *s != ' ')
+		s++;
+	while (*s == ' ')
+		s++;
+	return s;
+}
+
+static int _integrity_params_equiv(const char *p1, const char *p2,
+				   int suspended __attribute__((unused)))
+{
+	const char *s1 = p1, *s2 = p2;
+	const char *e1, *e2;
+	const char *args1, *args2;
+	const char *tok;
+	unsigned len;
+	int i;
+
+	/* Compare 4 prefix tokens: dev, start, tag_size, mode */
+	for (i = 0; i < 4; i++) {
+		e1 = s1;
+		while (*e1 && *e1 != ' ')
+			e1++;
+		e2 = s2;
+		while (*e2 && *e2 != ' ')
+			e2++;
+		if ((e1 - s1) != (e2 - s2) ||
+		    memcmp(s1, s2, e1 - s1))
+			return 0;
+		s1 = (*e1 == ' ') ? e1 + 1 : e1;
+		s2 = (*e2 == ' ') ? e2 + 1 : e2;
+	}
+
+	/* Skip param count (5th token) -- differs due to kernel omissions */
+	args1 = _skip_one_token(s1);
+	args2 = _skip_one_token(s2);
+
+	/* Fast path */
+	if (!strcmp(args1, args2))
+		return 1;
+
+	/* Check every non-skipped token we emit exists in kernel output */
+	tok = args1;
+	while (*tok) {
+		e1 = tok;
+		while (*e1 && *e1 != ' ')
+			e1++;
+		len = (unsigned)(e1 - tok);
+		if (!_integrity_skip_p1_token(tok, len) &&
+		    !_integrity_has_token(args2, tok, len))
+			return 0;
+		tok = (*e1 == ' ') ? e1 + 1 : e1;
+	}
+
+	return 1;
+}
+
+static int _target_params_equiv(const char *type,
+				const char *p1, const char *p2,
+				int suspended)
+{
+	if (!strcmp(type, "raid"))
+		return _raid_params_equiv(p1, p2, suspended);
+
+	if (!strcmp(type, "integrity"))
+		return _integrity_params_equiv(p1, p2, suspended);
+
+	return 0;
 }
 
 static int _reload_with_suppression_v4(struct dm_task *dmt)
@@ -1867,6 +2179,12 @@ static int _reload_with_suppression_v4(struct dm_task *dmt)
 					  task->major, task->minor, t1->type);
 				log_debug("reload params1 %s", t1->params);
 				log_debug("reload params2 %s", t2->params);
+			} else if (_target_params_equiv(t1->type, t1->params, t2->params,
+					       task->dmi.v4->flags & DM_SUSPEND_FLAG)) {
+				log_debug("reload %d:%d diff params equiv for type %s.",
+					  task->major, task->minor, t1->type);
+				log_debug("reload params1 %s", t1->params);
+				log_debug("reload params2 %s", t2->params);
 			} else {
 				log_debug("reload %d:%d diff params for type %s.",
 					  task->major, task->minor, t1->type);
@@ -1879,7 +2197,7 @@ static int _reload_with_suppression_v4(struct dm_task *dmt)
 		t1 = t1->next;
 		t2 = t2->next;
 	}
-	
+
 	if (!t1 && !t2) {
 		dmt->dmi.v4 = task->dmi.v4;
 		task->dmi.v4 = NULL;
@@ -1931,7 +2249,7 @@ static int _check_children_not_suspended_v4(struct dm_task *dmt, uint64_t device
 	task->event_nr = dmt->event_nr & DM_UDEV_FLAGS_MASK;
 	task->cookie_set = dmt->cookie_set;
 	task->add_node = dmt->add_node;
-	
+
 	if (!(r = dm_task_run(task)))
 		goto out;
 
@@ -1948,7 +2266,7 @@ static int _check_children_not_suspended_v4(struct dm_task *dmt, uint64_t device
 					     "(%u:%u)", info.major, info.minor);
 		else
 			log_error(INTERNAL_ERROR "Attempt to suspend device %s%s%s%.0d%s%.0d%s%s"
-				  "that uses already-suspended device (%u:%u)", 
+				  "that uses already-suspended device (%u:%u)",
 				  DEV_NAME(dmt) ? : "", DEV_UUID(dmt) ? : "",
 				  dmt->major > 0 ? "(" : "",
 				  dmt->major > 0 ? dmt->major : 0,
@@ -2188,7 +2506,8 @@ static struct dm_ioctl *_dm_task_build_dmi(struct dm_task *dmt,
 	return dmi;
 }
 
-/* Execute a single DM ioctl.  Sets dmt->ioctl_errno on failure. */
+/* Execute a single DM ioctl.  Sets dmt->ioctl_errno on failure.
+ * Caller must validate dmt->type via _validate_task_type(). */
 int dm_ioctl_exec(int fd, struct dm_task *dmt, struct dm_ioctl *dmi)
 {
 	int r;
@@ -2256,7 +2575,7 @@ static int _dm_ioctl_post(struct dm_task *dmt, struct dm_ioctl *dmi,
 						  (dmt->type == DM_DEVICE_STATUS)))
 			dmi->flags &= ~DM_EXISTS_FLAG;	/* FIXME */
 		else {
-			if (_log_suppress || dmt->ioctl_errno == EINTR)
+			if (dmt->ioctl_errno == EINTR)
 				log_verbose("device-mapper: %s ioctl on %s %s%s%.0d%s%.0d%s%s "
 					    "failed: %s",
 					    _cmd_data_v4[dmt->type].name,
@@ -2326,10 +2645,10 @@ static struct dm_ioctl *_do_dm_ioctl(struct dm_task *dmt,
 	_dm_zfree_dmi(dmt->dmi.v4);
 	dmt->dmi.v4 = dmi;
 
-	r = _dm_ioctl_exec_retry(_control_fd, dmt);
+	r = _dm_ioctl_exec_retry(_get_control_fd(), dmt);
 
 	if (dmt->record_timestamp)
-		if (!dm_timestamp_get(_dm_ioctl_timestamp))
+		if (!dm_timestamp_get(dmt->ioctl_timestamp))
 			stack;
 
 	if (!_dm_ioctl_post(dmt, dmi, r)) {
@@ -2534,43 +2853,57 @@ repeat_ioctl:
 
 void dm_hold_control_dev(int hold_open)
 {
+	pthread_mutex_lock(&_control_fd_mutex);
 	_hold_control_fd_open = hold_open ? 1 : 0;
+	pthread_mutex_unlock(&_control_fd_mutex);
 
 	log_debug("Hold of control device is now %sset.",
-		  _hold_control_fd_open ? "" : "un");
+		  hold_open ? "" : "un");
 }
 
 void dm_lib_release(void)
 {
+	pthread_mutex_lock(&_control_fd_mutex);
 	if (!_hold_control_fd_open)
 		_close_control_fd();
-	dm_timestamp_destroy(_dm_ioctl_timestamp);
-	_dm_ioctl_timestamp = NULL;
+	pthread_mutex_unlock(&_control_fd_mutex);
+
 	update_devs();
 }
 
 void dm_pools_check_leaks(void);
 
-void dm_lib_exit(void)
+static pthread_once_t _exit_once = PTHREAD_ONCE_INIT;
+
+static void _do_lib_exit(void)
 {
 	int suspended_counter;
-	static unsigned _exited = 0;
-
-	if (_exited++)
-		return;
 
 	if ((suspended_counter = dm_get_suspended_counter()))
 		log_error("libdevmapper exiting with %d device(s) still suspended.", suspended_counter);
 
 	dm_lib_release();
 	selinux_release();
+	dm_thread_state_exit();
+	pthread_mutex_lock(&_control_fd_mutex);
 	if (_dm_bitset)
 		dm_bitset_destroy(_dm_bitset);
 	_dm_bitset = NULL;
+	pthread_mutex_unlock(&_control_fd_mutex);
 	dm_pools_check_leaks();
 	dm_dump_memory();
-	_version_ok = 1;
-	_version_checked = 0;
+}
+
+static void _dm_lib_exit(void) __attribute__((destructor));
+
+static void _dm_lib_exit(void)
+{
+	pthread_once(&_exit_once, _do_lib_exit);
+}
+
+void dm_lib_exit(void)
+{
+	dm_lib_release();
 }
 
 #if defined(GNU_SYMVER)

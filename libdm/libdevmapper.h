@@ -608,6 +608,12 @@ int dm_stats_get_current_region_precise_timestamps(const struct dm_stats *dms);
  */
 int dm_stats_list(struct dm_stats *dms, const char *program_id);
 
+/*
+ * Parse a @stats_list message response body without device I/O.
+ * dm_stats_list() performs the same parsing after querying the kernel.
+ */
+int dm_stats_read_list(struct dm_stats *dms, const char *list_response);
+
 #define DM_STATS_REGIONS_ALL UINT64_MAX
 /*
  * Populate a dm_stats object with statistics for one or more regions of
@@ -729,15 +735,9 @@ int dm_stats_clear_region(struct dm_stats *dms, uint64_t region_id);
 
 /*
  * Print the current counter values for the specified statistics region
- * and return them as a string. The memory for the string buffer will
- * be allocated from the dm_stats handle's private pool and should be
- * returned by calling dm_stats_buffer_destroy() when no longer
- * required. The pointer will become invalid following any call that
- * clears or reinitializes the handle (destroy, list, populate, bind).
- *
- * This allows applications that wish to access the raw message response
- * to obtain it via a dm_stats handle; no parsing of the textual counter
- * data is carried out by this function.
+ * and return them as a string. The memory for the string buffer is
+ * allocated for the caller and must be released by calling
+ * dm_stats_buffer_destroy() when no longer required.
  *
  * Most users are recommended to use the dm_stats_populate() call
  * instead since this will automatically parse the statistics data into
@@ -756,8 +756,13 @@ char *dm_stats_print_region(struct dm_stats *dms, uint64_t region_id,
 			    unsigned clear);
 
 /*
- * Destroy a statistics response buffer obtained from a call to
- * dm_stats_print_region().
+ * Release a response buffer obtained from dm_stats_print_region() or
+ * dm_stats_get_group_descriptor().
+ *
+ * The buffer belongs to the caller and is released independently of the
+ * handle, so buffers may be released in any order and one release never
+ * invalidates another.  The handle is not consulted; the dms argument is
+ * retained for API compatibility.
  */
 void dm_stats_buffer_destroy(struct dm_stats *dms, char *buffer);
 
@@ -1180,9 +1185,9 @@ for (dm_stats_walk_init((dms), DM_STATS_WALK_AREA),		\
  */
 #define dm_stats_foreach_group(dms)				\
 for (dm_stats_walk_init((dms), DM_STATS_WALK_GROUP),		\
-     dm_stats_walk_start(dms);					\
-     !dm_stats_walk_end(dms);					\
-     dm_stats_walk_next(dms))
+     dm_stats_walk_start((dms));				\
+     !dm_stats_walk_end((dms));					\
+     dm_stats_walk_next((dms)))
 
 /*
  * Start a walk iterating over the regions contained in dm_stats handle
@@ -1295,7 +1300,7 @@ int dm_stats_create_group(struct dm_stats *dms, const char *members,
  * If remove is non-zero then all regions that belong to the group will
  * also be removed.
  */
-int dm_stats_delete_group(struct dm_stats *dms, uint64_t group_id, int remove);
+int dm_stats_delete_group(struct dm_stats *dms, uint64_t group_id, int remove_regions);
 
 /*
  * Set an alias for this group or region. The alias will be returned
@@ -1326,10 +1331,8 @@ uint64_t dm_stats_get_group_id(const struct dm_stats *dms, uint64_t region_id);
  * The string is in the same format as the 'group' argument to
  * dm_stats_create_group().
  *
- * The pointer does not need to be freed explicitly by the caller: it
- * will become invalid following a subsequent dm_stats_list(),
- * dm_stats_populate() or dm_stats_destroy() of the corresponding
- * dm_stats handle.
+ * The buffer is allocated for the caller and must be released with
+ * dm_stats_buffer_destroy() when no longer required.
  */
 int dm_stats_get_group_descriptor(const struct dm_stats *dms,
 				  uint64_t group_id, char **buf);
@@ -1499,7 +1502,7 @@ typedef enum dm_string_mangling_e {
 /*
  * Set/get mangling mode used for device-mapper names and uuids.
  */
-int dm_set_name_mangling_mode(dm_string_mangling_t name_mangling);
+int dm_set_name_mangling_mode(dm_string_mangling_t name_mangling_mode);
 dm_string_mangling_t dm_get_name_mangling_mode(void);
 
 /*
@@ -1515,13 +1518,13 @@ char *dm_task_get_uuid_unmangled(const struct dm_task *dmt);
 /*
  * Configure the device-mapper directory
  */
-int dm_set_dev_dir(const char *dir);
+int dm_set_dev_dir(const char *dev_dir);
 const char *dm_dir(void);
 
 /*
  * Configure sysfs directory, /sys by default
  */
-int dm_set_sysfs_dir(const char *dir);
+int dm_set_sysfs_dir(const char *sysfs_dir);
 const char *dm_sysfs_dir(void);
 
 /*
@@ -1582,15 +1585,19 @@ typedef int (*dm_mountinfo_line_callback_fn) (char *line, unsigned maj, unsigned
 int dm_mountinfo_read(dm_mountinfo_line_callback_fn read_fn, void *cb_data);
 
 /*
- * Initialise library
+ * Initialise library.  This is normally done automatically when the
+ * library is loaded.
  */
-void dm_lib_init(void) __attribute__((constructor));
+void dm_lib_init(void);
+
+/* Release reusable library resources. */
+void dm_lib_release(void);
 
 /*
- * Release library resources
+ * Compatibility wrapper for dm_lib_release().  Final library teardown is
+ * performed automatically when the library is unloaded.
  */
-void dm_lib_release(void);
-void dm_lib_exit(void) __attribute__((destructor));
+void dm_lib_exit(void);
 
 /* An optimisation for clients making repeated calls involving dm ioctls */
 void dm_hold_control_dev(int hold_open);
@@ -1619,7 +1626,7 @@ struct dm_tree_node;
  * parents/children.
  */
 struct dm_tree *dm_tree_create(void);
-void dm_tree_free(struct dm_tree *tree);
+void dm_tree_free(struct dm_tree *dtree);
 
 /*
  * List of suffixes to be ignored when matching uuids against existing devices.
@@ -1629,21 +1636,21 @@ void dm_tree_set_optional_uuid_suffixes(struct dm_tree *dtree, const char **opti
 /*
  * Add nodes to the tree for a given device and all the devices it uses.
  */
-int dm_tree_add_dev(struct dm_tree *tree, uint32_t major, uint32_t minor);
-int dm_tree_add_dev_with_udev_flags(struct dm_tree *tree, uint32_t major,
+int dm_tree_add_dev(struct dm_tree *dtree, uint32_t major, uint32_t minor);
+int dm_tree_add_dev_with_udev_flags(struct dm_tree *dtree, uint32_t major,
 				    uint32_t minor, uint16_t udev_flags);
 
 /*
  * Add a new node to the tree if it doesn't already exist.
  */
-struct dm_tree_node *dm_tree_add_new_dev(struct dm_tree *tree,
+struct dm_tree_node *dm_tree_add_new_dev(struct dm_tree *dtree,
 					 const char *name,
 					 const char *uuid,
 					 uint32_t major, uint32_t minor,
 					 int read_only,
 					 int clear_inactive,
 					 void *context);
-struct dm_tree_node *dm_tree_add_new_dev_with_udev_flags(struct dm_tree *tree,
+struct dm_tree_node *dm_tree_add_new_dev_with_udev_flags(struct dm_tree *dtree,
 							 const char *name,
 							 const char *uuid,
 							 uint32_t major,
@@ -1657,10 +1664,10 @@ struct dm_tree_node *dm_tree_add_new_dev_with_udev_flags(struct dm_tree *tree,
  * Search for a node in the tree.
  * Set major and minor to 0 or uuid to NULL to get the root node.
  */
-struct dm_tree_node *dm_tree_find_node(struct dm_tree *tree,
+struct dm_tree_node *dm_tree_find_node(struct dm_tree *dtree,
 				       uint32_t major,
 				       uint32_t minor);
-struct dm_tree_node *dm_tree_find_node_by_uuid(struct dm_tree *tree,
+struct dm_tree_node *dm_tree_find_node_by_uuid(struct dm_tree *dtree,
 					       const char *uuid);
 
 /*
@@ -1808,7 +1815,6 @@ int dm_tree_node_add_mirror_target(struct dm_tree_node *node,
 
 int dm_tree_node_add_mirror_target_log(struct dm_tree_node *node,
 				       uint32_t region_size,
-				       unsigned clustered,
 				       const char *log_uuid,
 				       unsigned area_count,
 				       uint32_t flags);
@@ -2054,14 +2060,14 @@ int dm_tree_node_add_integrity_target(struct dm_tree_node *node,
 #define DM_VDO_BLOCK_SIZE_KB			(DM_VDO_BLOCK_SIZE << DM_SECTOR_SHIFT)
 
 #define DM_VDO_BLOCK_MAP_CACHE_SIZE_MINIMUM_MB	(128)			// 128MiB
-#define DM_VDO_BLOCK_MAP_CACHE_SIZE_MAXIMUM_MB	(16 * 1024 * 1024 - 1)	// 16TiB - 1
+#define DM_VDO_BLOCK_MAP_CACHE_SIZE_MAXIMUM_MB	(16 * 1024 * 1024 - 1)	/* 16TiB - 1MiB */
 #define DM_VDO_BLOCK_MAP_CACHE_SIZE_MINIMUM_PER_LOGICAL_THREAD  (4096 * DM_VDO_BLOCK_SIZE_KB)
 
 #define DM_VDO_BLOCK_MAP_ERA_LENGTH_MINIMUM	1
 #define DM_VDO_BLOCK_MAP_ERA_LENGTH_MAXIMUM	16380
 
 #define DM_VDO_INDEX_MEMORY_SIZE_MINIMUM_MB	256			// 0.25 GiB
-#define DM_VDO_INDEX_MEMORY_SIZE_MAXIMUM_MB	(1024 * 1024 * 1024)	// 1TiB
+#define DM_VDO_INDEX_MEMORY_SIZE_MAXIMUM_MB	(1024 * 1024)		// 1TiB
 
 #define DM_VDO_SLAB_SIZE_MINIMUM_MB		128			// 128MiB
 #define DM_VDO_SLAB_SIZE_MAXIMUM_MB		(32 * 1024)		// 32GiB
@@ -2167,6 +2173,8 @@ struct dm_vdo_target_params {
 
 	/* write policy */
 	enum dm_vdo_write_policy write_policy;
+
+	int use_kernel_format;         /* kernel direct format (added last for ABI compat) */
 };
 
 int dm_vdo_validate_target_params(const struct dm_vdo_target_params *vtp,
@@ -2267,10 +2275,11 @@ int dm_tree_node_add_replicator_dev_target(struct dm_tree_node *node,
 #define DM_THIN_MIN_DATA_BLOCK_SIZE (UINT32_C(128))
 #define DM_THIN_MAX_DATA_BLOCK_SIZE (UINT32_C(2097152))
 /*
- * Max supported size for thin pool metadata device (17045913600 bytes)
- * drivers/md/dm-thin-metadata.h THIN_METADATA_MAX_SECTORS
- * But here DM_THIN_MAX_METADATA_SIZE got defined incorrectly
- * Correct size is (UINT64_C(255) * ((1 << 14) - 64) * (4096 / (1 << 9)))
+ * This does not match kernel THIN_METADATA_MAX_SECTORS (33292800 sectors).
+ * The correct formula is (UINT64_C(255) * ((1 << 14) - 64) * (4096 / (1 << 9)))
+ * but this older incorrect value (33161216) is used by crop_metadata logic
+ * (DEFAULT_THIN_POOL_MAX_METADATA_SIZE in defaults.h) and cannot be changed
+ * without breaking existing thin pool metadata cropping behavior.
  */
 #define DM_THIN_MAX_METADATA_SIZE   (UINT64_C(255) * (1 << 14) * (4096 / (1 << 9)) - 256 * 1024)
 
@@ -2326,10 +2335,9 @@ int dm_tree_node_set_thin_pool_error_if_no_space(struct dm_tree_node *node,
 int dm_tree_node_set_thin_pool_read_only(struct dm_tree_node *node,
 					 unsigned read_only);
 /*
- * FIXME: Defines below are based on kernel's dm-thin.c defines
- * MAX_DEV_ID ((1 << 24) - 1)
+ * Based on kernel's dm-thin.c MAX_DEV_ID ((1 << 24) - 1)
  */
-#define DM_THIN_MAX_DEVICE_ID (UINT32_C((1 << 24) - 1))
+#define DM_THIN_MAX_DEVICE_ID ((UINT32_C(1) << 24) - 1)
 int dm_tree_node_add_thin_target(struct dm_tree_node *node,
 				 uint64_t size,
 				 const char *pool_uuid,
@@ -2338,7 +2346,7 @@ int dm_tree_node_add_thin_target(struct dm_tree_node *node,
 int dm_tree_node_set_thin_external_origin(struct dm_tree_node *node,
 					  const char *external_uuid);
 
-void dm_tree_node_set_udev_flags(struct dm_tree_node *node, uint16_t udev_flags);
+void dm_tree_node_set_udev_flags(struct dm_tree_node *dnode, uint16_t udev_flags);
 
 void dm_tree_node_set_presuspend_node(struct dm_tree_node *node,
 				      struct dm_tree_node *presuspend_node);
@@ -2371,7 +2379,7 @@ typedef enum dm_node_callback_e {
 } dm_node_callback_t;
 typedef int (*dm_node_callback_fn) (struct dm_tree_node *node,
 				    dm_node_callback_t type, void *cb_data);
-void dm_tree_node_set_callback(struct dm_tree_node *node,
+void dm_tree_node_set_callback(struct dm_tree_node *dnode,
 			       dm_node_callback_fn cb, void *cb_data);
 
 void dm_tree_set_cookie(struct dm_tree_node *node, uint32_t cookie);
@@ -2397,7 +2405,7 @@ void *dm_zalloc_wrapper(size_t s, const char *file, int line)
 void *dm_realloc_wrapper(void *p, unsigned int s, const char *file, int line)
 	__attribute__((__warn_unused_result__));
 void dm_free_wrapper(void *ptr);
-char *dm_strdup_wrapper(const char *s, const char *file, int line)
+char *dm_strdup_wrapper(const char *str, const char *file, int line)
 	__attribute__((__warn_unused_result__));
 int dm_dump_memory_wrapper(void);
 void dm_bounds_check_wrapper(void);
@@ -2554,13 +2562,13 @@ int dm_bit_get_prev(dm_bitset_t bs, int last_bit);
 #define DM_BITS_PER_INT ((unsigned)sizeof(int) * CHAR_BIT)
 
 #define dm_bit(bs, i) \
-   ((bs)[((i) / DM_BITS_PER_INT) + 1] & (0x1 << ((i) & (DM_BITS_PER_INT - 1))))
+   ((bs)[((i) / DM_BITS_PER_INT) + 1] & (0x1U << ((i) & (DM_BITS_PER_INT - 1))))
 
 #define dm_bit_set(bs, i) \
-   ((bs)[((i) / DM_BITS_PER_INT) + 1] |= (0x1 << ((i) & (DM_BITS_PER_INT - 1))))
+   ((bs)[((i) / DM_BITS_PER_INT) + 1] |= (0x1U << ((i) & (DM_BITS_PER_INT - 1))))
 
 #define dm_bit_clear(bs, i) \
-   ((bs)[((i) / DM_BITS_PER_INT) + 1] &= ~(0x1 << ((i) & (DM_BITS_PER_INT - 1))))
+   ((bs)[((i) / DM_BITS_PER_INT) + 1] &= ~(0x1U << ((i) & (DM_BITS_PER_INT - 1))))
 
 #define dm_bit_set_all(bs) \
    memset((bs) + 1, -1, ((*(bs) / DM_BITS_PER_INT) + 1) * sizeof(int))
@@ -2808,7 +2816,7 @@ struct dm_list *dm_list_next(const struct dm_list *head, const struct dm_list *e
  * return another element f.
  */
 #define dm_struct_field(v, t, e, f) \
-    (((t *)((uintptr_t)(v) - offsetof(t, e))->f)
+    (((t *)((uintptr_t)(v) - offsetof(t, e)))->f)
 
 /*
  * Given the address v of a known element e in a known structure of type t,
@@ -2983,7 +2991,7 @@ size_t dm_escaped_len(const char *str);
  */
 char *dm_build_dm_name(struct dm_pool *mem, const char *vgname,
 		       const char *lvname, const char *layer);
-char *dm_build_dm_uuid(struct dm_pool *mem, const char *prefix, const char *lvid, const char *layer);
+char *dm_build_dm_uuid(struct dm_pool *mem, const char *uuid_prefix, const char *lvid, const char *layer);
 
 /*
  * Copies a string, quoting double quotes with backslashes.

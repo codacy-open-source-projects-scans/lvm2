@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_DEV_CACHE_H
-#define _LVM_DEV_CACHE_H
+#ifndef LVM_DEV_CACHE_H
+#define LVM_DEV_CACHE_H
 
 #include "lib/device/device.h"
 #include "lib/device/dev-type.h"
@@ -78,6 +78,7 @@ struct device *dev_cache_get_existing(struct cmd_context *cmd, const char *name,
 struct device *dev_cache_get_by_devt(struct cmd_context *cmd, dev_t devt);
 struct device *dev_cache_get_by_pvid(struct cmd_context *cmd, const char *pvid);
 void dev_cache_verify_aliases(struct device *dev);
+int dev_cache_add_alias(struct device *dev, const char *name);
 
 struct device *dev_cache_get_dev_by_name(const char *name);
 

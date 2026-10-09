@@ -75,6 +75,8 @@ static struct cmdline_context _cmdline;
 static const struct command_function _command_functions[CMD_COUNT] = {
 	{ CMD_NONE, NULL },
 	{ lvmconfig_general_CMD, lvmconfig },
+	{ lvmconfig_edit_CMD, editconfig_cmd },
+	{ lvmconfig_input_output_CMD, editconfig_cmd },
 	{ lvchange_properties_CMD, lvchange_properties_cmd },
 	{ lvchange_resync_CMD, lvchange_resync_cmd },
 	{ lvchange_syncaction_CMD, lvchange_syncaction_cmd },
@@ -107,6 +109,8 @@ static const struct command_function _command_functions[CMD_COUNT] = {
 	{ vgdisplay_columns_CMD,	vgdisplay_columns_cmd },
 	{ vgdisplay_colon_CMD,		vgdisplay_colon_cmd },
 	{ vgdisplay_general_CMD,	vgdisplay_general_cmd },
+	{ vgextend_restoremissing_CMD, vgextend_restoremissing },
+	{ vgextend_general_CMD, vgextend_general },
 
 	/* lvconvert utilities related to repair. */
 	{ lvconvert_repair_CMD,	lvconvert_repair_cmd },
@@ -1069,7 +1073,7 @@ int metadatacopies_arg(struct cmd_context *cmd, struct arg_values *av)
 	return 0;
 }
 
-int polloperation_arg(struct cmd_context *cmd, struct arg_values *av)
+int polloperation_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av)
 {
 	if (!strcmp(av->value, "pvmove") ||
 	    !strcmp(av->value, "convert") ||
@@ -1079,13 +1083,13 @@ int polloperation_arg(struct cmd_context *cmd, struct arg_values *av)
 	return 0;
 }
 
-int writemostly_arg(struct cmd_context *cmd, struct arg_values *av)
+int writemostly_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av)
 {
 	/* Could we verify that a PV arg looks like /dev/foo ? */
 	return 1;
 }
 
-int syncaction_arg(struct cmd_context *cmd, struct arg_values *av)
+int syncaction_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av)
 {
 	if (!strcmp(av->value, "check") ||
 	    !strcmp(av->value, "repair"))
@@ -1093,7 +1097,7 @@ int syncaction_arg(struct cmd_context *cmd, struct arg_values *av)
 	return 0;
 }
 
-int reportformat_arg(struct cmd_context *cmd, struct arg_values *av)
+int reportformat_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av)
 {
 	if (!strcmp(av->value, "basic") ||
 	    !strcmp(av->value, "json") ||
@@ -1102,7 +1106,7 @@ int reportformat_arg(struct cmd_context *cmd, struct arg_values *av)
 	return 0;
 }
 
-int configreport_arg(struct cmd_context *cmd, struct arg_values *av)
+int configreport_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av)
 {
 	if (!strcmp(av->value, "log") ||
 	    !strcmp(av->value, "vg") ||
@@ -1114,7 +1118,7 @@ int configreport_arg(struct cmd_context *cmd, struct arg_values *av)
 	return 0;
 }
 
-int configtype_arg(struct cmd_context *cmd, struct arg_values *av)
+int configtype_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av)
 {
 	if (!strcmp(av->value, "current") ||
 	    !strcmp(av->value, "default") ||
@@ -1130,7 +1134,7 @@ int configtype_arg(struct cmd_context *cmd, struct arg_values *av)
 	return 0;
 }
 
-int repairtype_arg(struct cmd_context *cmd, struct arg_values *av)
+int repairtype_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av)
 {
 	if (!strcmp(av->value, "pv_header") ||
 	    !strcmp(av->value, "metadata") ||
@@ -1139,7 +1143,7 @@ int repairtype_arg(struct cmd_context *cmd, struct arg_values *av)
 	return 0;
 }
 
-int dumptype_arg(struct cmd_context *cmd, struct arg_values *av)
+int dumptype_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av)
 {
 	if (!strcmp(av->value, "headers") ||
 	    !strcmp(av->value, "metadata") ||
@@ -1151,7 +1155,7 @@ int dumptype_arg(struct cmd_context *cmd, struct arg_values *av)
 	return 0;
 }
 
-int headings_arg(struct cmd_context *cmd, struct arg_values *av)
+int headings_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av)
 {
 	return report_headings_str_to_type(av->value) != REPORT_HEADINGS_UNKNOWN;
 }
@@ -1332,7 +1336,7 @@ static void _set_valid_args_for_command_name(int ci)
 	command_names_args[ci].num_args = num_args;
 }
 
-static command_fn _find_command_id_function(int command_enum)
+static command_fn _find_command_id_function(unsigned command_enum)
 {
 	unsigned i;
 
@@ -1689,10 +1693,11 @@ static struct command *_find_command(struct cmd_context *cmd, const char *path, 
 		/*
 		 * If the cmd def has an implied type, specified in AUTOTYPE,
 		 * then if the user command has --type, it must match.
+		 * Skip if type_arg matches neither autotype nor autotype2.
 		 */
-		if (type_arg && commands[i].autotype && strcmp(type_arg, commands[i].autotype))
-			continue;
-		if (type_arg && commands[i].autotype2 && strcmp(type_arg, commands[i].autotype2))
+		if (type_arg && commands[i].autotype &&
+		    strcmp(type_arg, commands[i].autotype) &&
+		    (!commands[i].autotype2 || strcmp(type_arg, commands[i].autotype2)))
 			continue;
 
 		/*
@@ -2148,7 +2153,7 @@ static void _add_getopt_arg(int opt_enum, char **optstrp, struct option **longop
 /*
  * getopt_long() has returned goval which indicates which option it's found.
  * We need to translate that goval to an enum value from the args array.
- * 
+ *
  * For options with both long and short forms, goval is the character value
  * of the short option.  For options with only a long form, goval is the
  * corresponding enum value plus 128.
@@ -2616,7 +2621,7 @@ static int _get_current_settings(struct cmd_context *cmd)
 	 * itself rather than having them printed in vg_read.
 	 */
 	cmd->vg_read_print_access_error = 1;
-		
+
 	if (arg_is_set(cmd, nosuffix_ARG))
 		cmd->current_settings.suffix = 0;
 
@@ -2775,14 +2780,14 @@ static const char *_copy_command_line(struct cmd_context *cmd, int argc, char **
 static int _prepare_profiles(struct cmd_context *cmd)
 {
 	static const char COMMAND_PROFILE_ENV_VAR_NAME[] = "LVM_COMMAND_PROFILE";
-	static const char _cmd_profile_arg_preferred_over_env_var_msg[] = "Giving "
-				"preference to command profile specified on command "
-				"line over the one specified via environment variable.";
-	static const char _failed_to_add_profile_msg[] = "Failed to add %s %s.";
-	static const char _failed_to_apply_profile_msg[] = "Failed to apply %s %s.";
-	static const char _command_profile_source_name[] = "command profile";
-	static const char _metadata_profile_source_name[] = "metadata profile";
-	static const char _setting_global_profile_msg[] = "Setting global %s \"%s\".";
+#define _CMD_PROFILE_ARG_PREFERRED_OVER_ENV_VAR_MSG "Giving " \
+				"preference to command profile specified on command " \
+				"line over the one specified via environment variable."
+#define _FAILED_TO_ADD_PROFILE_MSG "Failed to add %s %s."
+#define _FAILED_TO_APPLY_PROFILE_MSG "Failed to apply %s %s."
+#define _COMMAND_PROFILE_SOURCE_NAME "command profile"
+#define _METADATA_PROFILE_SOURCE_NAME "metadata profile"
+#define _SETTING_GLOBAL_PROFILE_MSG "Setting global %s \"%s\"."
 
 	const char *env_cmd_profile_name = NULL;
 	const char *name;
@@ -2829,7 +2834,7 @@ static int _prepare_profiles(struct cmd_context *cmd)
 				return 0;
 			}
 			source = CONFIG_PROFILE_METADATA;
-			source_name = _metadata_profile_source_name;
+			source_name = _METADATA_PROFILE_SOURCE_NAME;
 		}
 		else {
 			if (arg_is_set(cmd, commandprofile_ARG)) {
@@ -2843,32 +2848,32 @@ static int _prepare_profiles(struct cmd_context *cmd)
 			 * COMMAND_PROFILE_ENV_VAR_NAME env. var.
 			 */
 			if (env_cmd_profile_name) {
-				log_debug(_cmd_profile_arg_preferred_over_env_var_msg);
+				log_debug(_CMD_PROFILE_ARG_PREFERRED_OVER_ENV_VAR_MSG);
 				env_cmd_profile_name = NULL;
 			}
 			source = CONFIG_PROFILE_COMMAND;
-			source_name = _command_profile_source_name;
+			source_name = _COMMAND_PROFILE_SOURCE_NAME;
 		}
 
 		name = arg_str_value(cmd, profile_ARG, NULL);
 
 		if (!(profile = add_profile(cmd, name, source))) {
-			log_error(_failed_to_add_profile_msg, source_name, name);
+			log_error(_FAILED_TO_ADD_PROFILE_MSG, source_name, name);
 			return 0;
 		}
 
 		if (source == CONFIG_PROFILE_COMMAND) {
-			log_debug(_setting_global_profile_msg, _command_profile_source_name, profile->name);
+			log_debug(_SETTING_GLOBAL_PROFILE_MSG, _COMMAND_PROFILE_SOURCE_NAME, profile->name);
 			cmd->profile_params->global_command_profile = profile;
 		} else if (source == CONFIG_PROFILE_METADATA) {
-			log_debug(_setting_global_profile_msg, _metadata_profile_source_name, profile->name);
+			log_debug(_SETTING_GLOBAL_PROFILE_MSG, _METADATA_PROFILE_SOURCE_NAME, profile->name);
 			/* This profile will override any VG/LV-based profile if present */
 			cmd->profile_params->global_metadata_profile = profile;
 		}
 
 		remove_config_tree_by_source(cmd, source);
 		if (!override_config_tree_from_profile(cmd, profile)) {
-			log_error(_failed_to_apply_profile_msg, source_name, name);
+			log_error(_FAILED_TO_APPLY_PROFILE_MSG, source_name, name);
 			return 0;
 		}
 
@@ -2882,24 +2887,24 @@ static int _prepare_profiles(struct cmd_context *cmd)
 			 * COMMAND_PROFILE_ENV_VAR_NAME env. var.
 			 */
 			if (env_cmd_profile_name)
-				log_debug(_cmd_profile_arg_preferred_over_env_var_msg);
+				log_debug(_CMD_PROFILE_ARG_PREFERRED_OVER_ENV_VAR_MSG);
 			name = arg_str_value(cmd, commandprofile_ARG, NULL);
 		} else
 			name = env_cmd_profile_name;
-		source_name = _command_profile_source_name;
+		source_name = _COMMAND_PROFILE_SOURCE_NAME;
 
 		if (!(profile = add_profile(cmd, name, CONFIG_PROFILE_COMMAND))) {
-			log_error(_failed_to_add_profile_msg, source_name, name);
+			log_error(_FAILED_TO_ADD_PROFILE_MSG, source_name, name);
 			return 0;
 		}
 
 		remove_config_tree_by_source(cmd, CONFIG_PROFILE_COMMAND);
 		if (!override_config_tree_from_profile(cmd, profile)) {
-			log_error(_failed_to_apply_profile_msg, source_name, name);
+			log_error(_FAILED_TO_APPLY_PROFILE_MSG, source_name, name);
 			return 0;
 		}
 
-		log_debug(_setting_global_profile_msg, _command_profile_source_name, profile->name);
+		log_debug(_SETTING_GLOBAL_PROFILE_MSG, _COMMAND_PROFILE_SOURCE_NAME, profile->name);
 		cmd->profile_params->global_command_profile = profile;
 
 		if (!cmd->opt_arg_values)
@@ -2909,19 +2914,19 @@ static int _prepare_profiles(struct cmd_context *cmd)
 
 	if (arg_is_set(cmd, metadataprofile_ARG)) {
 		name = arg_str_value(cmd, metadataprofile_ARG, NULL);
-		source_name = _metadata_profile_source_name;
+		source_name = _METADATA_PROFILE_SOURCE_NAME;
 
 		if (!(profile = add_profile(cmd, name, CONFIG_PROFILE_METADATA))) {
-			log_error(_failed_to_add_profile_msg, source_name, name);
+			log_error(_FAILED_TO_ADD_PROFILE_MSG, source_name, name);
 			return 0;
 		}
 		remove_config_tree_by_source(cmd, CONFIG_PROFILE_METADATA);
 		if (!override_config_tree_from_profile(cmd, profile)) {
-			log_error(_failed_to_apply_profile_msg, source_name, name);
+			log_error(_FAILED_TO_APPLY_PROFILE_MSG, source_name, name);
 			return 0;
 		}
 
-		log_debug(_setting_global_profile_msg, _metadata_profile_source_name, profile->name);
+		log_debug(_SETTING_GLOBAL_PROFILE_MSG, _METADATA_PROFILE_SOURCE_NAME, profile->name);
 		cmd->profile_params->global_metadata_profile = profile;
 	}
 
@@ -2955,7 +2960,7 @@ static int _init_lvmlockd(struct cmd_context *cmd)
 		cmd->enable_hints = 0;
 
 	if (arg_is_set(cmd, lockopt_ARG)) {
-		lockd_lockopt_get_flags(arg_str_value(cmd, lockopt_ARG, ""), &cmd->lockopt);
+		lockd_lockopt_get_flags(arg_str_value(cmd, lockopt_ARG, ""), &cmd->lockopt, &cmd->lockopt_retries, &cmd->lockopt_removeretry);
 
 		if (use_lvmlockd) {
 			if (cmd->lockopt & LOCKOPT_SKIPLV)
@@ -3353,7 +3358,7 @@ int lvm_return_code(int ret)
 	return (ret == ECMD_PROCESSED ? 0 : ret);
 }
 
-int lvm_split(char *str, int *argc, char **argv, int max)
+int lvm_split(char *str, int *argc, char **argv, unsigned max)
 {
 	char *b = str, *e;
 	char quote = 0;
@@ -3381,11 +3386,11 @@ int lvm_split(char *str, int *argc, char **argv, int max)
 		*e++ = '\0';
 		quote = 0;
 		b = e;
-		if (*argc == max)
+		if ((unsigned)*argc == max)
 			break;
 	}
 
-	if (*argc < max)
+	if ((unsigned)*argc < max)
 		argv[*argc] = NULL;
 
 	return *argc;
@@ -3467,10 +3472,13 @@ struct cmd_context *init_lvm(unsigned set_connections,
 	 * It's not necessary to use name mangling for LVM:
 	 *   - the character set used for LV names is subset of udev character set
 	 *   - when we check other devices (e.g. device_is_usable fn), we use major:minor, not dm names
+	 *
+	 * Skip if already NONE (dmeventd pre-sets this before threads).
 	 */
-	dm_set_name_mangling_mode(DM_STRING_MANGLING_NONE);
+	if (dm_get_name_mangling_mode() != DM_STRING_MANGLING_NONE)
+		dm_set_name_mangling_mode(DM_STRING_MANGLING_NONE);
 
-	if (!(cmd = create_toolcontext(0, NULL, 1, threaded, set_connections, set_filters))) {
+	if (!(cmd = create_toolcontext(NULL, 1, threaded, set_connections, set_filters))) {
 		return_NULL;
 	}
 

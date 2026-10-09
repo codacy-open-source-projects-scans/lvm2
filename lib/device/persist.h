@@ -12,8 +12,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _PERSIST_H
-#define _PERSIST_H
+#ifndef PERSIST_H
+#define PERSIST_H
 
 #define PR_STR_WE   "WE"
 #define PR_STR_EA   "EA"
@@ -58,7 +58,7 @@ int persist_clear(struct cmd_context *cmd, struct volume_group *vg);
 
 int persist_start_extend(struct cmd_context *cmd, struct volume_group *vg);
 
-int persist_vgcreate_begin(struct cmd_context *cmd, char *vg_name, char *local_key, int local_host_id,
+int persist_vgcreate_begin(struct cmd_context *cmd, const char *vg_name, const char *local_key, int local_host_id,
 			   uint32_t set_flags, struct dm_list *devs);
 int persist_vgcreate_update(struct cmd_context *cmd, struct volume_group *vg, uint32_t set_flags);
 
@@ -78,16 +78,16 @@ void persist_key_file_rename(struct volume_group *vg, const char *old_name, cons
 int dev_read_reservation_nvme(struct cmd_context *cmd, struct device *dev, uint64_t *holder_ret, int *prtype_ret);
 
 int dev_find_key(struct cmd_context *cmd, struct device *dev, int may_fail,
-                 uint64_t find_key, int *found_key,
-                 int find_host_id, uint64_t *found_host_id_key,
-                 int find_all, int *found_count, uint64_t **found_all);
+		 uint64_t find_key, int *found_key,
+		 int find_host_id, uint64_t *found_host_id_key,
+		 int find_all, int *found_count, uint64_t **found_all);
 
 int dev_find_key_nvme(struct cmd_context *cmd, struct device *dev, int may_fail,
-                      uint64_t find_key, int *found_key,
-                      int find_host_id, uint64_t *found_host_id_key,
-                      int find_all, int *found_count, uint64_t **found_all);
+		      uint64_t find_key, int *found_key,
+		      int find_host_id, uint64_t *found_host_id_key,
+		      int find_all, int *found_count, uint64_t **found_all);
 
-int vg_is_registered(struct cmd_context *cmd, struct volume_group *vg, uint64_t *our_key_ret, int *partial_ret);
+int vg_is_registered(struct cmd_context *cmd, struct volume_group *vg, uint64_t *our_key_ret, int *partial_ret, uint32_t sanlock_gen);
 
 int setpersist_arg_flags(const char *str, uint32_t *flags);
 

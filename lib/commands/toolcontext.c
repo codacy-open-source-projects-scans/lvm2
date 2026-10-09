@@ -25,7 +25,6 @@
 #include "lib/label/hints.h"
 #include "lib/misc/lvm-file.h"
 #include "lib/format_text/format-text.h"
-#include "lib/display/display.h"
 #include "lib/mm/memlock.h"
 #include "lib/datastruct/str_list.h"
 #include "lib/metadata/segtype.h"
@@ -693,7 +692,8 @@ static int _process_config(struct cmd_context *cmd)
 		return 0;
 	}
 #ifdef DEVMAPPER_SUPPORT
-	dm_set_dev_dir(cmd->dev_dir);
+	if (!dm_set_dev_dir(cmd->dev_dir))
+		return_0;
 
 	if (!dm_set_uuid_prefix(UUID_PREFIX))
 		return_0;
@@ -816,8 +816,8 @@ static int _process_config(struct cmd_context *cmd)
 	}
 
 	if ((cn = find_config_tree_array(cmd, activation_mlock_filter_CFG, NULL)))
-		for (cv = cn->v; cv; cv = cv->next) 
-			if ((cv->type != DM_CFG_STRING) || !cv->v.str[0]) 
+		for (cv = cn->v; cv; cv = cv->next)
+			if ((cv->type != DM_CFG_STRING) || !cv->v.str[0])
 				log_error("Ignoring invalid activation/mlock_filter entry in config file");
 
 	cmd->metadata_read_only = find_config_tree_bool(cmd, global_metadata_read_only_CFG, NULL);
@@ -851,14 +851,14 @@ static int _process_config(struct cmd_context *cmd)
 	return 1;
 }
 
-static int _set_tag(struct cmd_context *cmd, const char *tag)
+static int _set_tag(struct cmd_context *cmd, struct dm_pool *mem, const char *tag)
 {
 	char *t;
 
 	log_very_verbose("Setting host tag: %s.", tag);
 
-	if (!(t = dm_pool_strdup(cmd->mem, tag)) ||
-	    !str_list_add(cmd->mem, &cmd->tags, t)) {
+	if (!(t = dm_pool_strdup(mem, tag)) ||
+	    !str_list_add(mem, &cmd->tags, t)) {
 		log_error("_set_tag: str_list_add %s failed.", tag);
 		return 0;
 	}
@@ -907,6 +907,13 @@ static int _init_tags(struct cmd_context *cmd, struct dm_config_tree *cft)
 	const struct dm_config_node *tn, *cn;
 	const char *tag;
 	int passes;
+	/*
+	 * Tag strings and their list nodes are allocated from the config
+	 * tree's own memory pool so they are released together with the tree
+	 * by config_destroy() in _destroy_config().  This gives host tags a
+	 * config lifetime without leaking on refresh_toolcontext() cycles.
+	 */
+	struct dm_pool *mem = dm_config_memory(cft);
 
 	/* Access tags section directly */
 	if (!(tn = find_config_node(cmd, cft, tags_CFG_SECTION)) || !tn->child)
@@ -915,7 +922,7 @@ static int _init_tags(struct cmd_context *cmd, struct dm_config_tree *cft)
 	/* NB hosttags 0 when already 1 intentionally does not delete the tag */
 	if (!cmd->hosttags && find_config_bool(cmd, cft, tags_hosttags_CFG)) {
 		/* FIXME Strip out invalid chars: only A-Za-z0-9_+.- */
-		if (!_set_tag(cmd, cmd->hostname))
+		if (!_set_tag(cmd, mem, cmd->hostname))
 			return_0;
 		cmd->hosttags = 1;
 	}
@@ -937,7 +944,7 @@ static int _init_tags(struct cmd_context *cmd, struct dm_config_tree *cft)
 			if (!passes)
 				continue;
 		}
-		if (!_set_tag(cmd, tag))
+		if (!_set_tag(cmd, mem, tag))
 			return_0;
 	}
 
@@ -949,6 +956,7 @@ static int _load_config_file(struct cmd_context *cmd, const char *tag, int local
 	static char config_file[PATH_MAX] = "";
 	const char *filler = "";
 	struct config_tree_list *cfl;
+	struct dm_config_tree *cft;
 
 	if (*tag)
 		filler = "_";
@@ -963,14 +971,22 @@ static int _load_config_file(struct cmd_context *cmd, const char *tag, int local
 		return 0;
 	}
 
-	if (!(cfl = dm_pool_alloc(cmd->libmem, sizeof(*cfl)))) {
+	if (!(cft = config_file_open_and_read(config_file, CONFIG_FILE, cmd)))
+		return_0;
+
+	/*
+	 * Allocate the tracking node from the config tree's own memory pool
+	 * rather than cmd->libmem.  The node is then released together with
+	 * its tree by config_destroy() in _destroy_config(), so repeated
+	 * refresh_toolcontext() cycles do not leak it into libmem.
+	 */
+	if (!(cfl = dm_pool_alloc(dm_config_memory(cft), sizeof(*cfl)))) {
 		log_error("config_tree_list allocation failed");
+		config_destroy(cft);
 		return 0;
 	}
 
-	if (!(cfl->cft = config_file_open_and_read(config_file, CONFIG_FILE, cmd)))
-		return_0;
-
+	cfl->cft = cft;
 	dm_list_add(&cmd->config_files, &cfl->list);
 
 	if (*tag) {
@@ -1085,7 +1101,7 @@ int config_files_changed(struct cmd_context *cmd)
 
 static void _destroy_config(struct cmd_context *cmd)
 {
-	struct config_tree_list *cfl;
+	struct config_tree_list *cfl, *tmp_cfl;
 	struct dm_config_tree *cft;
 	struct profile *profile, *tmp_profile;
 
@@ -1105,7 +1121,8 @@ static void _destroy_config(struct cmd_context *cmd)
 		config_destroy(cft);
 	}
 
-	dm_list_iterate_items(cfl, &cmd->config_files)
+	/* config_destroy() frees cfl itself (allocated from cfl->cft's pool). */
+	dm_list_iterate_items_safe(cfl, tmp_cfl, &cmd->config_files)
 		config_destroy(cfl->cft);
 	dm_list_init(&cmd->config_files);
 
@@ -1311,7 +1328,7 @@ bad:
 }
 
 /*
- *   cmd->filter == 
+ *   cmd->filter ==
  *     persistent(cache) filter -> sysfs filter -> internal filter -> global regex filter ->
  *     regex_filter -> type filter -> usable device filter ->
  *     mpath component filter -> partitioned filter -> md component filter -> fw raid filter
@@ -1452,24 +1469,24 @@ static int _init_segtypes(struct cmd_context *cmd)
 
 	for (i = 0; init_segtype_array[i]; i++) {
 		if (!(segtype = init_segtype_array[i](cmd)))
-			return 0;
+			return_0;
 		segtype->library = NULL;
 		dm_list_add(&cmd->segtypes, &segtype->list);
 	}
 
 #ifdef RAID_INTERNAL
 	if (!init_raid_segtypes(cmd, &seglib))
-		return 0;
+		return_0;
 #endif
 
 #ifdef THIN_INTERNAL
 	if (!init_thin_segtypes(cmd, &seglib))
-		return 0;
+		return_0;
 #endif
 
 #ifdef CACHE_INTERNAL
 	if (!init_cache_segtypes(cmd, &seglib))
-		return 0;
+		return_0;
 #endif
 
 #ifdef VDO_INTERNAL
@@ -1479,12 +1496,12 @@ static int _init_segtypes(struct cmd_context *cmd)
 
 #ifdef WRITECACHE_INTERNAL
 	if (!init_writecache_segtypes(cmd, &seglib))
-		return 0;
+		return_0;
 #endif
 
 #ifdef INTEGRITY_INTERNAL
 	if (!init_integrity_segtypes(cmd, &seglib))
-		return 0;
+		return_0;
 #endif
 
 	return 1;
@@ -1625,8 +1642,7 @@ void destroy_config_context(struct cmd_context *cmd)
 }
 
 /* Entry point */
-struct cmd_context *create_toolcontext(unsigned is_clvmd,
-				       const char *system_dir,
+struct cmd_context *create_toolcontext(const char *system_dir,
 				       unsigned set_buffering,
 				       unsigned threaded,
 				       unsigned set_connections,
@@ -1649,14 +1665,13 @@ struct cmd_context *create_toolcontext(unsigned is_clvmd,
 		log_error("Failed to allocate command context");
 		return NULL;
 	}
-	cmd->is_long_lived = is_clvmd;
-	cmd->is_clvmd = is_clvmd;
 	cmd->threaded = threaded ? 1 : 0;
 	cmd->handles_missing_pvs = 0;
 	cmd->handles_unknown_segments = 0;
 	cmd->hosttags = 0;
 	cmd->check_devs_used = 1;
 	cmd->running_on_valgrind = RUNNING_ON_VALGRIND;
+	cmd->lockopt_retries = -1;
 
 	dm_list_init(&cmd->arg_value_groups);
 	dm_list_init(&cmd->formats);

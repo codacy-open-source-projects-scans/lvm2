@@ -12,15 +12,15 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_DAEMON_SERVER_H
-#define _LVM_DAEMON_SERVER_H
+#ifndef LVM_DAEMON_SERVER_H
+#define LVM_DAEMON_SERVER_H
 
 #include "libdaemon/client/daemon-client.h"
+#include "daemon-log.h"
 
 typedef struct {
 	int socket_fd; /* the fd we use to talk to the client */
 	pthread_t thread_id;
-	char *read_buf;
 	void *private; /* this holds per-client state */
 } client_handle;
 
@@ -80,8 +80,8 @@ static inline const char *daemon_request_str(request r, const char *path, const 
 typedef response (*handle_request)(struct daemon_state s, client_handle h, request r);
 
 typedef struct {
-	uint32_t log_config[32];
-	void *backend_state[32];
+	uint32_t log_config[DAEMON_LOG_TYPE_COUNT];
+	void *backend_state[DAEMON_LOG_TYPE_COUNT];
 	const char *name;
 } log_state;
 

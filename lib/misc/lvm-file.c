@@ -66,6 +66,8 @@ int create_temp_name(const char *dir, char *buffer, size_t len, int *fd,
 		if (!fcntl(*fd, F_SETLK, &lock))
 			return 1;
 
+		if (unlink(buffer) && errno != ENOENT)
+			log_sys_debug("unlink", buffer);
 		if (close(*fd))
 			log_sys_error("close", buffer);
 	}
@@ -197,19 +199,20 @@ void sync_dir(const char *file)
 	int fd;
 	char *dir, *c;
 
+	if (!file || !*file)
+		return;
+
 	if (!(dir = strdup(file))) {
 		log_error("sync_dir failed in strdup");
 		return;
 	}
 
 	if (!dir_exists(dir)) {
-		c = dir + strlen(dir);
-		while (*c != '/' && c > dir)
-			c--;
-
-		if (c == dir)
-			*c++ = '.';
-
+		if (!(c = strrchr(dir, '/'))) {
+			dir[0] = '.';   /* bare filename: overwrite with '.' */
+			c = dir + 1;
+		} else if (c == dir)
+			c++;            /* file in root: advance past '/', keep "/" */
 		*c = '\0';
 	}
 
@@ -313,4 +316,90 @@ void lvm_stat_ctim(struct timespec *ctim, const struct stat *buf)
 	ctim->tv_sec = buf->st_ctime;
 	ctim->tv_nsec = 0;
 #endif
+}
+
+#define SECS_PER_DAY 86400
+
+#ifndef HAVE_VERSIONSORT
+#define versionsort alphasort
+#endif
+
+void backup_dir_cleanup(const char *dir, const char *prefix,
+			unsigned int keep_min, unsigned int keep_days)
+{
+	struct dirent **namelist = NULL;
+	struct stat sb;
+	time_t retain_time = 0;
+	char path[PATH_MAX];
+	size_t prefix_len = strlen(prefix);
+	int total, count, i, j;
+	int dir_fd = -1;
+	unsigned int remove_count;
+	DIR *dp;
+
+	total = scandir(dir, &namelist, NULL, versionsort);
+	if (total < 0) {
+		log_sys_debug("scandir", dir);
+		return;
+	}
+
+	/* Filter out non-matching entries in place */
+	for (i = 0, count = 0; i < total; i++) {
+		if (namelist[i]->d_name[0] == '.' ||
+		    strncmp(namelist[i]->d_name, prefix, prefix_len)) {
+			free(namelist[i]);
+			namelist[i] = NULL;
+		} else {
+			count++;
+		}
+	}
+
+	/* Compact the array so matching entries are contiguous */
+	for (i = 0, j = 0; i < total; i++) {
+		if (namelist[i])
+			namelist[j++] = namelist[i];
+	}
+
+	if ((unsigned int)count <= keep_min)
+		goto out;
+
+	remove_count = (unsigned int)count - keep_min;
+
+	if (keep_days)
+		retain_time = time(NULL) - (time_t)keep_days * SECS_PER_DAY;
+
+	if (!(dp = opendir(dir))) {
+		log_sys_debug("opendir", dir);
+		goto out;
+	}
+	if ((dir_fd = dirfd(dp)) < 0) {
+		log_sys_debug("dirfd", dir);
+		closedir(dp);
+		goto out;
+	}
+
+	/* namelist is sorted oldest-first; remove from the beginning */
+	for (i = 0; i < count && remove_count; i++) {
+		if (keep_days) {
+			if (dm_snprintf(path, sizeof(path), "%s/%s", dir, namelist[i]->d_name) < 0)
+				continue;
+			if (stat(path, &sb)) {
+				log_sys_debug("stat", path);
+				continue;
+			}
+			if (sb.st_mtime > retain_time)
+				continue;
+		}
+
+		log_debug("Remove backup %s", namelist[i]->d_name);
+		if (unlinkat(dir_fd, namelist[i]->d_name, 0) < 0 && errno != ENOENT)
+			log_sys_debug("unlinkat", namelist[i]->d_name);
+		remove_count--;
+	}
+
+	closedir(dp);
+out:
+	for (i = 0; i < count; i++)
+		free(namelist[i]);
+	free(namelist);
 }

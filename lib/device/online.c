@@ -32,20 +32,20 @@ static int _copy_pvid_file_field(const char *field, char *buf, int bufsize, char
 {
 	char *p;
 	int i = 0;
-	
+
 	if (!(p = strstr(buf, field)))
 		return 0;
 
 	p += strlen(field);
 
 	while (1) {
+		if (p >= (buf + bufsize))
+			return 0;
+
 		if (*p == '\n')
 			break;
 		if (*p == '\0')
 			break;
-
-		if (p >= (buf + bufsize))
-			return 0;
 		if (i >= outsize-1)
 			return 0;
 
@@ -60,7 +60,7 @@ static int _copy_pvid_file_field(const char *field, char *buf, int bufsize, char
 
 #define MAX_PVID_FILE_SIZE 512
 
-int online_pvid_file_read(char *path, unsigned *major, unsigned *minor, char *vgname, char *devname)
+int online_pvid_file_read(const char *path, unsigned *major, unsigned *minor, char *vgname, char *devname)
 {
 	char buf[MAX_PVID_FILE_SIZE] = { 0 };
 	ssize_t rv;
@@ -187,7 +187,7 @@ int get_pvs_online(struct dm_list *pvs_online, const char *vgname)
 		if (file_devname[0])
 			dm_strncpy(po->devname, file_devname, sizeof(po->devname));
 
-		log_debug("Found PV online %s for VG %s %s", path, vgname, file_devname);
+		log_debug("Found PV online %s for VG %s %s", path, vgname ?: "", file_devname);
 		dm_list_add(pvs_online, &po->list);
 	}
 
@@ -232,7 +232,7 @@ int online_vg_file_create(struct cmd_context *cmd, const char *vgname)
 
 	log_debug("Create vg online: %s", path);
 
-	fd = open(path, O_CREAT | O_EXCL | O_TRUNC | O_RDWR, S_IRUSR | S_IWUSR);
+	fd = open(path, O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR);
 	if (fd < 0) {
 		log_debug("Failed to create %s: %d", path, errno);
 		return 0;
@@ -352,9 +352,8 @@ check_duplicate:
 
 	/* Don't know how vgname might not match, but it's not good so fail. */
 
-	if ((file_major != major) || (file_minor != minor))
-		log_error_pvscan(cmd, "PV %s %u:%u is duplicate for PVID %s on %u:%u %s.",
-			         dev_name(dev), major, minor, dev->pvid, file_major, file_minor, file_devname);
+	log_error_pvscan(cmd, "PV %s %u:%u is duplicate for PVID %s on %u:%u %s.",
+		         dev_name(dev), major, minor, dev->pvid, file_major, file_minor, file_devname);
 
 	if (file_vgname[0] && vgname && strcmp(file_vgname, vgname))
 		log_error_pvscan(cmd, "PV %s has unexpected VG %s vs %s.",

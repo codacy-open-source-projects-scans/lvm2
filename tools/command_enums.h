@@ -12,8 +12,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_COMMAND_ENUMS_H
-#define _LVM_COMMAND_ENUMS_H
+#ifndef LVM_COMMAND_ENUMS_H
+#define LVM_COMMAND_ENUMS_H
 
 /*
  * cmd_enum.h uses the generated cmds.h to create the enum with an ID
@@ -59,14 +59,14 @@ enum {
 #define xx(a, b...) a ## _COMMAND,
 #include "commands.h"
 #undef xx
-        LVM_COMMAND_COUNT
+	LVM_COMMAND_COUNT
 };
 
 #define PERMITTED_READ_ONLY 	0x00000002
 /* Process all VGs if none specified on the command line. */
 #define ALL_VGS_IS_DEFAULT	0x00000004
 /* Process all devices with --all if none are specified on the command line. */
-#define ENABLE_ALL_DEVS		0x00000008	
+#define ENABLE_ALL_DEVS		0x00000008
 /* Command may try to interpret a vgname arg as a uuid. */
 #define ALLOW_UUID_AS_NAME	0x00000010
 /* Command needs a shared lock on a VG; it only reads the VG. */
@@ -91,9 +91,9 @@ enum {
 #define CHECK_DEVS_USED		 0x00010000
 /* Command prints devices file entries that were not found. */
 #define DEVICE_ID_NOT_FOUND      0x00020000
-/* Command prints devices file entries that were not found. */
+/* Command accepts --extents as alternative to --size. */
 #define ALTERNATIVE_EXTENTS	 0x00040000
 
 #include "command-count.h" /* defines COMMAND_COUNT */
 
-#endif /* _LVM_COMMAND_ENUMS_H */
+#endif /* LVM_COMMAND_ENUMS_H */

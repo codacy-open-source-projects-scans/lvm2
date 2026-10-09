@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2015 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_TOOLS_H
-#define _LVM_TOOLS_H
+#ifndef LVM_TOOLS_H
+#define LVM_TOOLS_H
 
 #include "tools/errors.h"
 #include "tools/tool.h"
@@ -75,7 +75,7 @@ struct arg_values {
 };
 
 struct arg_value_group_list {
-        struct dm_list list;
+	struct dm_list list;
 	uint16_t prio;
 	struct arg_values arg_values[];
 };
@@ -115,18 +115,18 @@ int alloc_arg(struct cmd_context *cmd, struct arg_values *av);
 int locktype_arg(struct cmd_context *cmd, struct arg_values *av);
 int readahead_arg(struct cmd_context *cmd, struct arg_values *av);
 int regionsize_mb_arg(struct cmd_context *cmd, struct arg_values *av);
-int vgmetadatacopies_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av);
-int pvmetadatacopies_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av);
-int metadatacopies_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av);
-int polloperation_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av);
-int writemostly_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av);
-int syncaction_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av);
-int reportformat_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av);
-int configreport_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av);
-int configtype_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av);
-int repairtype_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av);
-int dumptype_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av);
-int headings_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av);
+int vgmetadatacopies_arg(struct cmd_context *cmd, struct arg_values *av);
+int pvmetadatacopies_arg(struct cmd_context *cmd, struct arg_values *av);
+int metadatacopies_arg(struct cmd_context *cmd, struct arg_values *av);
+int polloperation_arg(struct cmd_context *cmd, struct arg_values *av);
+int writemostly_arg(struct cmd_context *cmd, struct arg_values *av);
+int syncaction_arg(struct cmd_context *cmd, struct arg_values *av);
+int reportformat_arg(struct cmd_context *cmd, struct arg_values *av);
+int configreport_arg(struct cmd_context *cmd, struct arg_values *av);
+int configtype_arg(struct cmd_context *cmd, struct arg_values *av);
+int repairtype_arg(struct cmd_context *cmd, struct arg_values *av);
+int dumptype_arg(struct cmd_context *cmd, struct arg_values *av);
+int headings_arg(struct cmd_context *cmd, struct arg_values *av);
 
 /* we use the enums to access the switches */
 int arg_is_valid_for_command(const struct cmd_context *cmd, int a);
@@ -153,7 +153,7 @@ force_t arg_force_value(const struct cmd_context *cmd);
 unsigned grouped_arg_count(const struct arg_values *av, int a);
 unsigned grouped_arg_is_set(const struct arg_values *av, int a);
 const char *grouped_arg_str_value(const struct arg_values *av, int a, const char *def);
-int32_t grouped_arg_int_value(const struct arg_values *av, int a, const int32_t def); 
+int32_t grouped_arg_int_value(const struct arg_values *av, int a, const int32_t def);
 
 const char *command_name(struct cmd_context *cmd);
 
@@ -200,6 +200,8 @@ int pvdisplay_cmd(struct cmd_context *cmd, int argc, char **argv);
 int vgdisplay_columns_cmd(struct cmd_context *cmd, int argc, char **argv);
 int vgdisplay_colon_cmd(struct cmd_context *cmd, int argc, char **argv);
 int vgdisplay_general_cmd(struct cmd_context *cmd, int argc, char **argv);
+int vgextend_restoremissing(struct cmd_context *cmd, int argc, char **argv);
+int vgextend_general(struct cmd_context *cmd, int argc, char **argv);
 
 int lvconvert_repair_cmd(struct cmd_context *cmd, int argc, char **argv);
 int lvconvert_replace_pv_cmd(struct cmd_context *cmd, int argc, char **argv);
@@ -221,11 +223,11 @@ int lvconvert_to_pool_or_swap_metadata_cmd(struct cmd_context *cmd, int argc, ch
 int lvconvert_merge_thin_cmd(struct cmd_context *cmd, int argc, char **argv);
 int lvconvert_split_cache_cmd(struct cmd_context *cmd, int argc, char **argv);
 
-int lvconvert_raid_types_cmd(struct cmd_context * cmd, int argc, char **argv);
-int lvconvert_split_mirror_images_cmd(struct cmd_context * cmd, int argc, char **argv);
+int lvconvert_raid_types_cmd(struct cmd_context *cmd, int argc, char **argv);
+int lvconvert_split_mirror_images_cmd(struct cmd_context *cmd, int argc, char **argv);
 int lvconvert_merge_mirror_images_cmd(struct cmd_context *cmd, int argc, char **argv);
-int lvconvert_change_mirrorlog_cmd(struct cmd_context * cmd, int argc, char **argv);
-int lvconvert_change_region_size_cmd(struct cmd_context * cmd, int argc, char **argv);
+int lvconvert_change_mirrorlog_cmd(struct cmd_context *cmd, int argc, char **argv);
+int lvconvert_change_region_size_cmd(struct cmd_context *cmd, int argc, char **argv);
 
 int lvconvert_merge_cmd(struct cmd_context *cmd, int argc, char **argv);
 
@@ -242,13 +244,15 @@ int pvscan_cache_cmd(struct cmd_context *cmd, int argc, char **argv);
 
 
 int lvconvert_writecache_attach_single(struct cmd_context *cmd,
-                                        struct logical_volume *lv,
-                                        struct processing_handle *handle);
+				       struct logical_volume *lv,
+				       struct processing_handle *handle);
 int lvconvert_cachevol_attach_single(struct cmd_context *cmd,
-                                     struct logical_volume *lv,
-                                     struct processing_handle *handle);
+				     struct logical_volume *lv,
+				     struct processing_handle *handle);
 
 int lvresize_cmd(struct cmd_context *cmd, int argc, char **argv);
 int lvextend_policy_cmd(struct cmd_context *cmd, int argc, char **argv);
+
+int editconfig_cmd(struct cmd_context *cmd, int argc, char **argv);
 
 #endif

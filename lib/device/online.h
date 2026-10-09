@@ -12,8 +12,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _ONLINE_H
-#define _ONLINE_H
+#ifndef ONLINE_H
+#define ONLINE_H
 
 #include "lib/commands/toolcontext.h"
 #include "lib/device/device.h"
@@ -33,22 +33,22 @@ struct pv_online {
  * if (log_journal & LOG_JOURNAL_OUTPUT)
  */
 #define log_print_pvscan(cmd, fmt, args...) \
-do \
+do { \
 	if (cmd->udevoutput) \
 		log_print_unless_silent(fmt, ##args); \
 	else \
 		log_print_unless_silent("pvscan[%d] " fmt, getpid(), ##args); \
-while (0)
+} while (0)
 
 #define log_error_pvscan(cmd, fmt, args...) \
-do \
+do { \
 	if (cmd->udevoutput) \
 		log_error(fmt, ##args); \
 	else \
 		log_error("pvscan[%d] " fmt, getpid(), ##args); \
-while (0)
+} while (0)
 
-int online_pvid_file_read(char *path, unsigned *major, unsigned *minor, char *vgname, char *devname);
+int online_pvid_file_read(const char *path, unsigned *major, unsigned *minor, char *vgname, char *devname);
 int online_vg_file_create(struct cmd_context *cmd, const char *vgname);
 void online_vg_file_remove(const char *vgname);
 int online_pvid_file_create(struct cmd_context *cmd, struct device *dev, const char *vgname);

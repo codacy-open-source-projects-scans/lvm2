@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_PV_MAP_H
-#define _LVM_PV_MAP_H
+#ifndef LVM_PV_MAP_H
+#define LVM_PV_MAP_H
 
 #include "lib/metadata/metadata.h"
 
@@ -53,8 +53,8 @@ struct pv_area_used {
 
 struct pv_map {
 	struct physical_volume *pv;
-	struct dm_list areas;		/* struct pv_areas */
-	uint32_t pe_count;		/* Total number of PEs */
+	struct dm_list areas;		/* struct pv_area */
+	uint32_t pe_count;		/* Total free PEs across active areas */
 
 	struct dm_list list;
 };
@@ -68,6 +68,6 @@ struct dm_list *create_pv_maps(struct dm_pool *mem, struct volume_group *vg,
 void consume_pv_area(struct pv_area *pva, uint32_t to_go);
 void reinsert_changed_pv_area(struct pv_area *pva);
 
-uint32_t pv_maps_size(struct dm_list *pvms);
+uint32_t pv_maps_size(const struct dm_list *pvms);
 
 #endif

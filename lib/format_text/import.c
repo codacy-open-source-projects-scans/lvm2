@@ -144,7 +144,7 @@ struct volume_group *text_read_metadata(struct format_instance *fid,
 		return_NULL;
 
 	/* Does the metadata match the already-cached VG? */
-	skip_parse = vg_fmtdata && 
+	skip_parse = vg_fmtdata &&
 		     ((*vg_fmtdata)->cached_mda_checksum == checksum) &&
 		     ((*vg_fmtdata)->cached_mda_size == (size + size2));
 
@@ -184,7 +184,8 @@ struct volume_group *text_read_metadata(struct format_instance *fid,
 		if (!(vg = (*vsn)->read_vg(fid->fmt->cmd, fid->fmt, fid, cft)))
 			goto_out;
 
-		(*vsn)->read_desc(vg->vgmem, cft, when, desc);
+		if (!(*vsn)->read_desc(vg->vgmem, cft, when, desc))
+			goto_out;
 		vg->committed_cft = cft; /* Reuse CFT for recreation of committed VG */
 		vg->buffer_size_hint = size + size2;
 		cft = NULL;

@@ -83,7 +83,7 @@ static void _exit_handler(int sig)
 
 static int _is_idle(daemon_state s)
 {
-	return s.idle && s.idle->is_idle && !s.threads->next;
+	return s.idle && s.idle->is_idle && s.threads && !s.threads->next;
 }
 
 static struct timespec *_get_timeout(daemon_state s)
@@ -93,7 +93,7 @@ static struct timespec *_get_timeout(daemon_state s)
 
 static void _reset_timeout(daemon_state s)
 {
-	if (s.idle) {
+	if (s.idle && s.idle->ptimeout) {
 		s.idle->ptimeout->tv_sec = 1;
 		s.idle->ptimeout->tv_nsec = 0;
 	}
@@ -334,7 +334,9 @@ static void _daemonize(daemon_state s)
 	sigset_t my_sigset;
 	struct custom_fds custom_fds = {
 		/* Do not close fds preloaded by systemd! */
-		.out = (_systemd_activation) ? SD_FD_SOCKET_SERVER : -1
+		.out = (_systemd_activation) ? SD_FD_SOCKET_SERVER : -1,
+		.err = -1,
+		.report = -1,
 	};
 
 	if ((fd = open("/dev/null", O_RDWR)) == -1) {
@@ -388,6 +390,9 @@ static void _daemonize(daemon_state s)
 		exit(1);
 	}
 
+	/* Suppress false positive FD leak warnings from gcc -fanalyzer. */
+	GCC_SUPPRESS_FD_WARNINGS
+
 	if (((fd != STDIN_FILENO) && (dup2(fd, STDIN_FILENO) == -1)) ||
 	    ((fd != STDOUT_FILENO) && (dup2(fd, STDOUT_FILENO) == -1)) ||
 	    ((fd != STDERR_FILENO) && (dup2(fd, STDERR_FILENO) == -1))) {
@@ -409,6 +414,7 @@ static void _daemonize(daemon_state s)
 
 	/* coverity[leaked_handle] 'fd' is stdin/stdout/stderr */
 }
+GCC_UNSUPPRESS_WARNINGS
 
 response daemon_reply_simple(const char *id, ...)
 {
@@ -462,10 +468,12 @@ static void *_client_thread(void *state)
 
 		req.cft = config_tree_from_string_without_dup_node_check(req.buffer.mem);
 
-		if (!req.cft)
+		if (!req.cft) {
 			fprintf(stderr, "error parsing request:\n %s\n", req.buffer.mem);
-		else
-			daemon_log_cft(ts->s.log, DAEMON_LOG_WIRE, "<- ", req.cft->root);
+			goto fail;
+		}
+
+		daemon_log_cft(ts->s.log, DAEMON_LOG_WIRE, "<- ", req.cft->root);
 
 		res = _builtin_handler(ts->s, ts->client, req);
 
@@ -488,7 +496,10 @@ static void *_client_thread(void *state)
 		}
 
 		daemon_log_multi(ts->s.log, DAEMON_LOG_WIRE, "-> ", res.buffer.mem);
-		buffer_write(ts->client.socket_fd, &res.buffer);
+		if (!buffer_write(ts->client.socket_fd, &res.buffer)) {
+			buffer_destroy(&res.buffer);
+			goto fail;
+		}
 
 		buffer_destroy(&res.buffer);
 	}
@@ -549,15 +560,22 @@ bad:
 	return 0;
 }
 
-static void _reap(daemon_state s, int waiting)
+/*
+ * Drop client thread state from the daemon list.
+ * shutting_down == 0: remove only threads that finished their request.
+ * shutting_down != 0: remove every thread (daemon is exiting).
+ */
+static void _reap(daemon_state s, int shutting_down)
 {
 	thread_state *last = s.threads, *ts = last->next;
 	void *rv;
 
 	while (ts) {
-		if (waiting || !ts->active) {
+		if (shutting_down || !ts->active) {
 			if (ts->client.thread_id) {
-				if ((errno = pthread_kill(ts->client.thread_id, SIGTERM)) &&
+				/* SIGTERM runs _exit_handler: kick threads only when shutting down. */
+				if (shutting_down &&
+				    (errno = pthread_kill(ts->client.thread_id, SIGTERM)) &&
 				    (errno != ESRCH))
 					ERROR(&s, "pthread_kill failed for thread %ld.",
 					      (long)ts->client.thread_id);

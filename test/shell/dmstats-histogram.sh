@@ -26,3 +26,8 @@ dmstats create --bounds "$HIST_BOUNDS" "$dev1"
 dmstats list -ostats_name,hist_bounds |& tee out
 grep "$HIST_BOUNDS" out
 
+# Grouping regions whose histogram bounds differ must be refused.
+dmstats create --bounds "10ms,20ms" --start 2048 "$dev1"
+not dmstats group --alias mismatched --regions 0,1 "$dev1" 2>&1 | tee out
+grep "must match" out
+

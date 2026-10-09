@@ -20,6 +20,7 @@
 #include "libdm/misc/dm-ioctl.h"
 
 #include <stdarg.h>
+#include <pthread.h>
 #include <sys/param.h>
 #include <sys/ioctl.h>
 #include <fcntl.h>
@@ -29,7 +30,6 @@
 #  include <sys/types.h>
 #  include <sys/ipc.h>
 #  include <sys/sem.h>
-#  include <libudev.h>
 #endif
 
 #ifdef __linux__
@@ -47,6 +47,9 @@
 
 #define DEV_DIR "/dev/"
 
+#define UDEV_CONTROL_PATH "/run/udev/control"
+#define UDEV_LEGACY_QUEUE_PATH "/dev/.udev/queue.bin"
+
 #ifdef UDEV_SYNC_SUPPORT
 #ifdef _SEM_SEMUN_UNDEFINED
 union semun
@@ -61,7 +64,6 @@ union semun
 
 static char _dm_dir[PATH_MAX] = DEV_DIR DM_DIR;
 static char _sysfs_dir[PATH_MAX] = "/sys/";
-static char _path0[PATH_MAX];           /* path buffer, safe 4kB on stack */
 static const char _mountinfo[] = "/proc/self/mountinfo";
 
 #define DM_MAX_UUID_PREFIX_LEN	15
@@ -73,20 +75,49 @@ static dm_string_mangling_t _name_mangling_mode = DEFAULT_DM_NAME_MANGLING;
 
 #ifdef HAVE_SELINUX_LABEL_H
 static struct selabel_handle *_selabel_handle = NULL;
+static pthread_once_t _selabel_once = PTHREAD_ONCE_INIT;
+
+static void _init_selabel_handle(void)
+{
+	_selabel_handle = selabel_open(SELABEL_CTX_FILE, NULL, 0);
+}
+
+static struct selabel_handle *_get_selabel_handle(void)
+{
+	pthread_once(&_selabel_once, _init_selabel_handle);
+
+	return _selabel_handle;
+}
 #endif
 
+/* Set once in dm_lib_init(), immutable after -- safe for concurrent reads */
 static int _udev_disabled = 0;
 
+/* Thread that called dm_lib_init() -- only this thread may call set-once setters */
+static pthread_t _init_tid;
+
+static int _is_init_thread(const char *action)
+{
+	if (pthread_equal(pthread_self(), _init_tid))
+		return 1;
+
+	log_warn("WARNING: Only main thread can %s.", action);
+
+	return 0;
+}
+
 #ifdef UDEV_SYNC_SUPPORT
-static int _semaphore_supported = -1;
-static int _udev_running = -1;
-static int _sync_with_udev = 1;
-static int _udev_checking = 1;
+static int _semaphore_supported = 0;
+static int _udev_running = 0;
 #endif
 
-void dm_lib_init(void)
+static pthread_once_t _lib_init_once = PTHREAD_ONCE_INIT;
+
+static void _do_lib_init(void)
 {
 	const char *env;
+
+	_init_tid = pthread_self();
 
 	if (getenv("DM_DISABLE_UDEV"))
 		_udev_disabled = 1;
@@ -102,19 +133,43 @@ void dm_lib_init(void)
 	}
 }
 
+void dm_lib_init(void)
+{
+	pthread_once(&_lib_init_once, _do_lib_init);
+}
+
+static void _dm_lib_init(void) __attribute__((constructor));
+
+static void _dm_lib_init(void)
+{
+	dm_lib_init();
+}
+
 /*
  * Library users can provide their own logging
  * function.
  */
+
+static int _abort_on_internal_errors = 0;
+static int _debug_with_line_numbers = 0;
+static pthread_once_t _log_env_once = PTHREAD_ONCE_INIT;
+
+static void _init_log_env_vars(void)
+{
+	_abort_on_internal_errors =
+		strcmp(getenv("DM_ABORT_ON_INTERNAL_ERRORS") ? : "0", "0") != 0;
+	_debug_with_line_numbers =
+		strcmp(getenv("DM_DEBUG_WITH_LINE_NUMBERS") ? : "0", "0") != 0;
+}
 
 __attribute__((format(printf, 5, 0)))
 static void _default_log_line(int level, const char *file,
 			      int line, int dm_errno_or_class,
 			      const char *f, va_list ap)
 {
-	static int _abort_on_internal_errors = -1;
-	static int _debug_with_line_numbers = -1;
 	FILE *out = log_stderr(level) ? stderr : stdout;
+
+	pthread_once(&_log_env_once, _init_log_env_vars);
 
 	level = log_level(level);
 
@@ -122,22 +177,12 @@ static void _default_log_line(int level, const char *file,
 		if (level < _LOG_WARN)
 			out = stderr;
 
-		if (_debug_with_line_numbers < 0)
-			/* Set when env DM_DEBUG_WITH_LINE_NUMBERS is not "0" */
-			_debug_with_line_numbers =
-				strcmp(getenv("DM_DEBUG_WITH_LINE_NUMBERS") ? : "0", "0");
-
-		if (_debug_with_line_numbers)
+		if (_verbose && _debug_with_line_numbers)
 			fprintf(out, "%s:%d     ", file, line);
 
 		vfprintf(out, f, ap);
 		fputc('\n', out);
 	}
-
-	if (_abort_on_internal_errors < 0)
-		/* Set when env DM_ABORT_ON_INTERNAL_ERRORS is not "0" */
-		_abort_on_internal_errors =
-			strcmp(getenv("DM_ABORT_ON_INTERNAL_ERRORS") ? : "0", "0");
 
 	if (_abort_on_internal_errors &&
 	    !strncmp(f, INTERNAL_ERROR, sizeof(INTERNAL_ERROR) - 1))
@@ -220,6 +265,12 @@ static void _log_to_default_log_with_errno(int level,
 
 void dm_log_init(dm_log_fn fn)
 {
+	if (fn ? (dm_log == fn) : !dm_log_is_non_default())
+		return;
+
+	if (!_is_init_thread("set log function"))
+		return;
+
 	if (fn)  {
 		dm_log = fn;
 		dm_log_with_errno = _log_to_default_log;
@@ -236,6 +287,12 @@ int dm_log_is_non_default(void)
 
 void dm_log_with_errno_init(dm_log_with_errno_fn fn)
 {
+	if (fn ? (dm_log_with_errno == fn) : !dm_log_is_non_default())
+		return;
+
+	if (!_is_init_thread("set log function"))
+		return;
+
 	if (fn) {
 		dm_log = _log_to_default_log_with_errno;
 		dm_log_with_errno = fn;
@@ -247,6 +304,12 @@ void dm_log_with_errno_init(dm_log_with_errno_fn fn)
 
 void dm_log_init_verbose(int level)
 {
+	if (_verbose == level)
+		return;
+
+	if (!_is_init_thread("set log verbose level"))
+		return;
+
 	_verbose = level;
 }
 
@@ -295,7 +358,11 @@ int dm_get_suspended_counter(void)
 
 int dm_set_name_mangling_mode(dm_string_mangling_t name_mangling_mode)
 {
-	_name_mangling_mode = name_mangling_mode;
+	if (_name_mangling_mode == name_mangling_mode)
+		return 1;
+
+	if (_is_init_thread("change mangling mode"))
+		_name_mangling_mode = name_mangling_mode;
 
 	return 1;
 }
@@ -310,12 +377,13 @@ struct dm_task *dm_task_create(int type)
 	struct dm_task *dmt = dm_zalloc(sizeof(*dmt));
 
 	if (!dmt) {
-		log_error("dm_task_create: malloc(%" PRIsize_t ") failed",
+		log_error("dm_task_create: dm_zalloc(%" PRIsize_t ") failed",
 			  sizeof(*dmt));
 		return NULL;
 	}
 
-	if (!dm_check_version()) {
+	/* DM_DEVICE_VERSION is the task that performs the version check itself */
+	if (type != DM_DEVICE_VERSION && !dm_check_version()) {
 		dm_free(dmt);
 		return_NULL;
 	}
@@ -392,13 +460,13 @@ static int _is_whitelisted_char(char c)
 	 * Actually, DM supports any character in a device name.
 	 * This whitelist is just for proper integration with udev.
 	 */
-        if ((c >= '0' && c <= '9') ||
-            (c >= 'A' && c <= 'Z') ||
-            (c >= 'a' && c <= 'z') ||
-            strchr("#+-.:=@_", c) != NULL)
-                return 1;
+	if ((c >= '0' && c <= '9') ||
+	    (c >= 'A' && c <= 'Z') ||
+	    (c >= 'a' && c <= 'z') ||
+	    strchr("#+-.:=@_", c) != NULL)
+		return 1;
 
-        return 0;
+	return 0;
 }
 
 int check_multiple_mangled_string_allowed(const char *str, const char *str_name,
@@ -475,7 +543,7 @@ int mangle_string(const char *str, const char *str_name, size_t len,
 			if (buf_len - j < 4)
 				goto bad2;
 
-			sprintf(&buf[j], "\\x%02x", (unsigned char) str[i]);
+			(void) sprintf(&buf[j], "\\x%02x", (unsigned char) str[i]);
 			j+=4;
 
 			need_mangling = 1;
@@ -535,7 +603,8 @@ int unmangle_string(const char *str, const char *str_name, size_t len,
 		}
 
 		if (str[i] == '\\' && str[i+1] == 'x') {
-			if (!sscanf(&str[i+2], "%2x%" DM_TO_STRING(DM_NAME_LEN) "s",
+			if ((len - i < 4) ||
+			    !sscanf(&str[i+2], "%2x%" DM_TO_STRING(DM_NAME_LEN) "s",
 				    &code, str_rest)) {
 				log_debug_activation("Hex encoding mismatch detected in %s \"%s\" "
 						     "while trying to unmangle it.", str_name, str);
@@ -595,7 +664,7 @@ static int _dm_task_set_name(struct dm_task *dmt, const char *name,
 	}
 
 	if (!(dmt->dev_name = dm_strdup(name))) {
-		log_error("_dm_task_set_name: strdup(%s) failed", name);
+		log_error("_dm_task_set_name: dm_strdup(%s) failed", name);
 		return 0;
 	}
 
@@ -619,7 +688,7 @@ static int _dm_task_set_name_from_path(struct dm_task *dmt, const char *path,
 		/*
 		 * Found directly.
 		 * If supplied path points to same device as last component
-		 * under /dev/mapper, use that name directly.  
+		 * under /dev/mapper, use that name directly.
 		 */
 		if (dm_snprintf(buf, sizeof(buf), "%s/%s", _dm_dir, name) == -1) {
 			log_error("Couldn't create path for %s", name);
@@ -810,7 +879,7 @@ int dm_task_set_newname(struct dm_task *dmt, const char *newname)
 
 	dm_free(dmt->newname);
 	if (!(dmt->newname = dm_strdup(newname))) {
-		log_error("dm_task_set_newname: strdup(%s) failed", newname);
+		log_error("dm_task_set_newname: dm_strdup(%s) failed", newname);
 		return 0;
 	}
 
@@ -852,7 +921,7 @@ int dm_task_set_uuid(struct dm_task *dmt, const char *uuid)
 	}
 
 	if (!(dmt->uuid = dm_strdup(uuid))) {
-		log_error("dm_task_set_uuid: strdup(%s) failed", uuid);
+		log_error("dm_task_set_uuid: dm_strdup(%s) failed", uuid);
 		return 0;
 	}
 
@@ -934,13 +1003,12 @@ static int _selabel_lookup(const char *path, mode_t mode,
 			   char **scontext)
 {
 #ifdef HAVE_SELINUX_LABEL_H
-	if (!_selabel_handle &&
-	    !(_selabel_handle = selabel_open(SELABEL_CTX_FILE, NULL, 0))) {
+	if (!_get_selabel_handle()) {
 		log_error("selabel_open failed: %s", strerror(errno));
 		return 0;
 	}
 
-	if (selabel_lookup(_selabel_handle, scontext, path, mode)) {
+	if (selabel_lookup(_get_selabel_handle(), scontext, path, mode)) {
 		log_debug_activation("selabel_lookup failed for %s: %s",
 				     path, strerror(errno));
 		return 0;
@@ -957,17 +1025,19 @@ static int _selabel_lookup(const char *path, mode_t mode,
 #endif
 
 #ifdef HAVE_SELINUX
+static int _selinux_enabled;
+static pthread_once_t _selinux_enabled_once = PTHREAD_ONCE_INIT;
+
+static void _init_selinux_enabled(void)
+{
+	_selinux_enabled = is_selinux_enabled();
+}
+
 static int _is_selinux_enabled(void)
 {
-	static int _tested = 0;
-	static int _enabled;
+	pthread_once(&_selinux_enabled_once, _init_selinux_enabled);
 
-	if (!_tested) {
-		_tested = 1;
-		_enabled = is_selinux_enabled();
-	}
-
-	return _enabled;
+	return _selinux_enabled;
 }
 #endif
 
@@ -1034,7 +1104,7 @@ void selinux_release(void)
 
 static int _warn_if_op_needed(int warn_if_udev_failed)
 {
-    return warn_if_udev_failed && dm_udev_get_sync_support() && dm_udev_get_checking();
+	return warn_if_udev_failed && dm_udev_get_sync_support() && dm_udev_get_checking();
 }
 
 static int _add_dev_node(const char *dev_name, uint32_t major, uint32_t minor,
@@ -1290,6 +1360,7 @@ static int _open_dev_node(const char *dev_name)
 int get_dev_node_read_ahead(const char *dev_name, uint32_t major, uint32_t minor,
 			    uint32_t *read_ahead)
 {
+	char path0[PATH_MAX];
 	char buf[24];
 	int len;
 	int r = 1;
@@ -1301,17 +1372,17 @@ int get_dev_node_read_ahead(const char *dev_name, uint32_t major, uint32_t minor
 	 * Otherwise use BLKRAGET ioctl.
 	 */
 	if (*_sysfs_dir && major != 0) {
-		if (dm_snprintf(_path0, sizeof(_path0), "%sdev/block/%" PRIu32
+		if (dm_snprintf(path0, sizeof(path0), "%sdev/block/%" PRIu32
 				":%" PRIu32 "/bdi/read_ahead_kb", _sysfs_dir,
 				major, minor) < 0) {
 			log_error("Failed to build sysfs_path.");
 			return 0;
 		}
 
-		if ((fd = open(_path0, O_RDONLY, 0)) != -1) {
+		if ((fd = open(path0, O_RDONLY, 0)) != -1) {
 			/* Reading from sysfs, expecting number\n */
 			if ((len = read(fd, buf, sizeof(buf) - 1)) < 1) {
-				log_sys_error("read", _path0);
+				log_sys_error("read", path0);
 				r = 0;
 			} else {
 				buf[len] = 0; /* kill \n and ensure \0 */
@@ -1321,12 +1392,12 @@ int get_dev_node_read_ahead(const char *dev_name, uint32_t major, uint32_t minor
 			}
 
 			if (close(fd))
-				log_sys_debug("close", _path0);
+				log_sys_debug("close", path0);
 
 			return r;
 		}
 
-		log_sys_debug("open", _path0);
+		log_sys_debug("open", path0);
 		/* Fall back to use dev_name */
 	}
 
@@ -1360,6 +1431,7 @@ int get_dev_node_read_ahead(const char *dev_name, uint32_t major, uint32_t minor
 static int _set_read_ahead(const char *dev_name, uint32_t major, uint32_t minor,
 			   uint32_t read_ahead)
 {
+	char path0[PATH_MAX];
 	char buf[24];
 	int len;
 	int r = 1;
@@ -1374,7 +1446,7 @@ static int _set_read_ahead(const char *dev_name, uint32_t major, uint32_t minor,
 	 * Otherwise use BLKRASET ioctl. RA is set after resume.
 	 */
 	if (*_sysfs_dir && major != 0) {
-		if (dm_snprintf(_path0, sizeof(_path0), "%sdev/block/%" PRIu32
+		if (dm_snprintf(path0, sizeof(path0), "%sdev/block/%" PRIu32
 				":%" PRIu32 "/bdi/read_ahead_kb",
 				_sysfs_dir, major, minor) < 0) {
 			log_error("Failed to build sysfs_path.");
@@ -1388,19 +1460,19 @@ static int _set_read_ahead(const char *dev_name, uint32_t major, uint32_t minor,
 			return 0;
 		}
 
-		if ((fd = open(_path0, O_WRONLY, 0)) != -1) {
+		if ((fd = open(path0, O_WRONLY, 0)) != -1) {
 			if (write(fd, buf, len) < len) {
-				log_sys_error("write", _path0);
+				log_sys_error("write", path0);
 				r = 0;
 			}
 
 			if (close(fd))
-				log_sys_debug("close", _path0);
+				log_sys_debug("close", path0);
 
 			return r;
 		}
 
-		log_sys_debug("open", _path0);
+		log_sys_debug("open", path0);
 		/* Fall back to use dev_name */
 	}
 
@@ -1441,7 +1513,7 @@ static int _set_dev_node_read_ahead(const char *dev_name,
 
 		if (current_read_ahead >= read_ahead) {
 			log_debug_activation("%s: retaining kernel read ahead of %" PRIu32
-				  " (requested %" PRIu32 ")",           
+				  " (requested %" PRIu32 ")",
 				  dev_name, current_read_ahead, read_ahead);
 			return 1;
 		}
@@ -1452,7 +1524,8 @@ static int _set_dev_node_read_ahead(const char *dev_name,
 
 #else
 
-int get_dev_node_read_ahead(const char *dev_name, uint32_t *read_ahead)
+int get_dev_node_read_ahead(const char *dev_name, uint32_t major, uint32_t minor,
+			    uint32_t *read_ahead)
 {
 	*read_ahead = 0;
 
@@ -1498,8 +1571,90 @@ static int _do_node_op(node_op_t type, const char *dev_name, uint32_t major,
 	return 1;
 }
 
-static DM_LIST_INIT(_node_ops);
-static int _count_node_ops[NUM_NODES];
+struct dm_thread_state {
+	struct dm_list node_ops;
+	int count_node_ops[NUM_NODES];
+	char uuid_prefix[DM_MAX_UUID_PREFIX_LEN + 1];
+	int uuid_prefix_set;
+#ifdef UDEV_SYNC_SUPPORT
+	int sync_with_udev;
+	int udev_checking;
+#endif
+};
+
+static pthread_key_t _thread_state_key;
+static pthread_once_t _thread_state_once = PTHREAD_ONCE_INIT;
+
+static void _pop_node_ops(void);
+
+static void _destroy_thread_state(void *ptr)
+{
+	struct dm_thread_state *ts = ptr;
+
+	/*
+	 * Flush any pending node ops as a safety net in case the
+	 * caller did not call update_devs() before thread exit.
+	 * Re-associate so _pop_node_ops() finds the state via accessor.
+	 */
+	pthread_setspecific(_thread_state_key, ts);
+	_pop_node_ops();
+	pthread_setspecific(_thread_state_key, NULL);
+	dm_free(ts);
+}
+
+static void _init_thread_state_key(void)
+{
+	/* pthread_once prevents retry on failure -- nothing we can do */
+	if (pthread_key_create(&_thread_state_key, _destroy_thread_state))
+		log_error("Failed to create thread state key.");
+}
+
+static struct dm_thread_state *_get_thread_state(void)
+{
+	struct dm_thread_state *ts;
+
+	pthread_once(&_thread_state_once, _init_thread_state_key);
+
+	ts = pthread_getspecific(_thread_state_key);
+	if (!ts) {
+		if (!(ts = dm_zalloc(sizeof(*ts)))) {
+			log_error("Failed to allocate thread state.");
+			return NULL;
+		}
+		dm_list_init(&ts->node_ops);
+#ifdef UDEV_SYNC_SUPPORT
+		ts->sync_with_udev = 1;
+		ts->udev_checking = 1;
+#endif
+		pthread_setspecific(_thread_state_key, ts);
+	}
+
+	return ts;
+}
+
+void dm_thread_state_exit(void)
+{
+	struct dm_thread_state *ts = _get_thread_state();
+
+	if (ts)
+		_destroy_thread_state(ts);
+
+	pthread_key_delete(_thread_state_key);
+}
+
+static struct dm_list *_get_node_ops_list(void)
+{
+	struct dm_thread_state *ts = _get_thread_state();
+
+	return ts ? &ts->node_ops : NULL;
+}
+
+static int *_get_count_node_ops(void)
+{
+	struct dm_thread_state *ts = _get_thread_state();
+
+	return ts ? ts->count_node_ops : NULL;
+}
 
 struct node_op_parms {
 	struct dm_list list;
@@ -1528,19 +1683,25 @@ static void _store_str(char **pos, char **ptr, const char *str)
 
 static void _del_node_op(struct node_op_parms *nop)
 {
-	_count_node_ops[nop->type]--;
+	int *count = _get_count_node_ops();
+
+	if (count)
+		count[nop->type]--;
 	dm_list_del(&nop->list);
 	dm_free(nop);
-
 }
 
 /* Check if there is other the type of node operation stacked */
 static int _other_node_ops(node_op_t type)
 {
+	int *count = _get_count_node_ops();
 	unsigned i;
 
+	if (!count)
+		return 0;
+
 	for (i = 0; i < NUM_NODES; i++)
-		if (type != i && _count_node_ops[i])
+		if (type != i && count[i])
 			return 1;
 	return 0;
 }
@@ -1579,8 +1740,16 @@ static int _stack_node_op(node_op_t type, const char *dev_name, uint32_t major,
 {
 	struct node_op_parms *nop;
 	struct dm_list *noph, *nopht;
+	struct dm_list *node_ops;
+	int *count;
 	size_t len = strlen(dev_name) + strlen(old_name) + 2;
 	char *pos;
+
+	if (!(node_ops = _get_node_ops_list()))
+		return 0;
+
+	if (!(count = _get_count_node_ops()))
+		return 0;
 
 	/*
 	 * Note: warn_if_udev_failed must have valid content
@@ -1589,7 +1758,7 @@ static int _stack_node_op(node_op_t type, const char *dev_name, uint32_t major,
 		/*
 		 * Ignore any outstanding operations on the node if deleting it.
 		 */
-		dm_list_iterate_safe(noph, nopht, &_node_ops) {
+		dm_list_iterate_safe(noph, nopht, node_ops) {
 			nop = dm_list_item(noph, struct node_op_parms);
 			if (!strcmp(dev_name, nop->dev_name)) {
 				_log_node_op("Unstacking", nop);
@@ -1598,12 +1767,12 @@ static int _stack_node_op(node_op_t type, const char *dev_name, uint32_t major,
 					break; /* no other non DEL ops */
 			}
 		}
-	else if ((type == NODE_ADD) && _count_node_ops[NODE_DEL])
+	else if ((type == NODE_ADD) && count[NODE_DEL])
 		/*
 		 * Ignore previous DEL operation on added node.
 		 * (No other operations for this device than DEL could be stacked here).
 		 */
-		dm_list_iterate_safe(noph, nopht, &_node_ops) {
+		dm_list_iterate_safe(noph, nopht, node_ops) {
 			nop = dm_list_item(noph, struct node_op_parms);
 			if ((nop->type == NODE_DEL) &&
 			    !strcmp(dev_name, nop->dev_name)) {
@@ -1621,7 +1790,7 @@ static int _stack_node_op(node_op_t type, const char *dev_name, uint32_t major,
 		 * safe to remove any stacked ADD, RENAME, READ_AHEAD operation
 		 * There cannot be any DEL operation on the renamed device.
 		 */
-		dm_list_iterate_safe(noph, nopht, &_node_ops) {
+		dm_list_iterate_safe(noph, nopht, node_ops) {
 			nop = dm_list_item(noph, struct node_op_parms);
 			if (!strcmp(old_name, nop->dev_name)) {
 				_log_node_op("Unstacking", nop);
@@ -1659,8 +1828,8 @@ static int _stack_node_op(node_op_t type, const char *dev_name, uint32_t major,
 	_store_str(&pos, &nop->dev_name, dev_name);
 	_store_str(&pos, &nop->old_name, old_name);
 
-	_count_node_ops[type]++;
-	dm_list_add(&_node_ops, &nop->list);
+	count[type]++;
+	dm_list_add(node_ops, &nop->list);
 
 	_log_node_op("Stacking", nop);
 
@@ -1669,10 +1838,13 @@ static int _stack_node_op(node_op_t type, const char *dev_name, uint32_t major,
 
 static void _pop_node_ops(void)
 {
-	struct dm_list *noph, *nopht;
+	struct dm_list *noph, *nopht, *node_ops;
 	struct node_op_parms *nop;
 
-	dm_list_iterate_safe(noph, nopht, &_node_ops) {
+	if (!(node_ops = _get_node_ops_list()))
+		return;
+
+	dm_list_iterate_safe(noph, nopht, node_ops) {
 		nop = dm_list_item(noph, struct node_op_parms);
 		if (!nop->rely_on_udev) {
 			_log_node_op("Processing", nop);
@@ -1745,7 +1917,18 @@ static int _canonicalize_and_set_dir(const char *src, const char *suffix, size_t
 
 int dm_set_dev_dir(const char *dev_dir)
 {
-	return _canonicalize_and_set_dir(dev_dir, DM_DIR, sizeof _dm_dir, _dm_dir);
+	char new_dir[PATH_MAX];
+
+	if (!_canonicalize_and_set_dir(dev_dir, DM_DIR, sizeof new_dir, new_dir))
+		return_0;
+
+	if (!strcmp(new_dir, _dm_dir))
+		return 1;
+
+	if (!_is_init_thread("change dev dir"))
+		return 1;
+
+	return dm_strncpy(_dm_dir, new_dir, sizeof _dm_dir);
 }
 
 const char *dm_dir(void)
@@ -1755,12 +1938,20 @@ const char *dm_dir(void)
 
 int dm_set_sysfs_dir(const char *sysfs_dir)
 {
-	if (!sysfs_dir || !*sysfs_dir) {
-		_sysfs_dir[0] = '\0';
-		return 1;
-	}
+	char new_dir[PATH_MAX];
 
-	return _canonicalize_and_set_dir(sysfs_dir, NULL, sizeof _sysfs_dir, _sysfs_dir);
+	if (!sysfs_dir || !*sysfs_dir)
+		new_dir[0] = '\0';
+	else if (!_canonicalize_and_set_dir(sysfs_dir, NULL, sizeof new_dir, new_dir))
+		return_0;
+
+	if (!strcmp(new_dir, _sysfs_dir))
+		return 1;
+
+	if (!_is_init_thread("change sysfs dir"))
+		return 1;
+
+	return dm_strncpy(_sysfs_dir, new_dir, sizeof _sysfs_dir);
 }
 
 const char *dm_sysfs_dir(void)
@@ -1773,6 +1964,7 @@ const char *dm_sysfs_dir(void)
  */
 int dm_set_uuid_prefix(const char *uuid_prefix)
 {
+	struct dm_thread_state *ts;
 	size_t len;
 
 	if (!uuid_prefix)
@@ -1783,13 +1975,22 @@ int dm_set_uuid_prefix(const char *uuid_prefix)
 		return 0;
 	}
 
-	memcpy(_default_uuid_prefix, uuid_prefix, len + 1);
+	if (!(ts = _get_thread_state()))
+		return_0;
+
+	memcpy(ts->uuid_prefix, uuid_prefix, len + 1);
+	ts->uuid_prefix_set = 1;
 
 	return 1;
 }
 
 const char *dm_uuid_prefix(void)
 {
+	struct dm_thread_state *ts = _get_thread_state();
+
+	if (ts && ts->uuid_prefix_set)
+		return ts->uuid_prefix;
+
 	return _default_uuid_prefix;
 }
 
@@ -1916,7 +2117,7 @@ static int _sysfs_get_dm_name(uint32_t major, uint32_t minor, char *buf, size_t 
 	if (!(fp = fopen(sysfs_path, "r"))) {
 		if (errno == ENOENT)
 			log_sys_debug("fopen", sysfs_path);
-                else
+		else
 			log_sys_error("fopen", sysfs_path);
 		goto bad;
 	}
@@ -1996,7 +2197,7 @@ static int _sysfs_find_kernel_name(uint32_t major, uint32_t minor, char *buf, si
 	int r = 0, sz;
 
 	if (!*_sysfs_dir ||
-	    dm_snprintf(path, sizeof(path), "%s/block/", _sysfs_dir) < 0) {
+	    dm_snprintf(path, sizeof(path), "%sblock/", _sysfs_dir) < 0) {
 		log_error("Failed to build sysfs_path.");
 		return 0;
 	}
@@ -2037,8 +2238,8 @@ static int _sysfs_find_kernel_name(uint32_t major, uint32_t minor, char *buf, si
 			name_dev = dirent_dev->d_name;
 
 			/* skip known ignorable paths using binary search */
-			if (bsearch(&name_dev, _ignore_sysfs, DM_ARRAY_SIZE(_ignore_sysfs),
-				    sizeof(char *), (int (*)(const void *, const void *))strcmp))
+			if (bsearch(name_dev, _ignore_sysfs, DM_ARRAY_SIZE(_ignore_sysfs),
+				    sizeof(_ignore_sysfs[0]), (int (*)(const void *, const void *))strcmp))
 				continue;
 
 			if (dm_snprintf(path, sizeof(path), "%sblock/%s/%s/dev",
@@ -2067,7 +2268,6 @@ static int _sysfs_get_kernel_name(uint32_t major, uint32_t minor, char *buf, siz
 {
 	char *name, *sysfs_path, *temp_buf = NULL;
 	ssize_t size;
-	size_t len;
 	int r = 0;
 
 	if (!(sysfs_path = malloc(PATH_MAX)) ||
@@ -2099,14 +2299,10 @@ static int _sysfs_get_kernel_name(uint32_t major, uint32_t minor, char *buf, siz
 		goto bad;
 	}
 	name += 1;
-	len = size - (name - temp_buf) + 1;
-
-	if (len > buf_size) {
+	if (!_dm_strncpy(buf, name, buf_size)) {
 		log_error("_sysfs_get_kernel_name: output buffer too small");
 		goto bad;
 	}
-
-	strcpy(buf, name);
 	r = 1;
 bad:
 out:
@@ -2290,8 +2486,10 @@ int dm_driver_version(char *version, size_t size)
 	if (!(dmt = dm_task_create(DM_DEVICE_VERSION)))
 		return_0;
 
-	if (!dm_task_run(dmt))
-		log_error("Failed to get driver version");
+	if (!dm_task_run(dmt)) {
+		log_error("Failed to get driver version.");
+		goto out;
+	}
 
 	if (!dm_task_get_driver_version(dmt, version, size))
 		goto out;
@@ -2401,63 +2599,60 @@ static int _check_semaphore_is_supported(void)
 
 static int _check_udev_is_running(void)
 {
-	struct udev *udev;
-	struct udev_queue *udev_queue;
-	int r;
+	int r = (access(UDEV_CONTROL_PATH, F_OK) >= 0) ||
+		(access(UDEV_LEGACY_QUEUE_PATH, F_OK) >= 0);
 
-	if (!(udev = udev_new()))
-		goto_bad;
-
-	if (!(udev_queue = udev_queue_new(udev))) {
-		udev_unref(udev);
-		goto_bad;
-	}
-
-	if (!(r = udev_queue_get_udev_is_active(udev_queue)))
+	if (!r)
 		log_debug_activation("Udev is not running. "
 				     "Not using udev synchronization code.");
 
-	udev_queue_unref(udev_queue);
-	udev_unref(udev);
-
 	return r;
-
-bad:
-	log_error("Could not get udev state. Assuming udev is not running.");
-	return 0;
 }
 
-static void _check_udev_sync_requirements_once(void)
-{
-	if (_semaphore_supported < 0)
-		_semaphore_supported = _check_semaphore_is_supported();
+static pthread_once_t _udev_sync_once = PTHREAD_ONCE_INIT;
 
-	if (_udev_running < 0) {
-		_udev_running = _check_udev_is_running();
-		if (_udev_disabled && _udev_running)
-			log_warn("Udev is running and DM_DISABLE_UDEV environment variable is set. "
-				 "Bypassing udev, device-mapper library will manage device "
-				 "nodes in device directory.");
-	}
+static void _init_udev_sync_requirements(void)
+{
+	_semaphore_supported = _check_semaphore_is_supported();
+	_udev_running = _check_udev_is_running();
+
+	if (_udev_disabled && _udev_running)
+		log_warn("Udev is running and DM_DISABLE_UDEV environment variable is set. "
+			 "Bypassing udev, device-mapper library will manage device "
+			 "nodes in device directory.");
 }
 
 void dm_udev_set_sync_support(int sync_with_udev)
 {
-	_check_udev_sync_requirements_once();
-	_sync_with_udev = sync_with_udev;
+	struct dm_thread_state *ts;
+
+	pthread_once(&_udev_sync_once, _init_udev_sync_requirements);
+
+	if ((ts = _get_thread_state()))
+		ts->sync_with_udev = sync_with_udev;
 }
 
 int dm_udev_get_sync_support(void)
 {
-	_check_udev_sync_requirements_once();
+	struct dm_thread_state *ts;
+
+	pthread_once(&_udev_sync_once, _init_udev_sync_requirements);
+
+	ts = _get_thread_state();
 
 	return !_udev_disabled && _semaphore_supported &&
-		dm_cookie_supported() &&_udev_running && _sync_with_udev;
+		dm_cookie_supported() && _udev_running &&
+		(ts ? ts->sync_with_udev : 1);
 }
 
 void dm_udev_set_checking(int checking)
 {
-	if ((_udev_checking = checking))
+	struct dm_thread_state *ts;
+
+	if ((ts = _get_thread_state()))
+		ts->udev_checking = checking;
+
+	if (checking)
 		log_debug_activation("DM udev checking enabled");
 	else
 		log_debug_activation("DM udev checking disabled");
@@ -2465,7 +2660,9 @@ void dm_udev_set_checking(int checking)
 
 int dm_udev_get_checking(void)
 {
-	return _udev_checking;
+	struct dm_thread_state *ts = _get_thread_state();
+
+	return ts ? ts->udev_checking : 1;
 }
 
 static int _get_cookie_sem(uint32_t cookie, int *semid)
@@ -2516,8 +2713,8 @@ static int _udev_notify_sem_inc(uint32_t cookie, int semid)
 		return 0;
 	}
 
- 	if ((val = semctl(semid, 0, GETVAL)) < 0) {
-		log_warn("cookie inc: semid %d: sem_ctl GETVAL failed for "
+	if ((val = semctl(semid, 0, GETVAL)) < 0) {
+		log_warn("cookie inc: semid %d: semctl GETVAL failed for "
 			  "cookie 0x%" PRIx32 ": %s",
 			  semid, cookie, strerror(errno));
 		log_debug_activation("Udev cookie 0x%" PRIx32 " (semid %d) incremented.",
@@ -2534,8 +2731,8 @@ static int _udev_notify_sem_dec(uint32_t cookie, int semid)
 	struct sembuf sb = {0, -1, IPC_NOWAIT};
 	int val;
 
- 	if ((val = semctl(semid, 0, GETVAL)) < 0)
-		log_warn("cookie dec: semid %d: sem_ctl GETVAL failed for "
+	if ((val = semctl(semid, 0, GETVAL)) < 0)
+		log_warn("cookie dec: semid %d: semctl GETVAL failed for "
 			 "cookie 0x%" PRIx32 ": %s",
 			 semid, cookie, strerror(errno));
 
@@ -2645,8 +2842,8 @@ static int _udev_notify_sem_create(uint32_t *cookie, int *semid)
 		goto bad;
 	}
 
- 	if ((val = semctl(gen_semid, 0, GETVAL)) < 0) {
-		log_error("cookie create: semid %d: sem_ctl GETVAL failed for "
+	if ((val = semctl(gen_semid, 0, GETVAL)) < 0) {
+		log_error("cookie create: semid %d: semctl GETVAL failed for "
 			  "cookie 0x%" PRIx32 ": %s",
 			  gen_semid, gen_cookie, strerror(errno));
 		(void) _udev_notify_sem_destroy(gen_cookie, gen_semid);
@@ -2690,41 +2887,41 @@ static const char *_task_type_disp(int type)
 	switch(type) {
 	case DM_DEVICE_CREATE:
 		return "CREATE";
-        case DM_DEVICE_RELOAD:
+	case DM_DEVICE_RELOAD:
 		return "RELOAD";
-        case DM_DEVICE_REMOVE:
+	case DM_DEVICE_REMOVE:
 		return "REMOVE";
-        case DM_DEVICE_REMOVE_ALL:
+	case DM_DEVICE_REMOVE_ALL:
 		return "REMOVE_ALL";
-        case DM_DEVICE_SUSPEND:
+	case DM_DEVICE_SUSPEND:
 		return "SUSPEND";
-        case DM_DEVICE_RESUME:
+	case DM_DEVICE_RESUME:
 		return "RESUME";
-        case DM_DEVICE_INFO:
+	case DM_DEVICE_INFO:
 		return "INFO";
-        case DM_DEVICE_DEPS:
+	case DM_DEVICE_DEPS:
 		return "DEPS";
-        case DM_DEVICE_RENAME:
+	case DM_DEVICE_RENAME:
 		return "RENAME";
-        case DM_DEVICE_VERSION:
+	case DM_DEVICE_VERSION:
 		return "VERSION";
-        case DM_DEVICE_STATUS:
+	case DM_DEVICE_STATUS:
 		return "STATUS";
-        case DM_DEVICE_TABLE:
+	case DM_DEVICE_TABLE:
 		return "TABLE";
-        case DM_DEVICE_WAITEVENT:
+	case DM_DEVICE_WAITEVENT:
 		return "WAITEVENT";
-        case DM_DEVICE_LIST:
+	case DM_DEVICE_LIST:
 		return "LIST";
-        case DM_DEVICE_CLEAR:
+	case DM_DEVICE_CLEAR:
 		return "CLEAR";
-        case DM_DEVICE_MKNODES:
+	case DM_DEVICE_MKNODES:
 		return "MKNODES";
-        case DM_DEVICE_LIST_VERSIONS:
+	case DM_DEVICE_LIST_VERSIONS:
 		return "LIST_VERSIONS";
-        case DM_DEVICE_TARGET_MSG:
+	case DM_DEVICE_TARGET_MSG:
 		return "TARGET_MSG";
-        case DM_DEVICE_SET_GEOMETRY:
+	case DM_DEVICE_SET_GEOMETRY:
 		return "SET_GEOMETRY";
 	}
 	return "unknown";
@@ -2768,14 +2965,14 @@ int dm_task_set_cookie(struct dm_task *dmt, uint32_t *cookie, uint16_t flags)
 			     (flags & DM_UDEV_LOW_PRIORITY_FLAG) ? " LOW_PRIORITY" : "",
 			     (flags & DM_UDEV_DISABLE_LIBRARY_FALLBACK) ? " DISABLE_LIBRARY_FALLBACK" : "",
 			     (flags & DM_UDEV_PRIMARY_SOURCE_FLAG) ? " PRIMARY_SOURCE" : "",
-			     (flags & DM_SUBSYSTEM_UDEV_FLAG0) ? " SUBSYSTEM_0" : " ",
-			     (flags & DM_SUBSYSTEM_UDEV_FLAG1) ? " SUBSYSTEM_1" : " ",
-			     (flags & DM_SUBSYSTEM_UDEV_FLAG2) ? " SUBSYSTEM_2" : " ",
-			     (flags & DM_SUBSYSTEM_UDEV_FLAG3) ? " SUBSYSTEM_3" : " ",
-			     (flags & DM_SUBSYSTEM_UDEV_FLAG4) ? " SUBSYSTEM_4" : " ",
-			     (flags & DM_SUBSYSTEM_UDEV_FLAG5) ? " SUBSYSTEM_5" : " ",
-			     (flags & DM_SUBSYSTEM_UDEV_FLAG6) ? " SUBSYSTEM_6" : " ",
-			     (flags & DM_SUBSYSTEM_UDEV_FLAG7) ? " SUBSYSTEM_7" : " ",
+			     (flags & DM_SUBSYSTEM_UDEV_FLAG0) ? " SUBSYSTEM_0" : "",
+			     (flags & DM_SUBSYSTEM_UDEV_FLAG1) ? " SUBSYSTEM_1" : "",
+			     (flags & DM_SUBSYSTEM_UDEV_FLAG2) ? " SUBSYSTEM_2" : "",
+			     (flags & DM_SUBSYSTEM_UDEV_FLAG3) ? " SUBSYSTEM_3" : "",
+			     (flags & DM_SUBSYSTEM_UDEV_FLAG4) ? " SUBSYSTEM_4" : "",
+			     (flags & DM_SUBSYSTEM_UDEV_FLAG5) ? " SUBSYSTEM_5" : "",
+			     (flags & DM_SUBSYSTEM_UDEV_FLAG6) ? " SUBSYSTEM_6" : "",
+			     (flags & DM_SUBSYSTEM_UDEV_FLAG7) ? " SUBSYSTEM_7" : "",
 			     flags);
 
 	return 1;
@@ -2825,10 +3022,10 @@ static int _udev_wait(uint32_t cookie, int *nowait)
 	/* Return immediately if the semaphore value exceeds 1? */
 	if (*nowait) {
 		if ((val = semctl(semid, 0, GETVAL)) < 0) {
-			log_error("semid %d: sem_ctl GETVAL failed for "
+			log_error("semid %d: semctl GETVAL failed for "
 				  "cookie 0x%" PRIx32 ": %s",
 				  semid, cookie, strerror(errno));
-			return 0;		
+			return 0;
 		}
 
 		if (val > 1)

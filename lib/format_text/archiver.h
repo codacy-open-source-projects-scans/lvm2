@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_TOOL_ARCHIVE_H
-#define _LVM_TOOL_ARCHIVE_H
+#ifndef LVM_ARCHIVER_H
+#define LVM_ARCHIVER_H
 
 #include "lib/metadata/metadata-exported.h"
 
@@ -31,6 +31,7 @@
  * Typically backups will be stored in /etc/lvm/backups.
  */
 
+__attribute__((nonnull(1, 2)))
 int archive_init(struct cmd_context *cmd, const char *dir,
 		 unsigned int keep_days, unsigned int keep_min,
 		 int enabled);
@@ -41,6 +42,7 @@ int archive(struct volume_group *vg);
 int archive_display(struct cmd_context *cmd, const char *vg_name);
 int archive_display_file(struct cmd_context *cmd, const char *file);
 
+__attribute__((nonnull(1, 2)))
 int backup_init(struct cmd_context *cmd, const char *dir, int enabled);
 void backup_exit(struct cmd_context *cmd);
 
@@ -53,7 +55,7 @@ struct volume_group *backup_read_vg(struct cmd_context *cmd,
 				    const char *vg_name, const char *file);
 
 int backup_restore_vg(struct cmd_context *cmd, struct volume_group *vg,
-                      int do_pvcreate, struct pv_create_args *pva);
+		      int do_pvcreate, struct pv_create_args *pva);
 
 int backup_restore_from_file(struct cmd_context *cmd, const char *vg_name,
 			     const char *file, int force);

@@ -131,7 +131,7 @@ Display and manipulate configuration information
 Manage the devices file
 .TP 20
 .B vgimportdevices
-Add devices for a VG to the devices file.
+Add devices for a VG to the devices file
 .PD
 .
 .SH Physical Volume Commands
@@ -166,7 +166,7 @@ Restore volume group configuration
 Change volume group attributes
 .TP 20
 .B vgconvert
-Change volume group metadata format
+Removed: vgconvert has been removed along with the lvm1 format
 .TP 20
 .B vgcreate
 Create a volume group
@@ -280,11 +280,6 @@ Check the consistency of volume group(s)
 .
 .SH Daemons
 .PD 0
-.\" CONDITION_BEGIN cmirrord.8
-.TP 20
-.B cmirrord
-cluster mirror log daemon
-.\" CONDITION_END cmirrord.8
 .\" CONDITION_BEGIN dmeventd.8
 .TP 20
 .B dmeventd
@@ -322,7 +317,7 @@ Utility to deactivate block devices
 .\" CONDITION_BEGIN fsadm.8
 .TP 20
 .B fsadm
-Utility to resize or check filesystem on a device
+Utility to resize or check a filesystem on a device
 .\" CONDITION_END fsadm.8
 .\" CONDITION_BEGIN lvm_import_vdo.8
 .TP 20

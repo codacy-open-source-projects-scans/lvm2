@@ -17,6 +17,8 @@
 #include "lib/locking/locking.h"
 #include "lib/locking/lvmlockd.h"
 #include "locking_types.h"
+#include "lib/metadata/metadata.h"
+#include "lib/config/config.h"
 #include "lib/misc/lvm-string.h"
 #include "lib/activate/activate.h"
 #include "lib/commands/toolcontext.h"
@@ -182,7 +184,7 @@ static int _lock_vol(struct cmd_context *cmd, const char *resource, uint32_t fla
 {
 	int ret = 0;
 
-	block_signals(flags);
+	block_signals();
 
 	if ((ret = _locking.lock_resource(cmd, resource, flags, NULL)))
 		/* ensure signals are blocked while VG_GLOBAL lock is held */
@@ -329,7 +331,7 @@ int vg_write_lock_held(void)
 	return _vg_write_lock_held;
 }
 
-void sync_local_dev_names(struct cmd_context* cmd)
+void sync_local_dev_names(struct cmd_context *cmd)
 {
 	memlock_unlock(cmd);
 	fs_unlock();

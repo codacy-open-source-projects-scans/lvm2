@@ -42,10 +42,17 @@ DF="$DFDIR/system.devices"
 aux lvmconf 'devices/scan = "/dev"' \
 	"global/event_activation = 1"
 
-bd1="$DM_DEV_DIR/mapper/$(basename $dev1)"
-bd2="$DM_DEV_DIR/mapper/$(basename $dev2)"
-bd3="$DM_DEV_DIR/mapper/$(basename $dev3)"
-bd4="$DM_DEV_DIR/mapper/$(basename $dev4)"
+if [ -e "/sys/block/$(basename "$dev1")/dm" ]; then
+    bd1="$DM_DEV_DIR/mapper/$(basename "$dev1")"
+    bd2="$DM_DEV_DIR/mapper/$(basename "$dev2")"
+    bd3="$DM_DEV_DIR/mapper/$(basename "$dev3")"
+    bd4="$DM_DEV_DIR/mapper/$(basename "$dev4")"
+else
+    bd1="$dev1"
+    bd2="$dev2"
+    bd3="$dev3"
+    bd4="$dev4"
+fi
 aux extend_filter "a|$bd1|" "a|$bd2|" "a|$bd3|" "a|$bd4|"
 
 # Changing names will confuse df based on devname
@@ -206,9 +213,9 @@ vgchange -an $vg2
 
 # vgremove clears online files
 
-PVID1=$(pvs "$bd1" --noheading -o uuid | tr -d - | awk '{print $1}')
-PVID2=$(pvs "$bd2" --noheading -o uuid | tr -d - | awk '{print $1}')
-PVID3=$(pvs "$bd3" --noheading -o uuid | tr -d - | awk '{print $1}')
+PVID1=$(pvs "$bd1" --noheadings -o uuid | tr -d - | awk '{print $1}')
+PVID2=$(pvs "$bd2" --noheadings -o uuid | tr -d - | awk '{print $1}')
+PVID3=$(pvs "$bd3" --noheadings -o uuid | tr -d - | awk '{print $1}')
 
 _clear_online_files
 

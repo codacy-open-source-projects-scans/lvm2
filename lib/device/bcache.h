@@ -123,10 +123,10 @@ bool bcache_flush(struct bcache *cache);
 
 /*
  * Removes a block from the cache.
- * 
+ *
  * If the block is dirty it will be written back first.  If the writeback fails
  * false will be returned.
- * 
+ *
  * If the block is currently held false will be returned.
  */
 bool bcache_invalidate(struct bcache *cache, int di, block_address index);
@@ -145,25 +145,28 @@ bool bcache_invalidate_di(struct bcache *cache, int di);
  */
 void bcache_abort_di(struct bcache *cache, int di);
 
-//----------------------------------------------------------------
-// The next four functions are utilities written in terms of the above api.
- 
-// Prefetches the blocks necessary to satisfy a byte range.
+/*----------------------------------------------------------------*/
+
+/*
+ * The next six functions are utilities written in terms of the above api.
+ *
+ * Prefetches the blocks necessary to satisfy a byte range.
+ */
 void bcache_prefetch_bytes(struct bcache *cache, int di, uint64_t start, size_t len);
 
-// Reads, writes and zeroes bytes.  Returns false if errors occur.
+/* Reads, writes, zeroes, sets and invalidates byte ranges.  Returns false on error. */
 bool bcache_read_bytes(struct bcache *cache, int di, uint64_t start, size_t len, void *data);
-bool bcache_write_bytes(struct bcache *cache, int di, uint64_t start, size_t len, void *data);
+bool bcache_write_bytes(struct bcache *cache, int di, uint64_t start, size_t len, const void *data);
 bool bcache_zero_bytes(struct bcache *cache, int di, uint64_t start, size_t len);
 bool bcache_set_bytes(struct bcache *cache, int di, uint64_t start, size_t len, uint8_t val);
 bool bcache_invalidate_bytes(struct bcache *cache, int di, uint64_t start, size_t len);
 
-void bcache_set_last_byte(struct bcache *cache, int di, uint64_t offset, int sector_size);
+void bcache_set_last_byte(struct bcache *cache, int di, uint64_t offset, size_t sector_size);
 void bcache_unset_last_byte(struct bcache *cache, int di);
 
-//----------------------------------------------------------------
+/*----------------------------------------------------------------*/
 
-int bcache_set_fd(int fd); /* returns di */
+int bcache_set_fd(int fd); /* returns di, or -1 on failure */
 void bcache_clear_fd(int di);
 int bcache_change_fd(int di, int fd);
 

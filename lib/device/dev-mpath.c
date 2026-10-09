@@ -245,7 +245,7 @@ static void _read_wwid_file(const char *config_wwids_file, int *entries)
 		if ((p = strchr(wwid, '/')))
 			*p = '\0';
 
-		(void) dm_hash_insert_binary(_wwid_hash_tab, wwid, strlen(wwid), (void*)1);
+		(void) dm_hash_insert_binary(_wwid_hash_tab, wwid, strlen(wwid), (void *)(uintptr_t)1);
 		count++;
 	}
 
@@ -501,7 +501,7 @@ static int _dev_is_mpath_component_sysfs(struct cmd_context *cmd, struct device 
 		}
 		dm_dev_major = MAJOR(info.st_rdev);
 		dm_dev_minor = MINOR(info.st_rdev);
-	
+
 		if (dm_dev_major != dt->device_mapper_major) {
 			log_debug_devs("dev_is_mpath_component %s holder %s %u:%u does not have dm major.",
 					dev_name(dev), dm_dev_path, dm_dev_major, dm_dev_minor);
@@ -540,7 +540,7 @@ static int _dev_is_mpath_component_sysfs(struct cmd_context *cmd, struct device 
 
 			/* For future checks, save that the dm minor refers to mpath ("2" == is mpath) */
 			if (_minor_hash_tab)
-				(void) dm_hash_insert_binary(_minor_hash_tab, &dm_dev_minor, sizeof(dm_dev_minor), (void*)2);
+				(void) dm_hash_insert_binary(_minor_hash_tab, &dm_dev_minor, sizeof(dm_dev_minor), (void *)(uintptr_t)2);
 
 			is_mpath_component = 1;
 			goto out;
@@ -548,7 +548,7 @@ static int _dev_is_mpath_component_sysfs(struct cmd_context *cmd, struct device 
 
 		/* For future checks, save that the dm minor does not refer to mpath ("1" == is not mpath) */
 		if (_minor_hash_tab)
-			(void) dm_hash_insert_binary(_minor_hash_tab, &dm_dev_minor, sizeof(dm_dev_minor), (void*)1);
+			(void) dm_hash_insert_binary(_minor_hash_tab, &dm_dev_minor, sizeof(dm_dev_minor), (void *)(uintptr_t)1);
 	}
 
  out:

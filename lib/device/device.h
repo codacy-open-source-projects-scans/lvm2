@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_DEVICE_H
-#define _LVM_DEVICE_H
+#ifndef LVM_DEVICE_H
+#define LVM_DEVICE_H
 
 #include "libdm/libdevmapper.h"
 #include "lib/id/id.h"
@@ -32,18 +32,21 @@
 #define DEV_USED_FOR_LV		0x00000100	/* Is device used for an LV */
 #define DEV_ASSUMED_FOR_LV	0x00000200	/* Is device assumed for an LV */
 #define DEV_NOT_O_NOATIME	0x00000400	/* Don't use O_NOATIME */
-#define DEV_IN_BCACHE		0x00000800      /* dev fd is open and used in bcache */
-#define DEV_BCACHE_EXCL		0x00001000      /* bcache_fd should be open EXCL */
-#define DEV_ADDED_SYS_WWID	0x00002000      /* wwid has been added from sysfs wwid file */
+#define DEV_IN_BCACHE		0x00000800	/* dev fd is open and used in bcache */
+#define DEV_BCACHE_EXCL		0x00001000	/* bcache_fd should be open EXCL */
+#define DEV_ADDED_SYS_WWID	0x00002000	/* wwid has been added from sysfs wwid file */
 #define DEV_ADDED_VPD_WWIDS	0x00004000	/* wwids have been added from vpd_pg83 */
-#define DEV_BCACHE_WRITE	0x00008000      /* bcache_fd is open with RDWR */
-#define DEV_SCAN_FOUND_LABEL	0x00010000      /* label scan read dev and found label */
+#define DEV_BCACHE_WRITE	0x00008000	/* bcache_fd is open with RDWR */
+#define DEV_SCAN_FOUND_LABEL	0x00010000	/* label scan read dev and found label */
 #define DEV_IS_MD_COMPONENT	0x00020000	/* device is an md component */
 #define DEV_IS_NVME		0x00040000	/* set if dev is nvme */
 #define DEV_MATCHED_USE_ID	0x00080000	/* matched an entry from cmd->use_devices */
 #define DEV_SCAN_FOUND_NOLABEL	0x00100000	/* label_scan read, passed filters, but no lvm label */
-#define DEV_SCAN_NOT_READ	0x00200000	/* label_scan not able to read dev */
-#define DEV_ADDED_NVME_WWIDS	0x00400000	/* wwids have been ready from libnvme */
+#define DEV_SCAN_NOT_READ	0x00200000	/* scan I/O failed; no open/read/write for rest of command */
+#define dev_scan_io_failed(dev)	((dev)->flags & DEV_SCAN_NOT_READ)
+/* Follow-up: propagate scan I/O errors through filters (tri-state checks)
+ * instead of relying on DEV_SCAN_NOT_READ alone. */
+#define DEV_ADDED_NVME_WWIDS	0x00400000	/* wwids have been read from libnvme */
 #define DEV_UPDATE_USE_ID	0x00800000	/* update system.devices entry to use preferred wwid */
 
 /*
@@ -147,8 +150,8 @@ struct device {
 	/* private */
 	int fd;
 	int open_count;
-	int physical_block_size; /* From BLKPBSZGET: lowest possible sector size that the hardware can operate on without reverting to read-modify-write operations */
-	int logical_block_size;  /* From BLKSSZGET: lowest possible block size that the storage device can address */
+	unsigned int physical_block_size; /* From BLKPBSZGET: lowest possible sector size that the hardware can operate on without reverting to read-modify-write operations */
+	unsigned int logical_block_size;  /* From BLKSSZGET: lowest possible block size that the storage device can address */
 	int read_ahead;
 	int bcache_fd;
 	int bcache_di;
@@ -235,7 +238,7 @@ int dev_open_readonly_quiet(struct device *dev);
 int dev_close(struct device *dev);
 int dev_close_immediate(struct device *dev);
 
-int dev_fd(struct device *dev);
+int dev_fd(const struct device *dev);
 const char *dev_name(const struct device *dev);
 
 void dev_flush(struct device *dev);
@@ -254,6 +257,6 @@ int device_list_remove(struct dm_list *devices, struct device *dev);
 int device_list_add(struct dm_pool *mem, struct dm_list *devices, struct device *dev);
 struct device_list *device_list_find_dev(struct dm_list *devices, struct device *dev);
 
-char *strdup_pvid(char *pvid);
+char *strdup_pvid(const char *pvid);
 
 #endif

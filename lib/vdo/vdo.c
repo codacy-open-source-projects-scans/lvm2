@@ -23,6 +23,7 @@
 #include "lib/metadata/metadata.h"
 #include "lib/metadata/lv_alloc.h"
 #include "lib/metadata/segtype.h"
+#include "lib/config/config.h"
 #include "lib/mm/memlock.h"
 #include "base/memory/zalloc.h"
 
@@ -253,6 +254,9 @@ static int _vdo_pool_text_import(struct lv_segment *seg,
 	if (!_import_bool(n, "use_sparse_index", &vtp->use_sparse_index))
 		return_0;
 
+	if (!_import_bool(n, "use_kernel_format", &vtp->use_kernel_format))
+		return_0;
+
 	if (!dm_config_get_uint32(n, "index_memory_size_mb", &vtp->index_memory_size_mb))
 		return _bad_field("index_memory_size_mb");
 
@@ -326,6 +330,8 @@ static int _vdo_pool_text_export(const struct lv_segment *seg, struct formatter 
 
 	if (vtp->use_sparse_index)
 		outf(f, "use_sparse_index = 1");
+	if (vtp->use_kernel_format)
+		outf(f, "use_kernel_format = 1");
 	/* TODO - conditionally */
 	outsize(f, vtp->index_memory_size_mb * UINT64_C(2 * 1024),
 		"index_memory_size_mb = %u", vtp->index_memory_size_mb);
@@ -385,6 +391,7 @@ static int _vdo_pool_add_target_line(struct dev_manager *dm,
 				     struct dm_tree_node *node, uint64_t len,
 				     uint32_t *pvmove_mirror_count __attribute__((unused)))
 {
+	struct dm_vdo_target_params vdo_params;
 	char *vdo_pool_name, *data_uuid;
 	unsigned attrs = 0;
 
@@ -405,11 +412,15 @@ static int _vdo_pool_add_target_line(struct dev_manager *dm,
 	if (!(data_uuid = build_dm_uuid(mem, seg_lv(seg, 0), lv_layer(seg_lv(seg, 0)))))
 		return_0;
 
+	/* Use local copy to avoid mutating in-memory metadata */
+	vdo_params = seg->vdo_params;
+	vdo_params.use_kernel_format = (seg->lv->status & LV_VDOFORMAT) ? 1 : 0;
+
 	/* VDO uses virtual size instead of its physical size */
 	if (!dm_tree_node_add_vdo_target(node, get_vdo_pool_virtual_size(seg),
 					 !(attrs & VDO_FEATURE_VERSION4) ? 2 : 4,
 					 vdo_pool_name, data_uuid, seg_lv(seg, 0)->size,
-					 &seg->vdo_params))
+					 &vdo_params))
 		return_0;
 
 	return 1;
@@ -429,6 +440,7 @@ static int _vdo_target_present(struct cmd_context *cmd,
 	} _features[] = {
 		{ 6, 2, 3, VDO_FEATURE_ONLINE_RENAME, "online_rename" },
 		{ 8, 2, 0, VDO_FEATURE_VERSION4, "version4" },
+		{ 9, 2, 0, VDO_FEATURE_KERNEL_FORMAT, "kernel_format" },
 	};
 	static const char _lvmconf[] = "global/vdo_disabled_features";
 	static int _vdo_checked = 0;

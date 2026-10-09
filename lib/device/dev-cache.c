@@ -334,6 +334,25 @@ out:
 	return 1;
 }
 
+int dev_cache_add_alias(struct device *dev, const char *name)
+{
+	struct dm_list *preferred = dm_list_first(&dev->aliases);
+
+	if (!_add_alias(dev, name, NO_HASH))
+		return 0;
+
+	/*
+	 * pvscan imports DEVLINKS for regex filters before udev creates symlinks.
+	 * Keep the existing preferred name for opening the device.
+	 */
+	if (preferred) {
+		dm_list_del(preferred);
+		dm_list_add_h(&dev->aliases, preferred);
+	}
+
+	return 1;
+}
+
 int get_sysfs_binary(const char *path, char *buf, size_t buf_size, int *retlen)
 {
 	ssize_t ret;
@@ -1343,9 +1362,8 @@ int dm_devs_cache_update(void)
 	   overhead of radix trees and just do list searches on dm_devs */
 
 	if (!(_cache.dm_devnos = radix_tree_create(NULL, NULL)) ||
-	    !(_cache.dm_uuids = radix_tree_create(NULL, NULL))) {
-		return_0; // FIXME
-	}
+	    !(_cache.dm_uuids = radix_tree_create(NULL, NULL)))
+		goto_bad;
 
 	log_debug_cache("Creating DM cache for devno and uuid.");
 	/* Insert every active DM device into radix trees */
@@ -1353,18 +1371,19 @@ int dm_devs_cache_update(void)
 		d = _shuffle_devno(dm_dev->devno);
 
 		if (!radix_tree_insert_ptr(_cache.dm_devnos, &d, sizeof(d), dm_dev))
-			return_0;
+			goto_bad;
 
 		if (dm_dev->uuid[0] &&
 		    !radix_tree_insert_ptr(_cache.dm_uuids, dm_dev->uuid, strlen(dm_dev->uuid), dm_dev))
-			return_0;
+			goto_bad;
 	}
-
-	//radix_tree_dump(_cache.dm_devnos, stdout);
-	//radix_tree_dump(_cache.dm_uuids, stdout);
 
 	_cache.use_dm_devs_cache = 1;
 	return 1;
+
+bad:
+	dm_devs_cache_destroy();
+	return 0;
 }
 
 void dm_devs_cache_label_invalidate(struct cmd_context *cmd)
@@ -1888,7 +1907,7 @@ struct device *dev_iter_get(struct cmd_context *cmd, struct dev_iter *iter)
 	return NULL;
 }
 
-int dev_fd(struct device *dev)
+int dev_fd(const struct device *dev)
 {
 	return dev->fd;
 }
@@ -1959,7 +1978,7 @@ static int _setup_devices_list(struct cmd_context *cmd)
  * devices files, the dmeventd-generated command will fail when
  * it doesn't find the VG.
  */
- 
+
 static int _setup_devices_file_dmeventd(struct cmd_context *cmd)
 {
 	char path[PATH_MAX];
@@ -1988,7 +2007,7 @@ static int _setup_devices_file_dmeventd(struct cmd_context *cmd)
  * the old file may not longer be correct due to changes to the
  * system while it was disabled.
  */
-static void devices_file_rename_unused(struct cmd_context *cmd)
+static void _devices_file_rename_unused(struct cmd_context *cmd)
 {
 	char path[PATH_MAX];
 	char path2[PATH_MAX];
@@ -2065,7 +2084,7 @@ int setup_devices_file(struct cmd_context *cmd)
 		if (!cmd->devicesfile &&
 		    (cft = get_config_tree_by_source(cmd, CONFIG_MERGED_FILES)) &&
 		    !find_config_bool(cmd, cft, devices_use_devicesfile_CFG))
-			devices_file_rename_unused(cmd);
+			_devices_file_rename_unused(cmd);
 		return 1;
 	}
 
@@ -2086,7 +2105,7 @@ int setup_devices_file(struct cmd_context *cmd)
 			return 0;
 		}
 	}
-	
+
 	if (dm_snprintf(cmd->devices_file_path, sizeof(cmd->devices_file_path),
 			"%s/devices/%s", cmd->system_dir, filename) < 0) {
 		log_error("Failed to copy devices file path");
@@ -2151,7 +2170,7 @@ int setup_devices(struct cmd_context *cmd)
 	 * then they are clearly intending to use the devices file, so we
 	 * can create it.  Or, if they specify a non-system devices file
 	 * with pvcreate/vgcreate, then they clearly want to use a devices
-	 * file and we can create it (and creating a non-system devices file 
+	 * file and we can create it (and creating a non-system devices file
 	 * would not cause existing PVs to disappear from the main system.)
 	 *
 	 * An exception is if pvcreate/vgcreate get to device_id_write and

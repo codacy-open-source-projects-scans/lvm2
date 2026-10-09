@@ -1,14 +1,16 @@
-// Copyright (C) 2018 Red Hat, Inc. All rights reserved.
-//
-// This file is part of LVM2.
-//
-// This copyrighted material is made available to anyone wishing to use,
-// modify, copy, or redistribute it subject to the terms and conditions
-// of the GNU Lesser General Public License v.2.1.
-//
-// You should have received a copy of the GNU Lesser General Public License
-// along with this program; if not, write to the Free Software Foundation,
-// Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+/*
+ * Copyright (C) 2018 Red Hat, Inc. All rights reserved.
+ *
+ * This file is part of LVM2.
+ *
+ * This copyrighted material is made available to anyone wishing to use,
+ * modify, copy, or redistribute it subject to the terms and conditions
+ * of the GNU Lesser General Public License v.2.1.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ */
 
 #include "radix-tree.h"
 
@@ -20,9 +22,10 @@
 #include <stdio.h>
 #include <ctype.h>
 
-//----------------------------------------------------------------
-// This implementation is based around nested binary trees.  Very
-// simple (and hopefully correct).
+/*
+ * This implementation is based around nested binary trees.  Very
+ * simple (and hopefully correct).
+ */
 
 struct node {
 	struct node *left;
@@ -55,7 +58,7 @@ struct radix_tree *radix_tree_create(radix_value_dtr dtr, void *dtr_context)
 	return rt;
 }
 
-// Returns the number of entries in the tree
+/* Returns the number of entries in the tree */
 static unsigned _destroy_tree(struct node *n, radix_value_dtr dtr, void *context)
 {
 	unsigned r;
@@ -101,9 +104,9 @@ static unsigned _count(struct node *n)
 	return r;
 }
 
-unsigned radix_tree_size(struct radix_tree *rt)
+unsigned radix_tree_size(const struct radix_tree *rt)
 {
-	return _count(rt->root);
+	return rt->nr_entries;
 }
 
 static struct node **_lookup(struct node **pn, const uint8_t *kb, const uint8_t *ke)
@@ -123,9 +126,27 @@ static struct node **_lookup(struct node **pn, const uint8_t *kb, const uint8_t 
 		return _lookup(&n->center, kb + 1, ke);
 }
 
-static bool _insert(struct node **pn, const uint8_t *kb, const uint8_t *ke, union radix_value v)
+static bool _insert(struct radix_tree *rt, struct node **pn, const uint8_t *kb, const uint8_t *ke, union radix_value v)
 {
 	struct node *n = *pn;
+
+	if (kb == ke) {
+		if (!n) {
+			n = zalloc(sizeof(*n));
+			if (!n)
+				return false;
+			*pn = n;
+		}
+		if (n->has_value) {
+			if (rt->dtr)
+				rt->dtr(rt->dtr_context, n->value);
+		} else {
+			n->has_value = true;
+			rt->nr_entries++;
+		}
+		n->value = v;
+		return true;
+	}
 
 	if (!n) {
 		n = zalloc(sizeof(*n));
@@ -136,20 +157,14 @@ static bool _insert(struct node **pn, const uint8_t *kb, const uint8_t *ke, unio
 		*pn = n;
 	}
 
-	if (kb == ke) {
-		n->has_value = true;
-		n->value = v;
-		return true;
-	}
-
 	if (*kb < n->key)
-		return _insert(&n->left, kb, ke, v);
+		return _insert(rt, &n->left, kb, ke, v);
 
 	else if (*kb > n->key)
-		return _insert(&n->right, kb, ke, v);
+		return _insert(rt, &n->right, kb, ke, v);
 
 	else
-		return _insert(&n->center, kb + 1, ke, v);
+		return _insert(rt, &n->center, kb + 1, ke, v);
 }
 
 bool radix_tree_insert(struct radix_tree *rt, const void *key, size_t keylen,
@@ -158,11 +173,14 @@ bool radix_tree_insert(struct radix_tree *rt, const void *key, size_t keylen,
 	const uint8_t *kb = key;
 	const uint8_t *ke = kb + keylen;
 
-	if (!_insert(&rt->root, kb, ke, v))
-		return false;
+	return _insert(rt, &rt->root, kb, ke, v);
+}
 
-	rt->nr_entries++;
-	return true;
+int radix_tree_uniq_insert(struct radix_tree *rt, const void *key, size_t keylen, union radix_value v)
+{
+	unsigned entries = rt->nr_entries;
+	return radix_tree_insert(rt, key, keylen, v) ?
+		((entries != rt->nr_entries) ? 1 : -1) : 0;
 }
 
 bool radix_tree_remove(struct radix_tree *rt, const void *key, size_t keylen)
@@ -186,7 +204,7 @@ bool radix_tree_remove(struct radix_tree *rt, const void *key, size_t keylen)
 
 	}
 
-	// FIXME: delete parent if this was the last entry
+	/* FIXME: delete parent if this was the last entry */
 	free(n);
 	*pn = NULL;
 
@@ -200,22 +218,28 @@ unsigned radix_tree_remove_prefix(struct radix_tree *rt, const void *prefix, siz
 	struct node **pn;
 	unsigned count = 0;
 
+	if (radix_tree_remove(rt, prefix, prefix_len))
+		count++;
+
 	pn = _lookup(&rt->root, kb, ke);
 
 	if (*pn) {
-		count = _destroy_tree(*pn, rt->dtr, rt->dtr_context);
+		unsigned removed = _destroy_tree(*pn, rt->dtr, rt->dtr_context);
+		rt->nr_entries -= removed;
+		count += removed;
 		*pn = NULL;
 	}
 
 	return count;
 }
 
-bool radix_tree_lookup(struct radix_tree *rt, const void *key, size_t keylen,
+bool radix_tree_lookup(const struct radix_tree *rt, const void *key, size_t keylen,
 		       union radix_value *result)
 {
 	const uint8_t *kb = key;
 	const uint8_t *ke = kb + keylen;
-	struct node **pn = _lookup(&rt->root, kb, ke);
+	struct node *root = rt->root;
+	struct node **pn = _lookup(&root, kb, ke);
 	struct node *n = *pn;
 
 	if (n && n->has_value) {
@@ -226,22 +250,26 @@ bool radix_tree_lookup(struct radix_tree *rt, const void *key, size_t keylen,
 	return false;
 }
 
-static void _iterate(struct node *n, struct radix_tree_iterator *it)
+/* FIXME: fill out the key */
+static bool _iterate(struct node *n, struct radix_tree_iterator *it)
 {
 	if (!n)
-		return;
+		return true;
 
-	_iterate(n->left, it);
+	if (!_iterate(n->left, it))
+		return false;
 
 	if (n->has_value)
-		// FIXME: fill out the key
-		it->visit(it, NULL, 0, n->value);
+		if (!it->visit(it, NULL, 0, n->value))
+			return false;
 
-	_iterate(n->center, it);
-	_iterate(n->right, it);
+	if (!_iterate(n->center, it))
+		return false;
+
+	return _iterate(n->right, it);
 }
 
-void radix_tree_iterate(struct radix_tree *rt, const void *key, size_t keylen,
+void radix_tree_iterate(const struct radix_tree *rt, const void *key, size_t keylen,
                         struct radix_tree_iterator *it)
 {
 	const uint8_t *kb = key;
@@ -251,20 +279,22 @@ void radix_tree_iterate(struct radix_tree *rt, const void *key, size_t keylen,
 		_iterate(rt->root, it);
 
 	else {
-		struct node **pn = _lookup(&rt->root, kb, ke);
+		struct node *root = rt->root;
+		struct node **pn = _lookup(&root, kb, ke);
 		struct node *n = *pn;
 
 		if (n) {
 			if (n->has_value)
-				it->visit(it, NULL, 0, n->value);
+				if (!it->visit(it, NULL, 0, n->value))
+					return;
 			_iterate(n->center, it);
 		}
 	}
 }
 
-bool radix_tree_is_well_formed(struct radix_tree *rt)
+bool radix_tree_is_well_formed(const struct radix_tree *rt)
 {
-	return true;
+	return _count(rt->root) == rt->nr_entries;
 }
 
 static void _dump(FILE *out, struct node *n, unsigned indent)
@@ -290,10 +320,10 @@ static void _dump(FILE *out, struct node *n, unsigned indent)
 	_dump(out, n->right, indent + 1);
 }
 
-void radix_tree_dump(struct radix_tree *rt, FILE *out)
+void radix_tree_dump(const struct radix_tree *rt, FILE *out)
 {
 	_dump(out, rt->root, 0);
 }
 
-//----------------------------------------------------------------
+/*----------------------------------------------------------------*/
 

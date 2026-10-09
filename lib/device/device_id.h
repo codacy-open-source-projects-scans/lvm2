@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,15 +13,15 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_DEVICE_ID_H
-#define _LVM_DEVICE_ID_H
+#ifndef LVM_DEVICE_ID_H
+#define LVM_DEVICE_ID_H
 
 #include "lib/commands/toolcontext.h"
 #include "lib/device/device.h"
 
 void free_du(struct dev_use *du);
 void free_dus(struct dm_list *dus);
-void free_did(struct dev_id *did);
+void free_did(struct dev_id *id);
 void free_dids(struct dm_list *ids);
 const char *idtype_to_str(uint16_t idtype);
 uint16_t idtype_from_str(const char *str);
@@ -31,7 +31,7 @@ int device_ids_use_devname(struct cmd_context *cmd);
 int device_ids_use_lvmlv(struct cmd_context *cmd);
 int device_ids_read(struct cmd_context *cmd);
 int device_ids_write(struct cmd_context *cmd);
-int device_id_add(struct cmd_context *cmd, struct device *dev, const char *pvid,
+int device_id_add(struct cmd_context *cmd, struct device *dev, const char *pvid_arg,
                   const char *idtype_arg, const char *id_arg, int use_idtype_only);
 void device_id_pvremove(struct cmd_context *cmd, struct device *dev);
 void device_id_lvremove(struct cmd_context *cmd, struct dm_list *removed_uuids);
@@ -80,13 +80,13 @@ int nvme_type_to_idtype(int nvme_type);
 int idtype_to_scsi_type(int idtype);
 int idtype_to_nvme_type(int idtype);
 void free_wwids(struct dm_list *ids);
-struct dev_wwid *dev_add_wwid(char *id, int dw_type, int is_nvme, struct dm_list *ids);
-struct dev_wwid *dev_add_scsi_wwid(char *id, int dw_type, struct dm_list *ids);
-struct dev_wwid *dev_add_nvme_wwid(char *id, int dw_type, struct dm_list *ids);
+struct dev_wwid *dev_add_wwid(const char *id, int dw_type, int is_nvme, struct dm_list *ids);
+struct dev_wwid *dev_add_scsi_wwid(const char *id, int dw_type, struct dm_list *ids);
+struct dev_wwid *dev_add_nvme_wwid(const char *id, int dw_type, struct dm_list *ids);
 int dev_read_vpd_wwids(struct cmd_context *cmd, struct device *dev);
 void dev_read_nvme_wwids(struct device *dev);
 int dev_read_sys_wwid(struct cmd_context *cmd, struct device *dev,
-		      char *buf, int bufsize, struct dev_wwid **dw_out);
+		      char *outbuf, int outbufsize, struct dev_wwid **dw_out);
 
 int pv_device_id_is_stale(const struct physical_volume *pv);
 

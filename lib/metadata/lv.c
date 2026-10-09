@@ -20,6 +20,8 @@
 #include "lib/commands/toolcontext.h"
 #include "lib/metadata/segtype.h"
 #include "lib/datastruct/str_list.h"
+#include "lib/config/config.h"
+#include "lib/config/defaults.h"
 #include "lib/locking/lvmlockd.h"
 #include "lib/datastruct/radix-tree.h"
 
@@ -1229,7 +1231,7 @@ int lv_raid_image_in_sync(const struct logical_volume *lv)
 	return 0;
 }
 
-static int lv_raid_integrity_image_in_sync(const struct logical_volume *lv_iorig)
+static int _lv_raid_integrity_image_in_sync(const struct logical_volume *lv_iorig)
 {
 	struct logical_volume *lv_image = NULL;
 	struct logical_volume *lv_raid = NULL;
@@ -1464,7 +1466,7 @@ char *lv_attr_dup_with_info_and_seg_status(struct dm_pool *mem, const struct lv_
 	else if (lv_is_cache_type(lv) || lv_is_writecache(lv))
 		repstr[0] = 'C';
 	else if (lv_is_integrity_origin(lv))
-		repstr[0] = lv_raid_integrity_image_in_sync(lv) ? 'i' : 'I';
+		repstr[0] = _lv_raid_integrity_image_in_sync(lv) ? 'i' : 'I';
 	else if (lv_is_integrity(lv))
 		repstr[0] = 'g';
 	else if (lv_is_raid(lv))
@@ -1794,12 +1796,21 @@ char *lv_host_dup(struct dm_pool *mem, const struct logical_volume *lv)
 int lv_active_change(struct cmd_context *cmd, struct logical_volume *lv,
 		     enum activation_change activate)
 {
+	const struct logical_volume *pvmove_lv;
 	const char *ay_with_mode = NULL;
 
 	if (activate == CHANGE_ASY)
 		ay_with_mode = "sh";
 	if (activate == CHANGE_AEY)
 		ay_with_mode = "ex";
+
+	if (!lv_is_pvmove(lv) && is_change_activating(activate) && lv_is_locked(lv)) {
+		if ((pvmove_lv = find_pvmove_lv_in_lv(lv)) &&
+		    !lv_is_active(pvmove_lv) &&
+		    !lv_active_change(cmd, (struct logical_volume *)pvmove_lv, activate))
+			log_warn("WARNING: Failed to activate pvmove LV %s.",
+				 display_lvname(pvmove_lv));
+	}
 
 	if (is_change_activating(activate) &&
 	    !lockd_lv(cmd, lv, ay_with_mode, LDLV_PERSISTENT)) {
@@ -1863,13 +1874,26 @@ char *lv_lock_args_dup(struct dm_pool *mem, const struct logical_volume *lv)
 	return dm_pool_strdup(mem, lock_args);
 }
 
-/* For given LV find recursively the LV which holds lock for it */
-const struct logical_volume *lv_lock_holder(const struct logical_volume *lv)
+static const struct logical_volume *_lv_lock_holder(const struct logical_volume *lv,
+						    const struct logical_volume *fallback,
+						    int depth)
 {
 	const struct seg_list *sl;
 
+	if (depth > MAX_LV_RECURSION) {
+		log_error("LV dependency graph is too deep or contains a cycle at %s.",
+			  display_lvname(lv));
+		/*
+		 * Do not return an arbitrary LV reached through malformed metadata.
+		 * Falling back to the requested LV keeps any subsequent operation
+		 * scoped to that LV instead of suspending or reloading an unrelated
+		 * user reached through the malformed graph.
+		 */
+		return fallback;
+	}
+
 	if (lv_is_cow(lv))
-		return lv_lock_holder(origin_from_cow(lv));
+		return _lv_lock_holder(origin_from_cow(lv), fallback, depth + 1);
 
 	if (lv_is_thin_pool(lv) ||
 	    lv_is_external_origin(lv)) {
@@ -1906,10 +1930,16 @@ const struct logical_volume *lv_lock_holder(const struct logical_volume *lv)
 		if (lv_is_cache_pool(sl->seg->lv) &&
 		    !lv_is_used_cache_pool(sl->seg->lv))
 			continue; /* Skip unused cache-pool */
-		return lv_lock_holder(sl->seg->lv);
+		return _lv_lock_holder(sl->seg->lv, fallback, depth + 1);
 	}
 
 	return lv;
+}
+
+/* For given LV find recursively the LV which holds lock for it */
+const struct logical_volume *lv_lock_holder(const struct logical_volume *lv)
+{
+	return _lv_lock_holder(lv, lv, 0);
 }
 
 struct profile *lv_config_profile(const struct logical_volume *lv)

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2011 Red Hat, Inc. All rights reserved.
  *
  * This file is part of the device-mapper userspace tools.
@@ -37,7 +37,27 @@ void dm_pools_check_leaks(void);
  */
 static size_t _pagesize = 0;
 static size_t _pagesize_mask = 0;
-#define ALIGN_ON_PAGE(size) (((size) + (_pagesize_mask)) & ~(_pagesize_mask))
+static pthread_once_t _pagesize_once = PTHREAD_ONCE_INIT;
+
+static void _init_pagesize(void)
+{
+	_pagesize = getpagesize();
+	_pagesize_mask = _pagesize - 1;
+}
+
+static size_t _get_pagesize(void)
+{
+	pthread_once(&_pagesize_once, _init_pagesize);
+	return _pagesize;
+}
+
+static size_t _get_pagesize_mask(void)
+{
+	pthread_once(&_pagesize_once, _init_pagesize);
+	return _pagesize_mask;
+}
+
+#define ALIGN_ON_PAGE(size) (((size) + (_get_pagesize_mask())) & ~(_get_pagesize_mask()))
 #endif
 
 #ifdef DEBUG_POOL

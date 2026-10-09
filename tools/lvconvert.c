@@ -153,8 +153,8 @@ static int _read_conversion_type(struct cmd_context *cmd,
 
 	const char *type_str = arg_str_value(cmd, type_ARG, "");
 
-	lp->type_str =  type_str;
-	if (!lp->type_str[0])
+	lp->type_str = type_str;
+	if (!lp->type_str || !lp->type_str[0])
 		return 1;
 
 	/* FIXME: Check thin-pool and thin more thoroughly! */
@@ -666,8 +666,7 @@ static int _lv_update_log_type(struct cmd_context *cmd,
 	if (old_log_count < log_count) {
 		if (!(region_size = adjusted_mirror_region_size(cmd, lv->vg->extent_size,
 								lv->le_count,
-								region_size, 0,
-								vg_is_clustered(lv->vg))))
+								region_size, 0)))
 			return_0;
 
 		if (!add_mirror_log(cmd, original_lv, log_count,
@@ -873,8 +872,7 @@ static int _lvconvert_mirrors_aux(struct cmd_context *cmd,
 
 	if (!(region_size = adjusted_mirror_region_size(cmd, lv->vg->extent_size,
 							lv->le_count,
-							lp->region_size ? : seg->region_size, 0,
-							vg_is_clustered(lv->vg))))
+							lp->region_size ? : seg->region_size, 0)))
 		return_0;
 
 	if (lv_component_is_active(lv)) {
@@ -1801,6 +1799,9 @@ static int _lvconvert_raid_types(struct cmd_context *cmd, struct logical_volume 
 	if (!lockd_lv(cmd, lv, "ex", 0))
 		return_ECMD_FAILED;
 
+	if (!lp->type_str)
+		return_ECMD_FAILED;
+
 	/* Set up segtype either from type_str or else to match the existing one. */
 	if (!*lp->type_str)
 		lp->segtype = seg->segtype;
@@ -2234,7 +2235,9 @@ static int _lvconvert_merge_old_snapshot(struct cmd_context *cmd,
 		return 0;
 	}
 
-	/* FIXME: test when snapshot is remotely active */
+	if (!lockd_lv(cmd, origin, "ex", 0))
+		return_0;
+
 	if (lv_info(cmd, lv, 0, &info, 1, 0)
 	    && info.exists && info.live_table &&
 	    (!lv_snapshot_percent(lv, &snap_percent) ||
@@ -3150,7 +3153,6 @@ static int _lvconvert_to_pool(struct cmd_context *cmd,
 	thin_zero_t zero_new_blocks;
 	int error_when_full;
 	int data_vdo;
-	uint64_t vdo_pool_header_size;
 	struct vdo_convert_params vcp = {
 		.activate = CHANGE_AN,
 		.do_zero = 1,
@@ -3336,6 +3338,32 @@ static int _lvconvert_to_pool(struct cmd_context *cmd,
 		goto bad;
 	}
 
+	/*
+	 * When converting pool data to VDO, validate the data LV is large
+	 * enough before allocating metadata/spare LVs or renaming.  Otherwise
+	 * a late vdoformat failure leaves abandoned volumes requiring manual
+	 * cleanup.
+	 */
+	if (data_vdo && !to_thin && !lv_is_vdo(lv)) {
+		if (!fill_vdo_target_params(cmd, &vcp.vdo_params, &vcp.header_size, vg->profile))
+			goto_bad;
+
+		if (!get_vdo_settings(cmd, &vcp.vdo_params, NULL))
+			goto_bad;
+
+		if (!vdo_pool_validate_size(lv, &vcp.vdo_params, NULL))
+			goto bad;
+	}
+
+	if (!to_cachepool) {
+		warn_thin_pool_chunk_size_not_pow2(cmd, display_lvname(lv),
+						   chunk_size);
+		if (arg_is_set(cmd, chunksize_ARG) &&
+		    !confirm_thin_pool_chunk_size_not_pow2_cmdline(cmd, chunk_size,
+								   "convert to"))
+			goto_bad;
+	}
+
 	log_verbose("Pool metadata extents %u chunk_size %u", meta_extents, chunk_size);
 
 	(void) dm_snprintf(converted_names, sizeof(converted_names), "%s%s%s",
@@ -3411,9 +3439,6 @@ static int _lvconvert_to_pool(struct cmd_context *cmd,
 			goto bad;
 		}
 
-		/* Wait for synchronization before wiping activation */
-		sync_local_dev_names(cmd);
-
 		if (zero_metadata || to_thin) {
 			if (!activate_and_wipe_lv(metadata_lv, WIPE_MODE_METADATA,
 						  arg_count(cmd, yes_ARG),
@@ -3461,12 +3486,7 @@ static int _lvconvert_to_pool(struct cmd_context *cmd,
 				log_print_unless_silent("Volume %s is already VDO volume, skipping VDO conversion.",
 							display_lvname(lv));
 			} else {
-				if (!fill_vdo_target_params(cmd, &vcp.vdo_params, &vdo_pool_header_size, vg->profile))
-					goto_bad;
-
-				if (!get_vdo_settings(cmd, &vcp.vdo_params, NULL))
-					goto_bad;
-
+				/* vcp filled and size-checked above before metadata allocation */
 				if (!convert_vdo_lv(lv, &vcp))
 					goto_bad;
 			}
@@ -3842,8 +3862,8 @@ static int _lvconvert_repair_pvs_mirror(struct cmd_context *cmd, struct logical_
 	int ret;
 
 	/*
-	 * We want to allow cmirror active on multiple nodes to be repaired,
-	 * but normal mirror to only be repaired if active exclusively here.
+	 * We want to allow a clustered mirror active on multiple nodes to be
+	 * repaired, but normal mirror to only be repaired if active exclusively here.
 	 * If the LV is active it already has the necessary lock, but if not
 	 * active, then require ex since we cannot know the active state on
 	 * other hosts.
@@ -5783,7 +5803,7 @@ static int _lvconvert_detach_writecache(struct cmd_context *cmd,
 			log_error("Conversion aborted.");
 			return 0;
 		}
-		
+
 		noflush = 1;
 	}
 

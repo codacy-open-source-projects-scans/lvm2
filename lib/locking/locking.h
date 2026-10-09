@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2011 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_LOCKING_H
-#define _LVM_LOCKING_H
+#ifndef LVM_LOCKING_H
+#define LVM_LOCKING_H
 
 #include "lib/id/id.h"
 #include "lib/config/config.h"
@@ -69,7 +69,7 @@ int lock_vol(struct cmd_context *cmd, const char *vol, uint32_t flags, const str
 		release_vg(vg); \
 	} while (0)
 
-void sync_local_dev_names(struct cmd_context* cmd);
+void sync_local_dev_names(struct cmd_context *cmd);
 
 /* Process list of LVs */
 struct volume_group;

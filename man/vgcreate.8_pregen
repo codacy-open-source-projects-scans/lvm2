@@ -101,9 +101,7 @@
 ..
 .de O_locktype
 .OPA locktype
-\%\fBsanlock\fP|\:\
-\fBdlm\fP|\:\
-\fBnone\fP
+#LOCKTYPE_ARG#
 ..
 .de O_longhelp
 .OPS longhelp
@@ -490,7 +488,7 @@ messages sent to the log file and/or syslog (if configured).
 .O_devices
 Restricts the devices that are visible and accessible to the command.
 Devices not listed will appear to be missing. This option can be
-repeated, or accepts a comma separated list of devices. This overrides
+repeated, or accepts a comma-separated list of devices. This overrides
 the devices file.
 .
 .TP
@@ -634,7 +632,7 @@ the report/output_format setting in \fBlvm.conf\fP(5).
 If there is more than one report per command, each report is prefixed
 with the report name for identification. \fBjson\fP produces report
 output in JSON format. \fBjson_std\fP produces report output in
-JSON format which is more compliant with JSON standard.
+JSON format which is more compliant with the JSON standard.
 See \fBlvmreport\fP(7) for more information.
 .
 .TP
@@ -662,7 +660,12 @@ In this case, a lock owned by a failed host can only be acquired
 using the persist feature.
 nopersist: do not use the persist feature.
 timeout: do not use the notimeout feature.
-The default behavior with no settings configured is: nopersist and timeout.
+nowatchdog: do not connect to wdmd/watchdog when starting the VG lockspace.
+Requires notimeout. Without timeout-based recovery, the watchdog is not needed.
+watchdog: when starting a VG lockspace, sanlock/wdmd connect the lockspace to /dev/watchdog.
+If VG lockspace renewals fail (e.g. due to a storage outage, or a sanlock daemon failure),
+then the watchdog resets the host if locks are held in the VG.
+The default behavior with no settings configured is: nopersist, timeout, watchdog.
 .
 .TP
 .O_setpersist
@@ -735,7 +738,7 @@ answer yes. Use with extreme caution.
 .
 .TP
 .O_zero
-Controls if the first 4 sectors (2048 bytes) of the device are wiped.
+Controls whether the first 4 sectors (2048 bytes) of the device are wiped.
 The default is to wipe these sectors unless either or both of
 --restorefile or --uuid are specified.
 .
@@ -751,7 +754,7 @@ Physical Volume name, a device path under /dev.
 For commands managing physical extents, a PV positional arg
 generally accepts a suffix indicating a range (or multiple ranges)
 of physical extents (PEs). When the first PE is omitted, it defaults
-to the start of the device, and when the last PE is omitted it defaults to end.
+to the start of the device, and when the last PE is omitted it defaults to the end.
 .br
 Start and end range (inclusive):
 \fIPV\fP[\fB:\fP\fIPE\fP\fB-\fP\fIPE\fP]\ .\|.\|.\&

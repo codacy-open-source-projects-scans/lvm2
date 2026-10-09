@@ -164,7 +164,7 @@ static int szscanf(const char *input, const char *format, ...)
 				 * dest buffer.  input bytes that would have been copied
 				 * but did not fit in the dest buffer are skipped.
 				 */
-				size_t dest_size = va_arg(args, size_t);
+				size_t dest_size = (size_t)va_arg(args, void *);
 				char *dest = va_arg(args, char *);
 				char *out = dest;
 
@@ -300,6 +300,7 @@ static void format_info_ls(char *line)
 	/* info=ls ls_name=%s vg_name=%s vg_uuid=%s vg_args=%s lm_type=%s */
 
 	if (szscanf(line, "info=ls ls_name=%s vg_name=%s vg_uuid=%s vg_args=%s lm_type=%s",
+		    (void *) /* gcc analyze needs to see all va_args as sizeof(void *) */
 		    sizeof(ls_name), ls_name,
 		    sizeof(vg_name), vg_name,
 		    sizeof(vg_uuid), vg_uuid,
@@ -606,12 +607,19 @@ static void format_info(void)
 	j = 0;
 
 	for (i = 0; i < dump_len; i++) {
+		if (j >= MAX_LINE - 1) {
+			/* line too long, skip to next newline/null */
+			while (i < dump_len && dump_buf[i] != '\n' && dump_buf[i] != '\0')
+				i++;
+			j = 0;
+			continue;
+		}
 		line[j++] = dump_buf[i];
 
 		if ((line[j-1] == '\n') || (line[j-1] == '\0')) {
+			line[j] = '\0';
 			format_info_line(line, r_name, r_type);
 			j = 0;
-			memset(line, 0, sizeof(line));
 		}
 	}
 }
@@ -828,12 +836,12 @@ static int do_stop_lockspaces(void)
 	int result;
 	int rv;
 
-	memset(opts, 0, sizeof(opts));
+	opts[0] = '\0';
 
 	if (wait_opt)
-		strcat(opts, "wait ");
+		(void) strncat(opts, "wait ", sizeof(opts) - strlen(opts) - 1);
 	if (force_opt)
-		strcat(opts, "force ");
+		(void) strncat(opts, "force ", sizeof(opts) - strlen(opts) - 1);
 
 	reply = _lvmlockd_send("stop_all",
 				"cmd = %s", "lvmlockctl",
@@ -851,6 +859,9 @@ static int do_stop_lockspaces(void)
 	daemon_reply_destroy(reply);
 	return rv;
 }
+
+/* Suppress false positive FD leak warnings from gcc -fanalyzer. */
+GCC_SUPPRESS_FD_WARNINGS
 
 static int _reopen_fd_to_null(int fd)
 {
@@ -881,6 +892,8 @@ out:
 
 	return r;
 }
+
+GCC_UNSUPPRESS_WARNINGS
 
 #define MAX_AV_COUNT 32
 #define ONE_ARG_LEN 1024
@@ -969,6 +982,10 @@ static void _run_command_pipe(const char *cmd_str, pid_t *pid_out, FILE **fp_out
 
 	if (pid == 0) {
 		/* Child -> writer, convert pipe[0] to STDOUT */
+
+		/* Suppress false positive FD leak warnings from gcc -fanalyzer. */
+		GCC_SUPPRESS_FD_WARNINGS
+
 		if (!_reopen_fd_to_null(STDIN_FILENO))
 			log_error("reopen STDIN error");
 		else if (close(pipefd[0 /*read*/]))
@@ -983,6 +1000,9 @@ static void _run_command_pipe(const char *cmd_str, pid_t *pid_out, FILE **fp_out
 			execvp(av[0], av);
 			log_error("execvp error %d", errno);
 		}
+
+		GCC_UNSUPPRESS_WARNINGS
+
 		_exit(errno);
 	}
 

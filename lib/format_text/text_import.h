@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2003-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2003-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2005 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,12 +13,11 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_TEXT_IMPORT_H
-#define _LVM_TEXT_IMPORT_H
+#ifndef LVM_TEXT_IMPORT_H
+#define LVM_TEXT_IMPORT_H
 
-#include <inttypes.h>
+#include <stdint.h>
 
-struct dm_hash_table;
 struct lv_segment;
 struct dm_config_node;
 struct dm_config_value;

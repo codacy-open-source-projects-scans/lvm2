@@ -15,6 +15,8 @@
 #include "lib/misc/lib.h"
 #include "daemons/dmeventd/plugins/lvm2/dmeventd_lvm.h"
 #include "daemons/dmeventd/libdevmapper-event.h"
+#include "daemons/dmeventd/dmeventd_percent.h"
+#include "daemons/dmeventd/dmeventd_retry.h"
 
 #include <sys/sysmacros.h>
 #include <sys/wait.h>
@@ -34,6 +36,7 @@ struct dso_state {
 	struct dm_pool *mem;
 	dm_percent_t percent_check;
 	uint64_t known_size;
+	struct dmeventd_policy_retry policy_retry;
 	char cmd_lvextend[512];
 };
 
@@ -162,6 +165,62 @@ static void _umount(const char *device, int major, int minor)
 		log_sys_error("close", procmounts);
 }
 
+/* Kernel-reported Invalid, Overflow, or unusable zero-sized status: nothing
+ * the monitor can do will revive the snapshot.  Stop monitoring, unmount it
+ * and request deregistration.  With SNAPSHOT_REMOVE the kernel dm-table is
+ * dropped too, but the LVM metadata LV always remains and needs a manual
+ * 'lvremove'.  Numeric 100% full status alone is not terminal. */
+static void _snapshot_terminal(struct dso_state *state, struct dm_task *dmt,
+			       const char *device)
+{
+	struct dm_info info;
+	int ret;
+
+	state->percent_check = 0;
+	if (dm_task_get_info(dmt, &info))
+		_umount(device, info.major, info.minor);
+#ifdef SNAPSHOT_REMOVE
+	/* Experimental for now and not used by default */
+	_remove(dm_task_get_uuid(dmt));
+#endif
+	if ((ret = pthread_kill(pthread_self(), SIGALRM)) && (ret != ESRCH))
+		log_sys_error("pthread_kill", "self");
+}
+
+/*
+ * At an armed usage step: apply retry backoff, warn, extend, and advance.
+ */
+static void _snapshot_handle_percent_check(struct dso_state *state,
+					   const char *device,
+					   int percent)
+{
+	int retrying;
+
+	if (percent < state->percent_check)
+		return;
+
+	retrying = state->policy_retry.fails ? 1 : 0;
+
+	if (dmeventd_policy_retry_should_postpone(&state->policy_retry, "extension"))
+		return;
+
+	if (!retrying && (percent >= WARNING_THRESH))
+		log_warn("WARNING: Snapshot %s is now %.2f%% full.",
+			 device, dm_percent_to_round_float(percent, 2));
+
+	if (!_extend(state->cmd_lvextend)) {
+		log_error("Failed to extend snapshot %s.", device);
+		state->policy_retry.fails = 1;
+		return;
+	}
+
+	dmeventd_policy_retry_after_success(&state->policy_retry);
+
+	dmeventd_advance_percent_check_after_action(percent,
+						    &state->percent_check,
+						    CHECK_STEP);
+}
+
 void process_event(struct dm_task *dmt,
 		   enum dm_event_mask evmask __attribute__((unused)),
 		   void **user)
@@ -174,7 +233,6 @@ void process_event(struct dm_task *dmt,
 	struct dm_status_snapshot *status = NULL;
 	const char *device = dm_task_get_name(dmt);
 	int percent;
-	struct dm_info info;
 	int ret;
 
 	/* No longer monitoring, waiting for remove */
@@ -199,15 +257,7 @@ void process_event(struct dm_task *dmt,
 	if (status->invalid || status->overflow || !status->total_sectors) {
 		log_warn("WARNING: Snapshot %s changed state to: %s and should be removed.",
 			 device, params);
-		state->percent_check = 0;
-		if (dm_task_get_info(dmt, &info))
-			_umount(device, info.major, info.minor);
-#ifdef SNAPSHOT_REMOVE
-		/* Maybe configurable ? */
-		_remove(dm_task_get_uuid(dmt));
-#endif
-		if ((ret = pthread_kill(pthread_self(), SIGALRM)) && (ret != ESRCH))
-			log_sys_error("pthread_kill", "self");
+		_snapshot_terminal(state, dmt, device);
 		goto out;
 	}
 
@@ -224,27 +274,17 @@ void process_event(struct dm_task *dmt,
 	if (state->known_size != status->total_sectors) {
 		state->percent_check = CHECK_MINIMUM;
 		state->known_size = status->total_sectors;
+		dmeventd_policy_retry_after_success(&state->policy_retry);
 	}
 
 	percent = dm_make_percent(status->used_sectors, status->total_sectors);
-	if (percent >= state->percent_check) {
-		/* Usage has raised more than CHECK_STEP since the last
-		   time. Run actions. */
-		state->percent_check = (percent / CHECK_STEP) * CHECK_STEP + CHECK_STEP;
 
-		if (percent >= WARNING_THRESH) /* Print a warning to syslog. */
-			log_warn("WARNING: Snapshot %s is now %.2f%% full.",
-				 device, dm_percent_to_round_float(percent, 2));
-
-		/* Try to extend the snapshot, in accord with user-set policies */
-		if (!_extend(state->cmd_lvextend))
-			log_error("Failed to extend snapshot %s.", device);
-	}
+	_snapshot_handle_percent_check(state, device, percent);
 out:
 	dm_pool_free(state->mem, status);
 }
 
-int register_device(const char *device,
+int register_device(const char *device_name,
 		    const char *uuid __attribute__((unused)),
 		    int major __attribute__((unused)),
 		    int minor __attribute__((unused)),
@@ -257,17 +297,18 @@ int register_device(const char *device,
 
 	if (!dmeventd_lvm2_command(state->mem, state->cmd_lvextend,
 				   sizeof(state->cmd_lvextend),
-				   "lvextend --use-policies", device))
+				   "lvextend --use-policies", device_name))
 		goto_bad;
 
 	state->percent_check = CHECK_MINIMUM;
+	dmeventd_policy_retry_after_success(&state->policy_retry);
 	*user = state;
 
-	log_info("Monitoring snapshot %s.", device);
+	log_info("Monitoring snapshot %s.", device_name);
 
 	return 1;
 bad:
-	log_error("Failed to monitor snapshot %s.", device);
+	log_error("Failed to monitor snapshot %s.", device_name);
 
 	if (state)
 		dmeventd_lvm2_exit_with_pool(state);
@@ -275,7 +316,7 @@ bad:
 	return 0;
 }
 
-int unregister_device(const char *device,
+int unregister_device(const char *device_name,
 		      const char *uuid __attribute__((unused)),
 		      int major __attribute__((unused)),
 		      int minor __attribute__((unused)),
@@ -284,7 +325,7 @@ int unregister_device(const char *device,
 	struct dso_state *state = *user;
 
 	dmeventd_lvm2_exit_with_pool(state);
-	log_info("No longer monitoring snapshot %s.", device);
+	log_info("No longer monitoring snapshot %s.", device_name);
 
 	return 1;
 }

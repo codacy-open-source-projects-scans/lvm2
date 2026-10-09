@@ -18,8 +18,8 @@
  * for library export.
  */
 
-#ifndef _LVM_METADATA_EXPORTED_H
-#define _LVM_METADATA_EXPORTED_H
+#ifndef LVM_METADATA_EXPORTED_H
+#define LVM_METADATA_EXPORTED_H
 
 #include "lib/id/id.h"
 #include "lib/metadata/pv.h"
@@ -29,10 +29,18 @@
 #include "lib/locking/lvmlockd.h"
 #include <stdbool.h>
 
+#define MAX_LV_RECURSION 1024
 #define MAX_STRIPES 128U
 #define SECTOR_SHIFT 9L
 #define SECTOR_SIZE ( 1L << SECTOR_SHIFT )
-#define STRIPE_SIZE_MIN ( (unsigned) lvm_getpagesize() >> SECTOR_SHIFT)	/* PAGESIZE in sectors */
+/*
+ * The dm-stripe target does not require the stripe size to be a multiple of
+ * the page size, so allow 4 KiB stripes to make striped LVs portable across
+ * architectures with different page sizes.  MD RAID levels 4/5/6/10 and DAX
+ * devices still require a stripe size of at least the page size, see
+ * segtype_stripe_size_min() and the DAX check in the striped target.
+ */
+#define STRIPE_SIZE_MIN ( 4096 >> SECTOR_SHIFT)	/* 4 KB in sectors */
 #define STRIPE_SIZE_MAX ( 512L * 1024L >> SECTOR_SHIFT)	/* 512 KB in sectors */
 #define STRIPE_SIZE_LIMIT ((UINT_MAX >> 2) + 1)
 #define MAX_EXTENT_SIZE ((uint32_t) -1)
@@ -156,6 +164,7 @@
 #define LV_VDO			UINT64_C(0x0000000020000000)    /* LV - Internal use only */
 #define LV_VDO_POOL		UINT64_C(0x0000000040000000)    /* LV - Internal use only */
 #define LV_VDO_POOL_DATA	UINT64_C(0x8000000000000000)    /* LV - Internal use only */
+#define LV_VDOFORMAT		UINT64_C(0x0000000000000800)	/* LV - VDO pool passes format args */
 
 #define LV_CACHE_VOL		UINT64_C(0x0010000000000000)	/* LV - also a PV flag */
 #define LV_CACHE_USES_CACHEVOL	UINT64_C(0x4000000000000000)	/* LV - also a PV flag */
@@ -217,7 +226,7 @@
 #define VGMETADATACOPIES_ALL UINT32_MAX
 #define VGMETADATACOPIES_UNMANAGED 0
 
-#define vg_is_archived(vg)	(((vg)->status & ARCHIVED_VG) ? 1 : 0)
+#define vg_is_archived(vg)	((vg_status((vg)) & ARCHIVED_VG) ? 1 : 0)
 
 /* lv_is_locked() is now a function in lv.c to check sub-LVs too */
 #define lv_is_partial(lv)	(((lv)->status & PARTIAL_LV) ? 1 : 0)
@@ -511,7 +520,7 @@ struct lv_segment {
 	struct logical_volume *cow;
 	struct dm_list origin_list;
 	uint32_t region_size;	/* For raids/mirrors - in sectors */
-	uint32_t data_copies;	/* For RAID: number of data copies (e.g. 3 for RAID 6 */
+	uint32_t data_copies;	/* For RAID: number of data copies (e.g. 3 for RAID 6) */
 	uint32_t extents_copied;/* Number of extents synced for raids/mirrors */
 	struct logical_volume *log_lv;
 	struct lv_segment *pvmove_source_seg;
@@ -752,10 +761,10 @@ int lv_extend_policy_calculate_percent(struct logical_volume *lv,
                                        uint32_t *amount, uint32_t *meta_amount);
 
 struct volume_group *vg_read(struct cmd_context *cmd, const char *vg_name, const char *vgid,
-			     uint32_t read_flags, struct lockd_state *lks,
+			     uint32_t vg_read_flags, struct lockd_state *lks,
 			     uint32_t *error_flags, struct volume_group **error_vg);
 struct volume_group *vg_read_for_update(struct cmd_context *cmd, const char *vg_name,
-			 const char *vgid, uint32_t read_flags);
+			 const char *vgid, uint32_t vg_read_flags);
 struct volume_group *vg_read_orphans(struct cmd_context *cmd, const char *orphan_vgname);
 
 /* pe_start and pe_end relate to any existing data so that new metadata
@@ -858,7 +867,7 @@ int lv_extend(struct logical_volume *lv,
 int lv_remove(struct logical_volume *lv);
 
 /* historical_glv must be part of lv->vg->historical_lvs */
-int historical_glv_remove(struct generic_logical_volume *historical_glv);
+int historical_glv_remove(struct generic_logical_volume *glv);
 
 int lv_remove_single(struct cmd_context *cmd, struct logical_volume *lv,
 		     force_t force, int suppress_remove_message);
@@ -899,6 +908,16 @@ int recalculate_pool_chunk_size_with_dev_hints(struct logical_volume *pool_lv,
 					       unsigned chunk_size_calc_policy);
 int validate_cache_chunk_size(struct cmd_context *cmd, uint32_t chunk_size);
 int validate_thin_pool_chunk_size(struct cmd_context *cmd, uint32_t chunk_size);
+int validate_thin_pool_chunk_size_for_activation(struct cmd_context *cmd,
+						 const struct logical_volume *lv,
+						 uint32_t chunk_size,
+						 unsigned thin_target_attr);
+void warn_thin_pool_chunk_size_not_pow2(struct cmd_context *cmd,
+					const char *pool_name,
+					uint32_t chunk_size);
+int confirm_thin_pool_chunk_size_not_pow2_cmdline(struct cmd_context *cmd,
+						  uint32_t chunk_size,
+						  const char *action);
 int validate_pool_chunk_size(struct cmd_context *cmd, const struct segment_type *segtype, uint32_t chunk_size);
 int validate_thin_external_origin(const struct logical_volume *lv,
 				  const struct logical_volume *pool_lv);
@@ -1169,6 +1188,7 @@ int lv_is_integrity_origin(const struct logical_volume *lv);
 int integrity_settings_to_str_list(struct dm_integrity_settings *settings, struct dm_list *result, struct dm_pool *mem);
 
 int lv_is_merging_cow(const struct logical_volume *cow);
+int validate_snapshot_chunk_size(uint32_t chunk_size);
 uint32_t cow_max_extents(const struct logical_volume *origin, uint32_t chunk_size);
 int cow_has_min_chunks(const struct volume_group *vg, uint32_t cow_extents, uint32_t chunk_size);
 int lv_is_cow_covering_origin(const struct logical_volume *lv);
@@ -1243,7 +1263,7 @@ uint32_t lv_mirror_count(const struct logical_volume *lv);
 
 uint32_t adjusted_mirror_region_size(struct cmd_context *cmd,
 				     uint32_t extent_size, uint32_t extents,
-				     uint32_t region_size, int internal, int clustered);
+				     uint32_t region_size, int internal);
 
 int remove_mirror_images(struct logical_volume *lv, uint32_t num_mirrors,
 			 int (*is_removable)(struct logical_volume *, void *),
@@ -1268,7 +1288,7 @@ int reconfigure_mirror_images(struct lv_segment *mirrored_seg, uint32_t num_mirr
 int collapse_mirrored_lv(struct logical_volume *lv);
 
 const struct logical_volume *find_active_pvmoved_lv(const struct logical_volume *pvmoved_lv);
-int activate_pvmoved_lvs(const struct dm_list *lvs);
+int refresh_pvmoved_lvs(const struct dm_list *lvs);
 
 /* ++  metadata/raid_manip.c */
 struct lv_status_raid {
@@ -1366,7 +1386,7 @@ struct logical_volume *lv_cache_create(struct logical_volume *pool_lv,
 				       struct logical_volume *origin_lv);
 int lv_cache_wait_for_clean(struct logical_volume *cache_lv, int *is_clean);
 int lv_cache_remove(struct logical_volume *cache_lv);
-int lv_detach_writecache_cachevol(struct logical_volume *cache_lv, int noflush);
+int lv_detach_writecache_cachevol(struct logical_volume *lv, int noflush);
 int wipe_cache_pool(struct logical_volume *cache_pool_lv);
 /* --  metadata/cache_manip.c */
 
@@ -1388,6 +1408,20 @@ const char *get_vdo_index_state_name(enum dm_vdo_index_state state);
 const char *get_vdo_operating_mode_name(enum dm_vdo_operating_mode mode);
 const char *get_vdo_write_policy_name(enum dm_vdo_write_policy policy);
 uint64_t get_vdo_pool_virtual_size(const struct lv_segment *vdo_pool_seg);
+struct vdo_pool_info {
+	uint64_t data_blocks;
+	uint64_t uds_blocks;
+	uint64_t min_pool_sectors;
+	unsigned slab_count;
+	unsigned data_per_slab;
+};
+
+int vdo_pool_info(uint64_t pool_size_sectors,
+		  const struct dm_vdo_target_params *vtp,
+		  struct vdo_pool_info *info);
+int vdo_pool_validate_size(struct logical_volume *lv,
+			   const struct dm_vdo_target_params *vtp,
+			   struct vdo_pool_info *info);
 int update_vdo_pool_virtual_size(struct lv_segment *vdo_pool_seg);
 uint32_t get_vdo_pool_max_extents(const struct dm_vdo_target_params *vtp,
 				  uint32_t extent_size);

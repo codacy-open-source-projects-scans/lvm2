@@ -146,14 +146,14 @@ int lm_init_vg_dlm(char *ls_name, char *vg_name, uint32_t flags, char *vg_args)
 	if (rv < 0)
 		return -EMANAGER;
 
-	if (strlen(clustername) + strlen(lock_args_version) + 2 > MAX_ARGS) {
+	if (strlen(clustername) + strlen(lock_args_version) + 2 > MAX_ARGS+1) {
 		log_error("init_vg_dlm args too long");
 		return -EARGS;
 	}
 
-	rv = snprintf(vg_args, MAX_ARGS, "%s:%s", lock_args_version, clustername);
-	if (rv >= MAX_ARGS)
-		log_debug("init_vg_dlm vg_args may be too long %d %s", rv, vg_args);
+	rv = dm_snprintf(vg_args, MAX_ARGS+1, "%s:%s", lock_args_version, clustername);
+	if (rv < 0)
+		log_debug("init_vg_dlm vg_args may be too long %s", vg_args);
 	rv = 0;
 
 	log_debug("init_vg_dlm done %s vg_args %s", ls_name, vg_args);
@@ -348,7 +348,7 @@ int lm_rem_lockspace_dlm(struct lockspace *ls, int free_vg)
 	 * to tell any other nodes to leave the lockspace.  This is not really
 	 * necessary since there should be no harm in having an unused
 	 * lockspace sitting around.  A new "notification lock" would need to
-	 * be added with a callback to signal this. 
+	 * be added with a callback to signal this.
 	 */
 
 	rv = dlm_release_lockspace(ls->name, lmd->dh, 1);
@@ -595,7 +595,7 @@ int lm_lock_dlm(struct lockspace *ls, struct resource *r, int ld_mode,
 	}
 
 	/*
-	 * The dlm lvb bug means that converting NL->EX will not return 
+	 * The dlm lvb bug means that converting NL->EX will not return
 	 * the latest lvb, so we have to convert NL->PR->EX to reread it.
 	 */
 	if (dlm_has_lvb_bug && (ld_mode == LD_LK_EX)) {

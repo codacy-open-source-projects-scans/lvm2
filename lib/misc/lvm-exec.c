@@ -112,6 +112,12 @@ int exec_cmd(struct cmd_context *cmd, const char *const argv[],
 	return 1;
 }
 
+/*
+ * Static analyzer can't track FD aliasing through dup2().
+ * When null_fd == fd, the FD is not leaked - it's still accessible via fd.
+ * The fd parameter comes from controlled call sites (STDIN/STDOUT/STDERR).
+ */
+GCC_SUPPRESS_FD_WARNINGS
 static int _reopen_fd_to_null(int fd)
 {
 	int null_fd;
@@ -141,6 +147,7 @@ out:
 
 	return r;
 }
+GCC_UNSUPPRESS_WARNINGS
 
 FILE *pipe_open(struct cmd_context *cmd, const char *const argv[],
 		int sync_needed, struct pipe_data *pdata)
@@ -154,7 +161,7 @@ FILE *pipe_open(struct cmd_context *cmd, const char *const argv[],
 
 	if (pipe(pipefd)) {
 		log_sys_error("pipe", "");
-		return 0;
+		return NULL;
 	}
 
 	log_verbose("Piping:%s", _verbose_args(argv, buf, sizeof(buf)));
@@ -162,12 +169,14 @@ FILE *pipe_open(struct cmd_context *cmd, const char *const argv[],
 	if ((pdata->pid = fork()) == -1) {
 		log_sys_error("fork", "");
 		if (close(pipefd[0]))
-			log_sys_debug("close", "STDOUT");
+			log_sys_debug("close", "pipe[0]");
 		if (close(pipefd[1]))
-			log_sys_debug("close", "STDIN");
-		return 0;
+			log_sys_debug("close", "pipe[1]");
+		return NULL;
 	}
 
+	/* Static analyzer doesn't understand STDOUT_FILENO is valid after close+dup2 */
+	GCC_SUPPRESS_FD_WARNINGS
 	if (pdata->pid == 0) {
 		/* Child -> writer, convert pipe[0] to STDOUT */
 		if (!_reopen_fd_to_null(STDIN_FILENO))
@@ -186,6 +195,7 @@ FILE *pipe_open(struct cmd_context *cmd, const char *const argv[],
 		}
 		_exit(errno);
 	}
+	GCC_UNSUPPRESS_WARNINGS
 
 	/* Parent -> reader */
 	if (close(pipefd[1 /*write*/])) {
@@ -196,9 +206,9 @@ FILE *pipe_open(struct cmd_context *cmd, const char *const argv[],
 	}
 
 	if (!(pdata->fp = fdopen(pipefd[0 /*read*/],  "r"))) {
-		log_sys_error("fdopen", "STDIN");
+		log_sys_error("fdopen", "pipe[0]");
 		if (close(pipefd[0]))
-			log_sys_error("close", "STDIN");
+			log_sys_error("close", "pipe[0]");
 		if (kill(pdata->pid, SIGKILL))
 			log_sys_error("kill", "");
 		else if (waitpid(pdata->pid, NULL, 0) != pdata->pid)
@@ -212,16 +222,22 @@ FILE *pipe_open(struct cmd_context *cmd, const char *const argv[],
 int pipe_close(struct pipe_data *pdata)
 {
 	int status;
+	int r = 1;
 
-	if (fclose(pdata->fp))
-		log_sys_error("fclose", "STDIN");
+	if (fclose(pdata->fp)) {
+		log_sys_error("fclose", "pipe");
+		r = 0;
+	}
 
 	if (waitpid(pdata->pid, &status, 0) != pdata->pid) {
 		log_sys_error("waitpid", "");
 		return 0;
 	}
 
-	return (status == 0) ? 1 : 0;
+	if (!WIFEXITED(status) || WEXITSTATUS(status))
+		r = 0;
+
+	return r;
 }
 
 int prepare_exec_args(struct cmd_context *cmd,

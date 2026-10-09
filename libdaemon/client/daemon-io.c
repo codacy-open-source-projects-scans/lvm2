@@ -16,6 +16,7 @@
 
 #include <errno.h>
 #include <poll.h>
+#include <string.h>
 #include <unistd.h>
 
 /* Maximum incoming message size (16 MiB) to prevent unbounded allocation */
@@ -55,12 +56,14 @@ int buffer_read(int fd, struct buffer *buffer) {
 		} else if (result == 0) {
 			errno = ECONNRESET;
 			return 0; /* we should never encounter EOF here */
-		} else if (result < 0 && (errno == EAGAIN ||
-					  errno == EINTR || errno == EIO)) {
-			/* ignore the result, this is just a glorified sleep */
-			(void) poll(&pfd, 1, -1);
-		} else if (result < 0)
-			return 0;
+		} else {
+			/* result < 0 */
+			if (errno == EAGAIN || errno == EINTR || errno == EIO)
+				/* ignore the result, this is just a glorified sleep */
+				(void) poll(&pfd, 1, -1);
+			else
+				return 0;
+		}
 	}
 
 	return 1;

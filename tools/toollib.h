@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved. 
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2009 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_TOOLLIB_H
-#define _LVM_TOOLLIB_H
+#ifndef LVM_TOOLLIB_H
+#define LVM_TOOLLIB_H
 
 #include "lib/metadata/metadata-exported.h"
 #include "lib/report/report.h"
@@ -76,27 +76,27 @@ struct processing_handle {
 	void *custom_handle;
 };
 
-typedef int (*process_single_vg_fn_t) (struct cmd_context * cmd,
-				       const char *vg_name,
-				       struct volume_group * vg,
+typedef int (*process_single_vg_fn_t)(struct cmd_context *cmd,
+				      const char *vg_name,
+				      struct volume_group *vg,
+				      struct processing_handle *handle);
+typedef int (*process_single_pv_fn_t)(struct cmd_context *cmd,
+				      struct volume_group *vg,
+				      struct physical_volume *pv,
+				      struct processing_handle *handle);
+typedef int (*process_single_label_fn_t)(struct cmd_context *cmd,
+					 struct label *label,
+					 struct processing_handle *handle);
+typedef int (*process_single_lv_fn_t)(struct cmd_context *cmd,
+				      struct logical_volume *lv,
+				      struct processing_handle *handle);
+typedef int (*process_single_seg_fn_t)(struct cmd_context *cmd,
+				       struct lv_segment *seg,
 				       struct processing_handle *handle);
-typedef int (*process_single_pv_fn_t) (struct cmd_context *cmd,
-				  struct volume_group *vg,
-				  struct physical_volume *pv,
-				  struct processing_handle *handle);
-typedef int (*process_single_label_fn_t) (struct cmd_context *cmd,
-					  struct label *label,
-					  struct processing_handle *handle);
-typedef int (*process_single_lv_fn_t) (struct cmd_context *cmd,
-				  struct logical_volume *lv,
-				  struct processing_handle *handle);
-typedef int (*process_single_seg_fn_t) (struct cmd_context * cmd,
-					struct lv_segment * seg,
-					struct processing_handle *handle);
-typedef int (*process_single_pvseg_fn_t) (struct cmd_context * cmd,
-					  struct volume_group * vg,
-					  struct pv_segment * pvseg,
-					  struct processing_handle *handle);
+typedef int (*process_single_pvseg_fn_t)(struct cmd_context *cmd,
+					 struct volume_group *vg,
+					 struct pv_segment *pvseg,
+					 struct processing_handle *handle);
 
 /*
  * Called prior to process_single_lv() to decide if the LV should be
@@ -105,16 +105,16 @@ typedef int (*process_single_pvseg_fn_t) (struct cmd_context * cmd,
  * This can evaluate the combination of command definition and
  * the LV object to decide if the combination is allowed.
  */
-typedef int (*check_single_lv_fn_t) (struct cmd_context *cmd,
-				     struct logical_volume *lv,
-				     struct processing_handle *handle,
-				     int lv_is_named_arg);
+typedef int (*check_single_lv_fn_t)(struct cmd_context *cmd,
+				    struct logical_volume *lv,
+				    struct processing_handle *handle,
+				    int lv_is_named_arg);
 
 int process_each_vg(struct cmd_context *cmd,
-	            int argc, char **argv,
+		    int argc, char **argv,
 		    const char *one_vgname,
 		    struct dm_list *use_vgnames,
-		    uint32_t flags,
+		    uint32_t read_flags,
 		    int include_internal,
 		    struct processing_handle *handle,
 		    process_single_vg_fn_t process_single_vg);
@@ -137,7 +137,7 @@ int process_each_segment_in_pv(struct cmd_context *cmd,
 
 int process_each_lv(struct cmd_context *cmd, int argc, char **argv,
 		    const char *one_vgname, const char *one_lvname,
-		    uint32_t flags, struct processing_handle *handle,
+		    uint32_t read_flags, struct processing_handle *handle,
 		    check_single_lv_fn_t check_single_lv,
 		    process_single_lv_fn_t process_single_lv);
 
@@ -215,7 +215,7 @@ int get_stripe_params(struct cmd_context *cmd, const struct segment_type *segtyp
 
 int get_cache_params(struct cmd_context *cmd,
 		     uint32_t *chunk_size,
-		     cache_metadata_format_t *format,
+		     cache_metadata_format_t *cache_metadata_format,
 		     cache_mode_t *cache_mode,
 		     const char **name,
 		     struct dm_config_tree **settings);
@@ -227,7 +227,7 @@ int get_vdo_settings(struct cmd_context *cmd,
 		     int *updated);
 
 int get_writecache_settings(struct cmd_context *cmd, struct dm_writecache_settings *settings,
-                            uint32_t *block_size_sectors);
+			    uint32_t *block_size_sectors);
 
 int get_integrity_settings(struct cmd_context *cmd, struct dm_integrity_settings *settings);
 
@@ -244,13 +244,13 @@ int validate_restricted_lvname_param(struct cmd_context *cmd, const char **vg_na
 				     const char **lv_name);
 
 int lvremove_single(struct cmd_context *cmd, struct logical_volume *lv,
-                    struct processing_handle *handle __attribute__((unused)));
+		    struct processing_handle *handle);
 
 int get_lvt_enum(struct logical_volume *lv);
 
 int get_rootvg_dev_uuid(struct cmd_context *cmd, char **dm_uuid_out);
 
 int persist_start_include(struct cmd_context *cmd, struct volume_group *vg,
-                          int autoactivate, int autolockstart, const char *remkey);
+			  int autoactivate, int autolockstart, const char *remkey);
 
 #endif

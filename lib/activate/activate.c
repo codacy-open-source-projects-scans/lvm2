@@ -26,6 +26,7 @@
 #include "dev_manager.h"
 #include "lib/datastruct/str_list.h"
 #include "lib/config/config.h"
+#include "lib/locking/locking.h"
 #include "lib/metadata/segtype.h"
 #include "lib/misc/sharedlib.h"
 #include "lib/misc/lvm-signal.h"
@@ -164,7 +165,7 @@ out:
 	return 0;
 }
 
-int lv_passes_auto_activation_filter(struct cmd_context *cmd, struct logical_volume *lv)
+int lv_passes_auto_activation_filter(struct cmd_context *cmd, const struct logical_volume *lv)
 {
 	const struct dm_config_node *cn;
 
@@ -228,7 +229,7 @@ int target_present(struct cmd_context *cmd, const char *target_name,
 {
 	return 0;
 }
-int lvm_dm_prefix_check(int major, int minor, const char *prefix)
+int lvm_dm_prefix_check(uint32_t major, uint32_t minor, const char *prefix)
 {
 	return 0;
 }
@@ -377,10 +378,6 @@ int lv_mknodes(struct cmd_context *cmd, const struct logical_volume *lv)
 {
 	return 1;
 }
-int lv_deactivate_any_missing_subdevs(const struct logical_volume *lv)
-{
-	return 1;
-}
 int pv_uses_vg(struct physical_volume *pv,
 	       struct volume_group *vg)
 {
@@ -402,7 +399,7 @@ int lv_is_active(const struct logical_volume *lv)
 {
 	return 0;
 }
-int lv_check_transient(struct logical_volume *lv)
+int lv_check_transient(const struct logical_volume *lv)
 {
 	return 1;
 }
@@ -565,7 +562,7 @@ out:
 	return r;
 }
 
-int lvm_dm_prefix_check(int major, int minor, const char *prefix)
+int lvm_dm_prefix_check(uint32_t major, uint32_t minor, const char *prefix)
 {
 	return dev_manager_check_prefix_dm_major_minor(major, minor, prefix);
 }
@@ -592,12 +589,16 @@ static int _check_modules_builtin(struct cmd_context *cmd, const char *target)
 		return 0;
 	}
 
-	while (getline(&line, &len, fp) > 0)
-		if (strstr(line, target)) {
+	while (getline(&line, &len, fp) > 0) {
+		const char *basename = strrchr(line, '/');
+		basename = basename ? basename + 1 : line;
+		if (!strncmp(basename, target, strlen(target)) &&
+		    !strncmp(basename + strlen(target), ".ko", 3)) {
 			log_debug_activation("Found %s as built-in kernel module.", target);
 			r = 1;
 			break;
 		}
+	}
 
 	free(line);
 
@@ -630,8 +631,14 @@ int module_present(struct cmd_context *cmd, const char *target_name)
 			return 1;
 		}
 
-		if (path[i] == '/' && _check_modules_builtin(cmd, path + i + 1))
-			return 1;
+		if (path[i] == '/') {
+			char builtin[128];
+
+			if (dm_snprintf(builtin, sizeof(builtin),
+					"dm-%s", target_name) > 0 &&
+			    _check_modules_builtin(cmd, builtin))
+				return 1;
+		}
 	}
 
 #ifdef MODPROBE_CMD
@@ -1014,7 +1021,7 @@ int lv_check_not_in_use(const struct logical_volume *lv, int error_if_used)
 /*
  * Returns 1 if percent set, else 0 on failure.
  */
-int lv_check_transient(struct logical_volume *lv)
+int lv_check_transient(const struct logical_volume *lv)
 {
 	int r;
 	struct dev_manager *dm;
@@ -1132,7 +1139,7 @@ int lv_raid_data_offset(const struct logical_volume *lv, uint64_t *data_offset)
 	if (!lv_info(lv->vg->cmd, lv, 0, NULL, 0, 0))
 		return 0;
 
-	log_debug_activation("Checking raid data offset and dev sectors for LV %s.",
+	log_debug_activation("Checking raid data offset for LV %s.",
 			     display_lvname(lv));
 
 	if (!lv_raid_status(lv, &raid_status))
@@ -1595,7 +1602,13 @@ static int _lv_deactivate(const struct logical_volume *lv)
 	int r;
 	struct dev_manager *dm;
 
-	if (!(dm = dev_manager_create(lv->vg->cmd, lv->vg->name, 1)))
+	/*
+	 * Do not track pvmove deps for deactivation.  The deps tracking
+	 * adds all LVs participating in pvmove to the tree, which is
+	 * needed for suspend/resume (atomic table reload) but causes
+	 * deactivation to cascade and remove LVs we want to keep active.
+	 */
+	if (!(dm = dev_manager_create(lv->vg->cmd, lv->vg->name, 0)))
 		return_0;
 
 	if (!(r = dev_manager_deactivate(dm, lv)))
@@ -2588,16 +2601,6 @@ int lv_deactivate(struct cmd_context *cmd, const char *lvid_s, const struct logi
 
 	critical_section_inc(cmd, "deactivating");
 	r = _lv_deactivate(lv);
-
-	/*
-	 * Remove any transiently activated error
-	 * devices which aren't used any more.
-	 */
-	if (r && lv_is_raid(lv) && !lv_deactivate_any_missing_subdevs(lv)) {
-		log_error("Failed to remove temporary SubLVs from %s",
-			  display_lvname(lv));
-		r = 0;
-	}
 	critical_section_dec(cmd, "deactivated");
 
 	if (!lv_info(cmd, lv, 0, &info, 0, 0) || info.exists) {
@@ -2793,86 +2796,6 @@ int lv_mknodes(struct cmd_context *cmd, const struct logical_volume *lv)
 }
 
 /*
- * Remove any existing, closed mapped device by @name.
- *
- * TODO: missing devices should be tracked in the DM tree and removed
- * automatically by the CLEAN action instead of this name-guessing hack.
- * Current approach may leak devices if they are dropped via lvconvert
- * or other operations that don't call lv_deactivate_any_missing_subdevs().
- */
-static int _remove_dm_dev_by_name(const char *name)
-{
-	int r = 0;
-	uint32_t cookie;
-	struct dm_task *dmt;
-	struct dm_info info;
-
-	if (!(dmt = dm_task_create(DM_DEVICE_INFO)))
-		return_0;
-
-	/* Check, if the device exists. */
-	if (dm_task_set_name(dmt, name) && dm_task_run(dmt) && dm_task_get_info(dmt, &info)) {
-		dm_task_destroy(dmt);
-
-		/* Ignore non-existing or open dm devices */
-		if (!info.exists || info.open_count)
-			return 1;
-
-		if (!(dmt = dm_task_create(DM_DEVICE_REMOVE)))
-			return_0;
-
-		cookie = fs_get_cookie();
-		if (dm_task_set_name(dmt, name) &&
-		    dm_task_set_cookie(dmt, &cookie, 0))
-			r = dm_task_run(dmt);
-		fs_set_cookie(cookie);
-	}
-
-	dm_task_destroy(dmt);
-
-	return r;
-}
-
-/* Work all segments of @lv removing any existing, closed "*-missing_N_0" sub devices. */
-static int _lv_remove_any_missing_subdevs(struct logical_volume *lv)
-{
-	char name[NAME_LEN];
-	struct lv_segment *seg;
-	uint32_t seg_no = 0;
-
-	if (lv) {
-		dm_list_iterate_items(seg, &lv->segments) {
-			if (dm_snprintf(name, sizeof(name), "%s-%s-missing_%u_0", seg->lv->vg->name, seg->lv->name, seg_no) < 0)
-				return_0;
-			if (!_remove_dm_dev_by_name(name))
-				return_0;
-
-			seg_no++;
-		}
-	}
-
-	return 1;
-}
-
-/* Remove any "*-missing_*" sub devices added by the activation layer for an rmeta/rimage missing PV mapping */
-int lv_deactivate_any_missing_subdevs(const struct logical_volume *lv)
-{
-	uint32_t s;
-	struct lv_segment *seg = first_seg(lv);
-
-	for (s = 0; s < seg->area_count; s++) {
-		if (seg_type(seg, s) == AREA_LV &&
-		    !_lv_remove_any_missing_subdevs(seg_lv(seg, s)))
-			return_0;
-		if (seg->meta_areas && seg_metatype(seg, s) == AREA_LV &&
-		    !_lv_remove_any_missing_subdevs(seg_metalv(seg, s)))
-			return_0;
-	}
-
-	return 1;
-}
-
-/*
  * Does PV use VG somewhere in its construction?
  * Returns 1 on failure.
  */
@@ -2900,7 +2823,6 @@ void activation_release(void)
 void activation_exit(void)
 {
 	activation_release();
-	dev_manager_exit();
 }
 #endif
 
@@ -3025,6 +2947,8 @@ int deactivate_lv_with_sub_lv(const struct logical_volume *lv)
 int activate_lv_temporary(struct cmd_context *cmd, struct logical_volume *lv)
 {
 	int r;
+
+	sync_local_dev_names(cmd);
 
 	lv->status |= LV_TEMPORARY;
 	r = activate_lv(cmd, lv);

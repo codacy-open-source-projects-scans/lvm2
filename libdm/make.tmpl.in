@@ -43,6 +43,7 @@ GENHTML = @GENHTML@
 LN_S = @LN_S@
 SED = @SED@
 CFLOW_CMD = @CFLOW_CMD@
+CPPCHECK_CMD = @CPPCHECK_CMD@
 AWK = @AWK@
 CHMOD = @CHMOD@
 EGREP = @EGREP@
@@ -63,6 +64,15 @@ STATIC_LDFLAGS += @STATIC_LDFLAGS@
 CPPFLAGS ?= @CPPFLAGS@
 CLDFLAGS += @CLDFLAGS@
 ELDFLAGS += @ELDFLAGS@
+SANITIZER = @SANITIZER@
+SANITIZER_CFLAGS = @SANITIZER_CFLAGS@
+SANITIZER_LDFLAGS = @SANITIZER_LDFLAGS@
+ifneq ("$(SANITIZER)", "no")
+  EXTRA_EXEC_CFLAGS += $(SANITIZER_CFLAGS)
+  LIBDM_NAME = devmapper-san
+else
+  LIBDM_NAME = devmapper
+endif
 LDDEPS += @LDDEPS@
 LIB_SUFFIX = @LIB_SUFFIX@
 DL_LIBS = @DL_LIBS@
@@ -318,24 +328,29 @@ DEPS = $(top_builddir)/libdm/make.tmpl $(top_srcdir)/VERSION \
 OBJECTS = $(SOURCES:%.c=%.o) $(CXXSOURCES:%.cpp=%.o)
 POTFILES = $(SOURCES:%.c=%.pot) $(SOURCES2:%.c=%.pot)
 
-.PHONY: all pofile distclean clean cleandir cflow device-mapper
-.PHONY: install install_device-mapper install_lvm2
+.PHONY: all cleandir device-mapper
 .PHONY: install_dbus_service
 .PHONY: install_lib_shared install_dm_plugin install_lvm2_plugin
 .PHONY: install_ocf install_systemd_generators install_all_man all_man man help
 .PHONY: python_bindings install_python_bindings
-.PHONY: $(SUBDIRS) $(SUBDIRS.install) $(SUBDIRS.clean) $(SUBDIRS.distclean)
-.PHONY: $(SUBDIRS.pofile) $(SUBDIRS.cflow)
-.PHONY: $(SUBDIRS.device-mapper) $(SUBDIRS.install-device-mapper)
-.PHONY: $(SUBDIRS.generate) generate
+.PHONY: $(SUBDIRS)
+.PHONY: $(SUBDIRS.device-mapper)
 
 SUBDIRS.device-mapper := $(SUBDIRS:=.device-mapper)
-SUBDIRS.install := $(SUBDIRS:=.install)
-SUBDIRS.install_device-mapper := $(SUBDIRS:=.install_device-mapper)
-SUBDIRS.pofile := $(SUBDIRS:=.pofile)
-SUBDIRS.cflow := $(SUBDIRS:=.cflow)
-SUBDIRS.clean := $(SUBDIRS:=.clean)
-SUBDIRS.distclean := $(SUBDIRS:=.distclean)
+
+# Simple recursive SUBDIRS targets - just add name to extend
+SIMPLE_RECURSIVE_TARGETS = \
+	cflow \
+	cppcheck \
+	gccanalyze \
+	generate \
+	install \
+	install_device-mapper \
+	pofile
+
+SIMPLE_RECURSIVE_TARGETS_IGNORE = \
+	clean \
+	distclean
 
 TARGETS += $(LIB_STATIC)
 ifeq ("@SHARED_LINK@", "yes")
@@ -344,10 +359,19 @@ endif
 
 all: $(SUBDIRS) $(TARGETS)
 
-install: all $(SUBDIRS.install)
-install_device-mapper: $(SUBDIRS.install_device-mapper)
+define SIMPLE_RECURSIVE_RULE
+.PHONY: $(1) $$(SUBDIRS.$(1))
+SUBDIRS.$(1) := $$(SUBDIRS:=.$(1))
+$(1): $$(SUBDIRS.$(1))
+$$(SUBDIRS.$(1)):
+	$(2)$$(MAKE) -C $$(@:.$(1)=) $(1)
+endef
+
+$(foreach t,$(SIMPLE_RECURSIVE_TARGETS),$(eval $(call SIMPLE_RECURSIVE_RULE,$(t),)))
+$(foreach t,$(SIMPLE_RECURSIVE_TARGETS_IGNORE),$(eval $(call SIMPLE_RECURSIVE_RULE,$(t),-)))
+
+install: all
 install_device_mapper: install_device-mapper
-cflow: $(SUBDIRS.cflow)
 
 $(SUBDIRS): $(SUBDIRS.device-mapper)
 	$(MAKE) -C $@
@@ -356,29 +380,11 @@ $(SUBDIRS.device-mapper):
 	$(MAKE) -C $(@:.device-mapper=) device-mapper
 
 $(SUBDIRS.install): $(SUBDIRS)
-	$(MAKE) -C $(@:.install=) install
-
 $(SUBDIRS.install_device-mapper): device-mapper
-	$(MAKE) -C $(@:.install_device-mapper=) install_device-mapper
-
-$(SUBDIRS.clean):
-	-$(MAKE) -C $(@:.clean=) clean
-
-$(SUBDIRS.distclean):
-	-$(MAKE) -C $(@:.distclean=) distclean
-
-$(SUBDIRS.cflow):
-	$(MAKE) -C $(@:.cflow=) cflow
 
 ifeq ("@INTL@", "yes")
-pofile: $(SUBDIRS.pofile) $(POTFILES)
-
-$(SUBDIRS.pofile):
-	$(MAKE) -C $(@:.pofile=) pofile
+pofile: $(POTFILES)
 endif
-
-$(SUBDIRS.generate):
-	$(MAKE) -C $(@:.generate=) generate
 
 ifneq ("$(CFLOW_LIST_TARGET)", "")
 CLEAN_CFLOW += $(CFLOW_LIST_TARGET)
@@ -427,6 +433,30 @@ $(CFLOW_TARGET).xref: $(CFLOW_SOURCES)
 cflow: $(CFLOW_TARGET).cflow $(CFLOW_TARGET).tree $(CFLOW_TARGET).rxref $(CFLOW_TARGET).xref
 #$(CFLOW_TARGET).rtree
 endif
+endif
+
+ifneq ("$(CPPCHECK_CMD)", "")
+CPPCHECK_SOURCES = $(SOURCES) $(SOURCES2)
+CPPCHECK_INCLUDES = $(subst -include ,--include=,$(INCLUDES))
+CPPCHECK_ENABLE ?= warning,style,performance,portability
+CPPCHECK_FLAGS ?= --inconclusive --check-level=exhaustive -q
+CPPCHECK_SUPPRESS ?= missingIncludeSystem unusedFunction \
+	clarifyCalculation constParameterPointer variableScope \
+	constVariablePointer constParameterCallback allocaCalled \
+	varFuncNullUB
+ifneq ("$(CPPCHECK_SOURCES)", " ")
+cppcheck:
+	$(CPPCHECK_CMD) --enable=$(CPPCHECK_ENABLE) \
+	 $(CPPCHECK_FLAGS) \
+	 $(addprefix --suppress=,$(CPPCHECK_SUPPRESS)) \
+	 $(CPPCHECK_INCLUDES) $(DEFS) $(CPPCHECK_SOURCES)
+endif
+endif
+
+GCCANALYZE_SOURCES = $(SOURCES) $(SOURCES2)
+ifneq ("$(GCCANALYZE_SOURCES)", " ")
+gccanalyze: $(GCCANALYZE_SOURCES)
+	$(CC) -fanalyzer -c $(INCLUDES) $(VALGRIND_CFLAGS) $(PROGS_CFLAGS) $(DEFS) $(WFLAGS) $(WCFLAGS) $(CFLAGS) $(CPPFLAGS) $(GCCANALYZE_SOURCES)
 endif
 
 .LIBPATTERNS = lib%.so lib%.a
@@ -522,9 +552,9 @@ ifneq (,$(firstword $(CLEAN_DIRS)))
 endif
 	$(Q) $(RM) $(OBJECTS) $(TARGETS) $(CLEAN_TARGETS) core
 
-clean: $(SUBDIRS.clean) cleandir
+clean: cleandir
 
-distclean: cleandir $(SUBDIRS.distclean)
+distclean: cleandir
 	$(SHOW) "    [DISTCLEAN]"
 ifneq (,$(firstword $(DISTCLEAN_DIRS)))
 	$(Q) $(RM) -r $(DISTCLEAN_DIRS)

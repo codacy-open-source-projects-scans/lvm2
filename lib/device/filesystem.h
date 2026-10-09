@@ -12,8 +12,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _FILESYSTEM_H
-#define _FILESYSTEM_H
+#ifndef LVM_FILESYSTEM_H
+#define LVM_FILESYSTEM_H
 
 #include "lib/device/device.h"
 
@@ -33,7 +33,7 @@ struct fs_info {
 	char fs_dev_path[PATH_MAX]; /* usually lv dev, can be crypt dev */
 	unsigned int fs_block_size_bytes; /* 512 or 4k */
 	uint64_t fs_last_byte; /* last byte on the device used by the fs */
-	uint32_t crypt_offset_bytes; /* offset in bytes of crypt data on LV */
+	uint64_t crypt_offset_bytes; /* offset in bytes of crypt data on LV */
 	dev_t crypt_devt; /* dm-crypt device between the LV and FS */
 	uint64_t crypt_dev_size_bytes;
 

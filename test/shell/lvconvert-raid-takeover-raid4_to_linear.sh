@@ -14,7 +14,7 @@
 
 . lib/inittest --skip-with-lvmpolld
 
-which mkfs.ext4 || skip
+aux have_fs ext4 || skip
 aux have_raid 1 14 0 || skip
 
 aux prepare_vg 4 32
@@ -22,7 +22,7 @@ aux prepare_vg 4 32
 # FIXME: lvconvert leaks  'error' devices
 detect_error_leak_()
 {
-	dmsetup table -S "name=~^$vg-" | not grep "error" || \
+	dmsetup table -S "name=~^$vg-" | not grep "error" ||
 		die "Device(s) with error target should not be here."
 }
 

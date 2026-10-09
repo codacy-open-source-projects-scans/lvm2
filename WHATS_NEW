@@ -1,5 +1,102 @@
-Version 2.03.41 - 
+Version 2.03.44 - 
 ==================
+  Run build-tree binaries against build libraries, not installed copies.
+  Avoid spurious dmeventd unregister errors when removing monitored snapshots.
+  Run mirror repair from dmeventd when mirror reports in-sync with failed legs.
+  Fix out-of-bounds access on an unterminated mda_header raw_locns (BZ2510937).
+  Log open failures at debug for devices excluded after scan I/O errors.
+  Fix blkdeactivate to exit 0 when devices stay mounted by policy.
+  Fix blkdeactivate -l wholevg when another LV in the VG stays mounted.
+  Fix blkdeactivate exit status on failed deactivation or mpath queueing.
+  Fix blkdeactivate umount for paths with spaces or lsblk hex escapes.
+  Update lvmdump for lvmlockd; add -A; drop lvmetad collection.
+  Harden fsadm size parsing and use mktemp for temporary mount dirs.
+  Ignore _FSADM_YES from the environment; pass --yes only from the CLI.
+  Fix fsadm fsck exit codes and mount detection via /proc/self/mountinfo.
+  Harden lvm_import_vdo YAML and stat parsing against shell injection.
+  Use mktemp in lvm_import_vdo; validate TMPDIR and tool binary overrides.
+  Harden lvresize_fs_helper temp mounts, signal cleanup, and TMPDIR checks.
+  Validate lvresize_fs_helper resize sizes and value-taking options.
+  Fix lvresize_fs_helper btrfs, e2fsck handling, and --fsextend/--fsreduce.
+  Prevent redundant device access after scan I/O errors (DEV_SCAN_NOT_READ).
+  Fix pvscan autoactivation when DEVLINKS symlinks are not yet created.
+
+Version 2.03.43 - 30th September 2026
+=====================================
+  Wipe stale signatures before formatting a VDO data LV on thin storage.
+  Warn on non-power-of-2 thin pool chunk size; prompt when --chunksize is used.
+  Fix lvmpolld shutdown when reaping a finished client thread.
+  Fix dmeventd raid repair after partial replacement or resync completion.
+  Retry failed dmeventd snapshot extension with exponential backoff.
+  Fix dmeventd snapshot threshold advance when lvextend failed.
+  Fix dmeventd snapshot unmount on Invalid/Overflow, not 100% usage alone.
+  Reject undersized --pooldatavdo conversion before allocating pool metadata.
+  Allow lvchange --refresh and properties on hidden thin, cache, and pool sub LVs.
+  Allow 4K stripe size smaller than page size (except on DAX and MD RAID).
+  Set recursion limit to 1024 LVs when processing device tree.
+  Remove cmirrord and clustered mirror log daemon support.
+  Remove legacy vgimportclone.sh script (superseded by native vgimportclone).
+  Respect /run/mdadm/creating-<md_dev_name> in 69-dm-lvm.rules.
+  Add `lvmconfig --edit Section/Field=Value` to set an lvm.conf setting.
+  Add `lvmconfig --edit Section/Field=-` to remove an lvm.conf setting.
+  Fix use-after-free of host tag list on toolcontext refresh.
+  Fix memleak of config tree list nodes on toolcontext refresh.
+  Fix lvmconfig output of merged and unregistered config nodes.
+  Recurse into subsections when merging config trees.
+  Make lvmpersist reject non-block devices and unsupported device types.
+  Make lvmpersist validate `--vg`/`--device` and key options before use.
+  Make lvmpersist check for required PR tools (sg_persist, nvme, mpathpersist, jq).
+  Make lvmpersist clean up registered keys when interrupted during start/takeover.
+  Make lvmpersist report failures from start, stop, clear, remove and query commands.
+  Fix lvmpersist `--vg` device list splitting to avoid pathname expansion.
+
+Version 2.03.42 - 06th August 2026
+==================================
+  Add `--lockopt retries=N` to lvmlockd.
+  Add `--lockopt removeretry=SECONDS` to lvmlockd to retry vgremove.
+  Use lockd_lv lock probes for pvmove holder availability in shared VGs.
+  Auto-revert metadata when initial pvmove mirror activation fails.
+  Refuse activation of pvmove-locked LV when pvmove runs on another node.
+  Allow pvmove --abort without args when using lvmlockd.
+  Add cluster lock lifecycle for pvmove LV in shared VGs.
+  Add support for pvmove in a shared VG.
+  Allow lvremove -f to remove pvmove-locked LVs after interrupted pvmove.
+  Handle active pvmove during vgchange -an with force flags.
+  Fix pvmove completion to use suspend+resume for DM table reload.
+  Fix deactivation cascade during active pvmove.
+  Support inactive LVs in pvmove with metadata-only mirror insertion.
+  Kill orphaned polling process on pvmove --abort.
+  Support formatting vdo volumes with kernel vdo target (version >= 9.2).
+  Fix VDO index_memory_size_mb quantization and report minimum required pool size.
+  Add vdo_format.c with pre-format logical size computation for kernel format.
+  Add --enable-asan/--enable-tsan to build with sanitizer options.
+  Mirror cleans orphaned missing DM nodes on image removal.
+  Splitcache deactivates individually activated component.
+  Fix memleak in vgimportclone and vg_write_commit_bad_mdas().
+  Fix autoactivation on top of MD and loop devices if udev db records incomplete.
+  Make MD device ready state check in udev to be in sync with MD udev rules.
+
+Version 2.03.41 - 15th May 2026
+===============================
+  Allow `lvchange --syncaction repair` on RAID LVs with integrity.
+  Fix adopt result routing in lvmlockd for lockspace start actions. (2.03.25)
+  Fix gcd division-by-zero and lcm overflow in lvm-maths.
+  Fix dual AUTOTYPE matching logic in lvmcmdline.
+  Fix nr_dirty tracking, underflows and error-path leak in bcache.
+  Fix child comparison in compare_config.
+  Fix cross-endian raw_locn flags interpretation in format_text.
+  Fix inverted strstr check in remove_layer_from_lv layer rename.
+  Improve radix-tree functions.
+  Unlink temp file on lock failure in create_temp_name.
+  Verify /dev/urandom is device before reading.
+  Add asymmetric length check in compare_value.
+  Add thinpooldata to get_lvt_enum in toollib.
+  Clear DEV_FILTERED_IS_LV before re-evaluating usable filter.
+  Add missing FWRAID case to dev_filtered_reason in lvmcache.
+  Reset wwid_buf between duplicate device iterations in lvmcache.
+  Read cache_pool_max_chunks as 64bit number.
+  Add cppcheck and gccanalyze make targets.
+  Require exclusive lock on origin for snapshot merge.
 
 Version 2.03.40 - 28th April 2026
 =================================

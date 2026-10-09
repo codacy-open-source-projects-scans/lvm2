@@ -41,6 +41,57 @@
 #include <dirent.h>
 
 /*
+ * Devices are only checked for partition tables if their minor number
+ * is a multiple of the number corresponding to their type below
+ * i.e. this gives the granularity of whole-device minor numbers.
+ * Use 1 if the device is not partitionable.
+ *
+ * The list can be supplemented with devices/types in the config file.
+ */
+const dev_known_type_t dev_known_types[] = {
+	{"sd", 16, "SCSI disk"},
+	{"ide", 64, "IDE disk"},
+	/* "mdp" must precede "md" - strncmp prefix-match would shadow it */
+	{"mdp", 1, "Partitionable MD"},
+	{"md", 1, "Multiple Disk (MD/SoftRAID)"},
+	{"loop", 1, "Loop device"},
+	{"ramdisk", 1, "RAM disk"},
+	{"device-mapper", 1, "Mapped device"},
+	{"dasd", 4, "DASD disk (IBM S/390, zSeries)"},
+	{"dac960", 8, "DAC960"},
+	{"nbd", 16, "Network Block Device"},
+	{"ida", 16, "Compaq SMART2"},
+	{"cciss", 16, "Compaq CCISS array"},
+	{"ubd", 16, "User-mode virtual block device"},
+	{"ataraid", 16, "ATA Raid"},
+	{"drbd", 16, "Distributed Replicated Block Device (DRBD)"},
+	{"rbd", 16, "Ceph rados object as a Linux block device"},
+	{"emcpower", 16, "EMC Powerpath"},
+	{"power2", 16, "EMC Powerpath"},
+	{"i2o_block", 16, "i2o Block Disk"},
+	{"iseries/vd", 8, "iSeries disks"},
+	{"gnbd", 1, "Network block device"},
+	{"aoe", 16, "ATA over Ethernet"},
+	{"xvd", 16, "Xen virtual block device"},
+	{"vdisk", 8, "SUN's LDOM virtual block device"},
+	{"ps3disk", 16, "PlayStation 3 internal disk"},
+	{"virtblk", 8, "VirtIO disk"},
+	{"mmc", 16, "MMC block device"},
+	{"blkext", 1, "Extended device partitions"},
+	{"fio", 16, "Fusion IO"},
+	{"mtip32xx", 16, "Micron PCIe SSD"},
+	{"vtms", 16, "Violin Memory"},
+	{"skd", 16, "STEC"},
+	{"scm", 8, "Storage Class Memory (IBM S/390)"},
+	{"bcache", 1, "bcache block device cache"},
+	{"nvme", 64, "NVM Express"},
+	{"zvol", 16, "ZFS Zvols"},
+	{"VxDMP", 16, "Veritas Dynamic Multipathing"},
+	{"zram", 1, "zram block device"},
+	{"", 0, ""}
+};
+
+/*
  * An nvme device has major number 259 (BLKEXT), minor number <minor>,
  * and reading /sys/dev/block/259:<minor>/device/dev shows a character
  * device cmajor:cminor where cmajor matches the major number of the
@@ -58,7 +109,7 @@ int dev_is_scsi(struct cmd_context *cmd, struct device *dev)
 	return major_is_scsi_device(cmd->dev_types, MAJOR(dev->dev));
 }
 
-int dm_uuid_has_prefix(char *sysbuf, const char *prefix)
+int dm_uuid_has_prefix(const char *sysbuf, const char *prefix)
 {
 	if (!strncmp(sysbuf, prefix, strlen(prefix)))
 		return 1;
@@ -67,7 +118,7 @@ int dm_uuid_has_prefix(char *sysbuf, const char *prefix)
 	 * If it's a kpartx partitioned dm device the dm uuid will
 	 * be part%d-<prefix>...  e.g. part1-mpath-abc...
 	 * Check for the prefix after the part%-
-	 */ 
+	 */
 	if (!strncmp(sysbuf, "part", 4)) {
 		const char *dash = strchr(sysbuf, '-');
 
@@ -96,7 +147,7 @@ int dev_is_lv(struct cmd_context *cmd, struct device *dev)
 	char buffer[128];
 
 	if (dev_dm_uuid(cmd, dev, buffer, sizeof(buffer)) &&
-	    !strncmp(buffer, UUID_PREFIX, sizeof(UUID_PREFIX) - 1))
+	    dm_uuid_has_prefix(buffer, UUID_PREFIX))
 		return 1;
 
 	return 0;
@@ -145,7 +196,7 @@ int dev_is_used_by_active_lv(struct cmd_context *cmd, struct device *dev, int *u
 		 * dirent->d_name is the dev name of the holder, e.g. "dm-1"
 		 * from this name, create path "/dev/dm-1" to run stat on.
 		 */
-		
+
 		if (dm_snprintf(dm_dev_path, sizeof(dm_dev_path), "%s%s", cmd->dev_dir, holder_name) < 0)
 			continue;
 
@@ -256,6 +307,8 @@ struct dev_types *create_dev_types(const char *proc_dir,
 	}
 
 	while (fgets(line, sizeof(line), pd) != NULL) {
+		/* Ensure null-termination when fgets() fills buffer completely. */
+		line[sizeof(line) - 1] = 0;
 		i = 0;
 		while (line[i] == ' ')
 			i++;
@@ -285,10 +338,10 @@ struct dev_types *create_dev_types(const char *proc_dir,
 			continue;
 
 		/* Find the start of the device major name */
-		while (line[i] != ' ' && line[i] != '\0')
-			i++;
-		while (line[i] == ' ')
-			i++;
+		for (; line[i] && line[i] != ' '; i++)
+			; /* skip non-space */
+		for (; line[i] == ' '; i++)
+			; /* skip space */
 
 		/* Major is SCSI device */
 		if (!strncmp("sd", line + i, 2) && isspace(*(line + i + 2)))
@@ -332,13 +385,14 @@ struct dev_types *create_dev_types(const char *proc_dir,
 
 		/* Go through the valid device names and if there is a
 		   match store max number of partitions */
-		for (j = 0; _dev_known_types[j].name[0]; j++) {
-			dev_len = strlen(_dev_known_types[j].name);
+		for (j = 0; dev_known_types[j].name[0]; j++) {
+			dev_len = strlen(dev_known_types[j].name);
 			if (dev_len <= strlen(line + i) &&
-			    !strncmp(_dev_known_types[j].name, line + i, dev_len) &&
+			    !strncmp(dev_known_types[j].name, line + i, dev_len) &&
+			    (!line[i + dev_len] || isspace(line[i + dev_len])) &&
 			    (line_maj < NUMBER_OF_MAJORS)) {
 				dt->dev_type_array[line_maj].max_partitions =
-					_dev_known_types[j].max_partitions;
+					dev_known_types[j].max_partitions;
 				break;
 			}
 		}
@@ -457,7 +511,7 @@ const char *dev_subsystem_name(struct dev_types *dt, struct device *dev)
 	return "";
 }
 
-int major_max_partitions(struct dev_types *dt, int major)
+int major_max_partitions(struct dev_types *dt, unsigned major)
 {
 	if (major >= NUMBER_OF_MAJORS)
 		return 0;
@@ -465,7 +519,7 @@ int major_max_partitions(struct dev_types *dt, int major)
 	return dt->dev_type_array[major].max_partitions;
 }
 
-int major_is_scsi_device(struct dev_types *dt, int major)
+int major_is_scsi_device(struct dev_types *dt, unsigned major)
 {
 	if (major >= NUMBER_OF_MAJORS)
 		return 0;
@@ -550,6 +604,7 @@ int dev_get_partition_number(struct device *dev, int *num)
 #define PART_GPT_HEADER_OFFSET_LBA 0x01
 #define PART_GPT_MAGIC 0x5452415020494645UL /* "EFI PART" string */
 #define PART_GPT_ENTRIES_FIELDS_OFFSET UINT64_C(0x48)
+#define PART_GPT_MIN_ENTRY_SIZE 128
 
 struct partition {
 	uint8_t boot_ind;
@@ -619,6 +674,7 @@ static int _has_gpt_partition_table(struct device *dev)
 {
 	unsigned int pbs, lbs;
 	uint64_t entries_start;
+	uint64_t dev_size_sectors, table_end;
 	uint32_t nr_entries, sz_entry, i;
 
 	struct {
@@ -646,13 +702,37 @@ static int _has_gpt_partition_table(struct device *dev)
 	if (le64toh(gpt_header.magic) != PART_GPT_MAGIC)
 		return 0;
 
-	entries_start = le64toh(gpt_header.part_entries_lba) * lbs;
+	entries_start = le64toh(gpt_header.part_entries_lba);
+	if (!lbs || (entries_start > (UINT64_MAX / lbs))) {
+		log_debug("GPT partition table offset overflows on %s.", dev_name(dev));
+		return 0;
+	}
+	entries_start *= lbs;
 	nr_entries = le32toh(gpt_header.nr_part_entries);
 	sz_entry = le32toh(gpt_header.sz_part_entry);
 
-	if (sz_entry < sizeof(gpt_part_entry)) {
+	if (sz_entry < PART_GPT_MIN_ENTRY_SIZE) {
 		log_debug("GPT partition entry size %u too small on %s.",
 			  sz_entry, dev_name(dev));
+		return 0;
+	}
+
+	if (!nr_entries)
+		return 0;
+
+	if (!dev_get_size(dev, &dev_size_sectors))
+		return_0;
+
+	if ((dev_size_sectors > (UINT64_MAX >> SECTOR_SHIFT)) ||
+	    ((uint64_t) nr_entries > ((UINT64_MAX - entries_start) / sz_entry))) {
+		log_debug("GPT partition table size overflows on %s.", dev_name(dev));
+		return 0;
+	}
+
+	table_end = entries_start + (uint64_t) nr_entries * sz_entry;
+	if (table_end > (dev_size_sectors << SECTOR_SHIFT)) {
+		log_debug("GPT partition table extends beyond device %s.",
+			  dev_name(dev));
 		return 0;
 	}
 
@@ -1045,7 +1125,7 @@ int fs_get_blkid(const char *pathname, struct fs_info *fsi)
 		fssize = strtoull(str, NULL, 0);
 
 	if (!blkid_probe_lookup_value(probe, "UUID", &str, &len) && len)
-		memcpy(fsi->uuid, str, UUID_LEN);
+		dm_strncpy(fsi->uuid, str, sizeof(fsi->uuid));
 
 	blkid_free_probe(probe);
 
@@ -1107,7 +1187,7 @@ static int _blkid_wipe(blkid_probe probe, struct device *dev, const char *name,
 		       uint32_t types_to_exclude, uint32_t types_no_prompt,
 		       int yes, force_t force)
 {
-	static const char _msg_wiping[] = "Wiping %s signature on %s.";
+#define _MSG_WIPING "Wiping %s signature on %s."
 	const char *offset = NULL, *type = NULL, *magic = NULL,
 		   *usage = NULL, *label = NULL, *uuid = NULL;
 	loff_t offset_value;
@@ -1176,9 +1256,9 @@ static int _blkid_wipe(blkid_probe probe, struct device *dev, const char *name,
 			log_error("Aborted wiping of %s.", type);
 			return 0;
 		}
-		log_print_unless_silent(_msg_wiping, type, name);
+		log_print_unless_silent(_MSG_WIPING, type, name);
 	} else
-		log_verbose(_msg_wiping, type, name);
+		log_verbose(_MSG_WIPING, type, name);
 
 	if (!dev_write_zeros(dev, offset_value, len)) {
 		log_error("Failed to wipe %s signature on %s.", type, name);
@@ -1531,4 +1611,3 @@ int dev_is_pmem(struct dev_types *dt, struct device *dev)
 	return 0;
 }
 #endif
-

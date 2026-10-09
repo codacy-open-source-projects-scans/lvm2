@@ -19,6 +19,7 @@
 #include "lib/activate/activate.h"
 #include "lib/commands/toolcontext.h"
 #include "lib/metadata/segtype.h"
+#include "lib/config/config.h"
 #include "lib/config/defaults.h"
 #include "lib/misc/lvm-signal.h"
 
@@ -132,9 +133,11 @@ const char *get_percent_string(percent_type_t def)
 
 static const char *_lv_name(const struct logical_volume *lv)
 {
+	const struct logical_volume *cow;
+
 	/* Never try to display names of the internal snapshot structures. */
-	if (lv_is_snapshot(lv))
-		return find_cow(lv)->name;
+	if (lv_is_snapshot(lv) && (cow = find_cow(lv)))
+		return cow->name;
 
 	return lv->name;
 }
@@ -167,7 +170,7 @@ const char *display_percent(struct cmd_context *cmd, dm_percent_t percent)
 	char *buf;
 	int r;
 
-	/* Reusing same  ring buffer we use for displaying LV names */
+	/* Reusing same ring buffer we use for displaying LV names */
 	if ((cmd->display_lvname_idx + NAME_LEN) >= sizeof((cmd->display_buffer)))
 		cmd->display_lvname_idx = 0;
 
@@ -190,7 +193,7 @@ static const char *_display_size(const struct cmd_context *cmd,
 				 uint64_t size, dm_size_suffix_t suffix_type)
 {
 	return dm_size_to_string(cmd->mem, size, cmd->current_settings.unit_type,
-				 cmd->si_unit_consistency, 
+				 cmd->si_unit_consistency,
 				 cmd->current_settings.unit_factor,
 				 cmd->current_settings.suffix,
 				 suffix_type);
@@ -314,7 +317,7 @@ void pvdisplay_full(const struct cmd_context *cmd,
 	pe_free = pv->pe_count - pv->pe_alloc_count;
 	if (pv->pe_count && (pv->status & ALLOCATABLE_PV))
 		log_print("Allocatable           yes %s",
-			  (!pe_free && pv->pe_count) ? "(but full)" : "");
+			  !pe_free ? "(but full)" : "");
 	else
 		log_print("Allocatable           NO");
 
@@ -755,7 +758,7 @@ int lvdisplay_segments(const struct logical_volume *lv)
 
 void vgdisplay_full(const struct volume_group *vg)
 {
-	uint32_t access_str;
+	uint32_t access_mode;
 	uint32_t active_pvs;
 	char uuid[64] __attribute__((aligned(8)));
 
@@ -767,12 +770,12 @@ void vgdisplay_full(const struct volume_group *vg)
 	log_print("Format                %s", vg->fid->fmt->name);
 	log_print("Metadata Areas        %u", vg_mda_count(vg));
 	log_print("Metadata Sequence No  %u", vg->seqno);
-	access_str = vg->status & (LVM_READ | LVM_WRITE);
+	access_mode = vg->status & (LVM_READ | LVM_WRITE);
 	log_print("VG Access             %s%s%s%s",
-		  access_str == (LVM_READ | LVM_WRITE) ? "read/write" : "",
-		  access_str == LVM_READ ? "read" : "",
-		  access_str == LVM_WRITE ? "write" : "",
-		  access_str == 0 ? "error" : "");
+		  access_mode == (LVM_READ | LVM_WRITE) ? "read/write" : "",
+		  access_mode == LVM_READ ? "read" : "",
+		  access_mode == LVM_WRITE ? "write" : "",
+		  access_mode == 0 ? "error" : "");
 	log_print("VG Status             %s%sresizable",
 		  vg_is_exported(vg) ? "exported/" : "",
 		  vg_is_resizeable(vg) ? "" : "NOT ");

@@ -46,7 +46,7 @@ static unsigned _is_static = 0;
 static int _udev_checking = 1;
 static int _retry_deactivation = DEFAULT_RETRY_DEACTIVATION;
 static int _activation_checks = 0;
-static uint64_t _pv_min_size = (DEFAULT_PV_MIN_SIZE_KB * 1024L >> DM_SECTOR_SHIFT);
+static uint64_t _pv_min_size = ((DEFAULT_PV_MIN_SIZE_KB * 1024L) >> DM_SECTOR_SHIFT);
 static const char *_unknown_device_name = DEFAULT_UNKNOWN_DEVICE_NAME;
 static int _io_memory_size_kb = DEFAULT_IO_MEMORY_SIZE_KB;
 
@@ -125,6 +125,8 @@ void init_background_polling(int polling)
 
 void init_ignore_suspended_devices(int ignore)
 {
+	/* Frozen when dmeventd monitoring is disabled to prevent toolcontext
+	 * re-init from overriding this setting during a dmeventd callback. */
 	if (!_disable_dmeventd_monitoring)
 		_ignore_suspended_devices = ignore;
 }

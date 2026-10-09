@@ -5,8 +5,8 @@
  * This file is released under the LGPL.
  */
 
-#ifndef _LINUX_DM_IOCTL_V4_H
-#define _LINUX_DM_IOCTL_V4_H
+#ifndef LINUX_DM_IOCTL_V4_H
+#define LINUX_DM_IOCTL_V4_H
 
 #include <stdint.h>
 
@@ -184,7 +184,7 @@ struct dm_target_spec {
  */
 struct dm_target_deps {
 	uint32_t count;	/* Array size */
-	uint32_t padding;	/* unused */
+	uint32_t padding;	/* alignment padding */
 	uint64_t dev[0];	/* out */
 };
 
@@ -209,6 +209,10 @@ struct dm_name_list {
 	 */
 };
 
+/*
+ * These flags encode three states: 0 = old kernel (UUID presence unknown),
+ * HAS_UUID = device has a UUID, DOES_NOT_HAVE_UUID = device has no UUID.
+ */
 #define DM_NAME_LIST_FLAG_HAS_UUID		1
 #define DM_NAME_LIST_FLAG_DOES_NOT_HAVE_UUID	2
 
@@ -216,10 +220,10 @@ struct dm_name_list {
  * Used to retrieve the target versions
  */
 struct dm_target_versions {
-        uint32_t next;
-        uint32_t version[3];
+	uint32_t next;
+	uint32_t version[3];
 
-        char name[0];
+	char name[0];
 };
 
 /*
@@ -373,6 +377,7 @@ enum {
  * gets closed.
  */
 #define DM_DEFERRED_REMOVE		(1 << 17) /* In/Out */
+#define DM_DEFERRED_REMOVE_FLAG		DM_DEFERRED_REMOVE
 
 /*
  * If set, the device is suspended internally.
@@ -385,4 +390,4 @@ enum {
  */
 #define DM_IMA_MEASUREMENT_FLAG	(1 << 19) /* In */
 
-#endif				/* _LINUX_DM_IOCTL_H */
+#endif				/* LINUX_DM_IOCTL_V4_H */

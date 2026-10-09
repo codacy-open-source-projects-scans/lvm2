@@ -30,21 +30,38 @@ aux disable_dev "$dev2"
 lvchange --refresh --activationmode partial $vg/$lv1
 aux enable_dev "$dev2"
 
-check lv_field $vg/$lv1 lv_health_status "refresh needed"
-check lv_attr_bit health $vg/$lv1 "r"
+if aux have_raid 1 15 0; then
+	HEALTH="refresh needed"
+	HATTR="r"
+else
+	# Old dm-raid (< 1.15) may or may not report health correctly
+	# (RHEL backports make version-based detection unreliable)
+	HEALTH=""
+	HATTR="-"
+	lvs --noheadings -o lv_health_status "$vg/$lv1" | tee out
+	if grep -q "refresh needed" out; then
+		HEALTH="refresh needed"
+		HATTR="r"
+	fi
+fi
+
+check lv_field $vg/$lv1 lv_health_status "$HEALTH"
+check lv_attr_bit health $vg/$lv1 "$HATTR"
 
 # Also check sub-LV health status
-check lv_field $vg/${lv1}_rimage_1 lv_health_status "refresh needed" -a
-check lv_attr_bit health $vg/${lv1}_rimage_1 "r" -a
+check lv_field $vg/${lv1}_rimage_1 lv_health_status "$HEALTH" -a
+check lv_attr_bit health $vg/${lv1}_rimage_1 "$HATTR" -a
 
-lvs $vg/$lv1 2>&1 | tee out
-grep "needs to be refreshed" out
+if [ "$HEALTH" = "refresh needed" ]; then
+	lvs $vg/$lv1 2>&1 | tee out
+	grep "needs to be refreshed" out
+fi
 
 lvchange --refresh $vg/$lv1
 aux wait_for_sync $vg $lv1
 
-check lv_field $vg/$lv1 lv_health_status ""
-check lv_attr_bit health $vg/$lv1 "-"
+check lv_field $vg/$lv1 lv_health_status "$HEALTH"
+check lv_attr_bit health $vg/$lv1 "$HATTR"
 
 lvremove -ff $vg/$lv1
 

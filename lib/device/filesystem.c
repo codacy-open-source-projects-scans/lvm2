@@ -20,6 +20,7 @@
 #include "lib/misc/lvm-exec.h"
 #include "lib/activate/dev_manager.h"
 #include "lib/commands/toolcontext.h"
+#include "lib/config/config.h"
 
 #include <dirent.h>
 #include <mntent.h>
@@ -56,7 +57,7 @@ static int _get_crypt_path(dev_t lv_devt, char *lv_path, char *crypt_path)
 	/* If the crypt dev is not active, there will be no LV holder. */
 	if (!(dr = opendir(holders_path))) {
 		if (errno == ENOENT)
-			log_error("Missing %s for %s.", crypt_path, lv_path);
+			log_error("Missing %s for %s.", holders_path, lv_path);
 		else
 			log_error("Cannot open %s.", holders_path);
 		return 0;
@@ -112,6 +113,11 @@ static int _fs_get_mnt(struct fs_info *fsi, dev_t devt)
 	struct stat stme;
 	FILE *fme = NULL;
 	struct mntent *me;
+	/*
+	 * st_dev of mnt_dir in btrfs is an anonymous device number,
+	 * use mnt_fsname and st_rdev instead.
+	 */
+	int is_btrfs = !strcmp(fsi->fstype, "btrfs");
 
 	/*
 	 * Note: used swap devices are not considered as mount points,
@@ -123,32 +129,28 @@ static int _fs_get_mnt(struct fs_info *fsi, dev_t devt)
 		return_0;
 
 	while ((me = getmntent(fme))) {
+		const char *stat_path = is_btrfs ? me->mnt_fsname : me->mnt_dir;
+
 		if (strcmp(me->mnt_type, fsi->fstype))
 			continue;
-		if (me->mnt_dir[0] != '/')
+		if (!me->mnt_dir || me->mnt_dir[0] != '/')
 			continue;
-		if (me->mnt_fsname[0] != '/')
+		if (!me->mnt_fsname || me->mnt_fsname[0] != '/')
 			continue;
 
-		/*
-		 * st_dev of mnt_dir in btrfs is an anonymous device number,
-		 * use mnt_fsname instead.
-		 */
-		if (!strcmp(fsi->fstype, "btrfs")) {
-			if (stat(me->mnt_fsname, &stme) < 0)
-				log_sys_error("stat", me->mnt_fsname);
-			if (stme.st_rdev != devt)
-				continue;
-		} else {
-			if (stat(me->mnt_dir, &stme) < 0)
-				continue;
-			if (stme.st_dev != devt)
-				continue;
-			fsi->mounted = 1;
+		if (stat(stat_path, &stme) < 0) {
+			log_sys_error("stat", stat_path);
+			continue;
 		}
+
+		if ((is_btrfs ? stme.st_rdev : stme.st_dev) != devt)
+			continue;
+
+		fsi->mounted = 1;
 
 		log_debug("fs_get_info %s is mounted \"%s\"", fsi->fs_dev_path, me->mnt_dir);
 		dm_strncpy(fsi->mount_dir, me->mnt_dir, sizeof(fsi->mount_dir));
+		break; /* found mount */
 	}
 	endmntent(fme);
 
@@ -168,7 +170,6 @@ static int _btrfs_get_mnt(struct fs_info *fsi, dev_t lv_devt)
 	int ret = 1;
 	int fd = -1;
 	ssize_t r;
-	bool found = false;
 
 	/* For a mounted btrfs, there will be a sys dir like /sys/fs/btrfs/$uuid/devices */
 	if (dm_snprintf(devices_path, sizeof(devices_path), "%sfs/btrfs/%s/devices",
@@ -235,7 +236,7 @@ static int _btrfs_get_mnt(struct fs_info *fsi, dev_t lv_devt)
 
 		devt = MKDEV(major, minor);
 		if (devt == lv_devt)
-			found = true;
+			fsi->mounted = 1;
 
 		if (fsi->mount_dir[0] == 0)
 			_fs_get_mnt(fsi, devt);
@@ -246,8 +247,6 @@ static int _btrfs_get_mnt(struct fs_info *fsi, dev_t lv_devt)
 
 	if (closedir(dr))
 		log_sys_debug("closedir", devices_path);
-
-	fsi->mounted = !!found;
 
 	if (fsi->mounted && fsi->mount_dir[0] == 0) {
 		log_error("Couldn't get mount point for %s.", fsi->fs_dev_path);
@@ -402,9 +401,9 @@ int fs_mount_state_is_misnamed(struct cmd_context *cmd, struct logical_volume *l
 	while ((me = getmntent(fme))) {
 		if (strcmp(me->mnt_type, fstype))
 			continue;
-		if (me->mnt_dir[0] != '/')
+		if (!me->mnt_dir || me->mnt_dir[0] != '/')
 			continue;
-		if (me->mnt_fsname[0] != '/')
+		if (!me->mnt_fsname || me->mnt_fsname[0] != '/')
 			continue;
 		if (stat(me->mnt_dir, &stme) < 0)
 			continue;
@@ -428,14 +427,18 @@ int fs_mount_state_is_misnamed(struct cmd_context *cmd, struct logical_volume *l
 		unsigned i, j = 0;
 		memcpy(tmp_path, mtab_mntpath, sizeof(tmp_path));
 		memset(mtab_mntpath, 0, sizeof(mtab_mntpath));
-		for (i = 0; i < sizeof(tmp_path); i++) {
+		for (i = 0; i < sizeof(tmp_path) && tmp_path[i]; i++) {
 			if (tmp_path[i] == ' ') {
+				if (j + 4 >= sizeof(mtab_mntpath))
+					break;
 				mtab_mntpath[j++] = '\\';
 				mtab_mntpath[j++] = '0';
 				mtab_mntpath[j++] = '4';
 				mtab_mntpath[j++] = '0';
 				continue;
 			}
+			if (j + 1 >= sizeof(mtab_mntpath))
+				break;
 			mtab_mntpath[j++] = tmp_path[i];
 		}
 	}
@@ -547,7 +550,7 @@ int crypt_resize_script(struct cmd_context *cmd, struct logical_volume *lv, stru
  * The helper script does the following steps for reduce:
  * devpath = $cryptpath ? $cryptpath : $lvpath
  * if needs_unmount
- * 	umount $mountdir 
+ * 	umount $mountdir
  * if needs_fsck
  * 	e2fsck -f -p $devpath
  * if needs_mount
@@ -637,7 +640,7 @@ int fs_reduce_script(struct cmd_context *cmd, struct logical_volume *lv, struct 
  * The helper script does the following steps for extend:
  * devpath = $cryptpath ? $cryptpath : $lvpath
  * if needs_unmount
- * 	umount $mountdir 
+ * 	umount $mountdir
  * if needs_fsck
  * 	e2fsck -f -p $devpath
  * if needs_crypt

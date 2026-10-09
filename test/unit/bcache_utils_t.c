@@ -26,7 +26,7 @@
 
 //----------------------------------------------------------------
 
-#define T_BLOCK_SIZE ((uint64_t)PAGE_SIZE)
+#define T_BLOCK_SIZE ((uint64_t)TEST_PAGE_SIZE)
 #define NR_BLOCKS 64
 #define INIT_PATTERN 123
 
@@ -107,6 +107,7 @@ static void *_async_init(void)
 {
 	struct io_engine *e = create_async_io_engine();
 	T_ASSERT(e);
+	/* coverity[leaked_storage] stored in fixture by _fix_init */
 	return _fix_init(e);
 }
 
@@ -114,6 +115,7 @@ static void *_sync_init(void)
 {
 	struct io_engine *e = create_sync_io_engine();
 	T_ASSERT(e);
+	/* coverity[leaked_storage] stored in fixture by _fix_init */
 	return _fix_init(e);
 }
 
@@ -122,9 +124,9 @@ static void _fix_exit(void *fixture)
 	struct fixture *f = fixture;
 
 	if (f) {
+		bcache_clear_fd(f->di);
 		bcache_destroy(f->cache);
 		(void) close(f->fd);
-		bcache_clear_fd(f->di);
 		(void) unlink(f->fname);
 		free(f);
 	}

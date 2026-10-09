@@ -1070,6 +1070,8 @@ int get_pool_params(struct cmd_context *cmd,
 static int _validate_stripe_params(struct cmd_context *cmd, const struct segment_type *segtype,
 				   uint32_t *stripes, uint32_t *stripe_size)
 {
+	uint32_t stripe_size_min;
+
 	if (*stripes < 1 || *stripes > MAX_STRIPES) {
 		log_error("Number of stripes (%u) must be between %u and %u.",
 			  *stripes, 1U, MAX_STRIPES);
@@ -1088,6 +1090,8 @@ static int _validate_stripe_params(struct cmd_context *cmd, const struct segment
 			*stripe_size = 0;
 		}
 	} else {
+		stripe_size_min = segtype_stripe_size_min(segtype);
+
 		if (!*stripe_size) {
 			*stripe_size = find_config_tree_int(cmd, metadata_stripesize_CFG, NULL) * 2;
 			log_print_unless_silent("Using default stripesize %s.",
@@ -1098,7 +1102,7 @@ static int _validate_stripe_params(struct cmd_context *cmd, const struct segment
 			log_error("Stripe size cannot be larger than %s.",
 				  display_size(cmd, (uint64_t) STRIPE_SIZE_LIMIT));
 			return 0;
-		} else if (*stripe_size < STRIPE_SIZE_MIN || !is_power_of_2(*stripe_size)) {
+		} else if (*stripe_size < stripe_size_min || !is_power_of_2(*stripe_size)) {
 			log_error("Invalid stripe size %s.",
 				  display_size(cmd, (uint64_t) *stripe_size));
 			return 0;
@@ -1369,6 +1373,7 @@ int get_vdo_settings(struct cmd_context *cmd,
 			DO_OFFLINE(slab_size_mb);
 			DO_OFFLINE(use_metadata_hints);
 			DO_OFFLINE(use_sparse_index);
+			DO_OFFLINE(use_kernel_format);
 
 			option = "write_policy";
 			if (_compare_vdo_option(cn->key, option)) {
@@ -3017,6 +3022,8 @@ int get_lvt_enum(struct logical_volume *lv)
 		return striped_LVT;
 	if (lv_is_thin_volume(lv))
 		return thin_LVT;
+	if (lv_is_thin_pool_data(lv))
+		return thinpooldata_LVT;
 	if (lv_is_thin_pool(lv))
 		return thinpool_LVT;
 	if (lv_is_cache(lv))
@@ -3031,6 +3038,11 @@ int get_lvt_enum(struct logical_volume *lv)
 		return vdopooldata_LVT;
 	if (lv_is_mirror(lv))
 		return mirror_LVT;
+	/* FIXME: specific raid subtypes need to be checked after generic
+	 * lv_is_raid() - code using raid_LVT expects all raid LVs to
+	 * match it (e.g. lvconvert cache pool conversion).
+	 * Needs a proper fix to distinguish subtype queries from
+	 * generic raid membership checks. */
 	if (lv_is_raid(lv))
 		return raid_LVT;
 	if (seg_is_any_raid0(seg))
@@ -4984,9 +4996,9 @@ int pvcreate_params_from_args(struct cmd_context *cmd, struct pvcreate_params *p
 	pp->yes = arg_count(cmd, yes_ARG);
 	pp->force = (force_t) (int) arg_count(cmd, force_ARG);
 
-	if (arg_int_value(cmd, labelsector_ARG, 0) >= LABEL_SCAN_SECTORS) {
-		log_error("labelsector must be less than %lu.",
-			  (unsigned long) LABEL_SCAN_SECTORS);
+	if (arg_int_value(cmd, labelsector_ARG, 0) >= (int64_t)LABEL_SCAN_SECTORS) {
+		log_error("labelsector must be less than %llu.",
+			  LABEL_SCAN_SECTORS);
 		return 0;
 	}
 
@@ -5338,7 +5350,7 @@ static int _pvcreate_check_used(struct cmd_context *cmd,
 		log_debug("Check pvcreate arg %s found vg %s.", dev_name(pd->dev), vgname);
 		pd->is_vg_pv = 1;
 		pd->vg_name = dm_pool_strdup(cmd->mem, vgname);
-	} else if (!vgname || (vgname && is_orphan_vg(vgname))) {
+	} else if (!vgname || is_orphan_vg(vgname)) {
 		uint32_t ext_flags = lvmcache_ext_flags(info);
 		if (ext_flags & PV_EXT_USED) {
 			/* Device is used in an unknown VG. */
@@ -5454,7 +5466,7 @@ static int _pvremove_check_used(struct cmd_context *cmd,
 		pd->is_vg_pv = 1;
 		pd->vg_name = dm_pool_strdup(cmd->mem, vgname);
 
-	} else if (info && (!vgname || (vgname && is_orphan_vg(vgname)))) {
+	} else if (info && (!vgname || is_orphan_vg(vgname))) {
 		uint32_t ext_flags = lvmcache_ext_flags(info);
 		if (ext_flags & PV_EXT_USED) {
 			/* Device is used in an unknown VG. */
@@ -6155,21 +6167,20 @@ do_command:
 				}
 			}
 
-			if (found) {
-				log_debug("Using existing orphan PV %s.", pv_dev_name(vgpvl->pv));
-				pvl->pv = vgpvl->pv;
-				dm_list_add(&pp->pvs, &pvl->list);
-
-				/* allow deviceidtype_ARG/deviceid_ARG ? */
-				memcpy(pvid, &pvl->pv->id.uuid, ID_LEN);
-				if (!device_id_add(cmd, pd->dev, pvid, NULL, NULL, 0)) {
-					log_error("Failed to add device id for %s.", pd->name);
-					dm_list_move(&pp->arg_fail, &pd->list);
-					continue;
-				}
-
-			} else {
+			if (!found) {
 				log_error("Failed to find PV %s", pd->name);
+				dm_list_move(&pp->arg_fail, &pd->list);
+				continue;
+			}
+
+			log_debug("Using existing orphan PV %s.", pv_dev_name(vgpvl->pv));
+			pvl->pv = vgpvl->pv;
+			dm_list_add(&pp->pvs, &pvl->list);
+
+			/* allow deviceidtype_ARG/deviceid_ARG ? */
+			memcpy(pvid, &pvl->pv->id.uuid, ID_LEN);
+			if (!device_id_add(cmd, pd->dev, pvid, NULL, NULL, 0)) {
+				log_error("Failed to add device id for %s.", pd->name);
 				dm_list_move(&pp->arg_fail, &pd->list);
 			}
 		}
@@ -6410,9 +6421,25 @@ int persist_start_include(struct cmd_context *cmd, struct volume_group *vg,
 
 	/*
 	 * Supplementary start: --persist start was added to the command.
+	 *
+	 * When VGs are named, always try persist_start; fail if it fails.
+	 *
+	 * When no VGs are named (e.g. "vgchange --lockstart --persist start"),
+	 * the command applies to all shared VGs.  Only attempt persist_start
+	 * on VGs that have PR configured (VG_PR_REQUIRE or VG_PR_AUTOSTART).
+	 * VG_PR_REQUIRE: fail if persist_start fails.
+	 * VG_PR_AUTOSTART: warn if persist_start fails.
+	 * No PR flags: skip persist_start.
 	 */
 	if (op && !strcmp(op, "start")) {
+		if (!cmd->position_argc && !(vg->pr & (VG_PR_REQUIRE|VG_PR_AUTOSTART)))
+			return 1;
+
 		if (!persist_start(cmd, vg, remkey, NULL)) {
+			if (!cmd->position_argc && !(vg->pr & VG_PR_REQUIRE)) {
+				log_warn("WARNING: Failed to start persistent reservation for %s (not required).", vg->name);
+				return 1;
+			}
 			log_error("Failed to start persistent reservation.");
 			return 0;
 		}

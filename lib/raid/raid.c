@@ -105,6 +105,11 @@ static int _raid_text_import_areas(struct lv_segment *seg,
 			return 0;
 		}
 
+		if (cv->type != DM_CFG_STRING) {
+			log_error("Bad volume name in areas array for segment %s.", seg_name);
+			return 0;
+		}
+
 		/* Data device comes second */
 		if (!(lv = find_lv(seg->lv->vg, cv->v.str))) {
 			log_error("Couldn't find volume '%s' for segment '%s'.",
@@ -523,6 +528,7 @@ static int _raid_target_present(struct cmd_context *cmd,
 		{ 1, 7, 0, RAID_FEATURE_RAID0, SEG_TYPE_NAME_RAID0 },
 		{ 1, 9, 0, RAID_FEATURE_SHRINK, "shrinking" },
 		{ 1, 9, 0, RAID_FEATURE_NEW_DEVICES_ACCEPT_REBUILD, "rebuild+emptymeta" },
+		{ 1, 9, 2, RAID_FEATURE_FIXED_HEALTH_CHARS, "fixedhealthchars" },
 		{ 1, 12, 0, RAID_FEATURE_RESHAPE, "reshaping" },
 	};
 

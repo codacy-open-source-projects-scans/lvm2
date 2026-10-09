@@ -38,10 +38,20 @@
 static int _fd_table_size = 0;
 static int *_fd_table = NULL;
 
+static inline int _di_valid(int di)
+{
+	if (di < 0 || di >= _fd_table_size) {
+		log_error(INTERNAL_ERROR "bcache invalid di %d (fd_table_size %d)", di, _fd_table_size);
+		return 0;
+	}
+
+	return 1;
+}
+
 
 //----------------------------------------------------------------
 
-static void log_sys_warn(const char *call, int err)
+static void _log_sys_warn(const char *call, int err)
 {
 	log_warn("WARNING: %s failed: %s.", call, strerror(err));
 }
@@ -159,7 +169,7 @@ static void _async_destroy(struct io_engine *ioe)
 			log_debug_devs("Destroy AIO context.");
 			r = io_destroy(e->aio_context); // really slow (~40ms)
 			if (r < 0)
-				log_sys_warn("io_destroy", -r);
+				_log_sys_warn("io_destroy", -r);
 		}
 	}
 
@@ -168,7 +178,7 @@ static void _async_destroy(struct io_engine *ioe)
 
 static int _last_byte_di;
 static uint64_t _last_byte_offset;
-static int _last_byte_sector_size;
+static size_t _last_byte_sector_size;
 
 static bool _async_issue(struct io_engine *ioe, enum dir d, int di,
 			 sector_t sb, sector_t se, void *data, void *context)
@@ -342,7 +352,7 @@ static bool _async_wait(struct io_engine *ioe, io_complete_fn fn)
 		if (r == -EINTR)
 			stack;
 		else
-			log_sys_warn("io_getevents", -r);
+			_log_sys_warn("io_getevents", -r);
 		return false;
 	}
 
@@ -547,7 +557,6 @@ static bool _sync_issue(struct io_engine *ioe, enum dir d, int di,
 			}
 		}
 
-		where = offset;
 		len = nbytes;
 	}
 
@@ -873,7 +882,10 @@ static void _complete_io(void *context, int err)
 		dm_list_add(&cache->errored, &b->list);
 
 	} else {
-		_clear_flags(b, BF_DIRTY);
+		if (_test_flags(b, BF_DIRTY)) {
+			cache->nr_dirty--;
+			_clear_flags(b, BF_DIRTY);
+		}
 		_link_block(b);
 	}
 }
@@ -991,31 +1003,29 @@ static struct block *_new_block(struct bcache *cache, int di, block_address i, b
 				if (!_wait_all(cache))
 					return NULL;
 				if (dm_list_size(&cache->errored) >= cache->max_io) {
-					log_debug("bcache no new blocks for di %d index %u with >%u errors.",
-						  di, (uint32_t) i, cache->max_io);
+					log_debug("bcache no new blocks for di %d index %llu with >%u errors.",
+						  di, (unsigned long long) i, cache->max_io);
 					return NULL;
 				}
 			} else {
-				log_debug("bcache no new blocks for di %d index %u",
-					  di, (uint32_t) i);
+				log_debug("bcache no new blocks for di %d index %llu",
+					  di, (unsigned long long) i);
 				return NULL;
 			}
 		}
 	}
 
-	if (b) {
-		dm_list_init(&b->list);
-		b->flags = 0;
-		b->di = di;
-		b->index = i;
-		b->ref_count = 0;
-		b->error = 0;
+	dm_list_init(&b->list);
+	b->flags = 0;
+	b->di = di;
+	b->index = i;
+	b->ref_count = 0;
+	b->error = 0;
 
-		if (!_block_insert(b)) {
-        		log_error("bcache unable to insert block in radix tree (OOM?)");
-			_free_block(b);
-			return NULL;
-		}
+	if (!_block_insert(b)) {
+		log_error("bcache unable to insert block in radix tree (OOM?)");
+		_free_block(b);
+		return NULL;
 	}
 
 	return b;
@@ -1114,7 +1124,12 @@ static void _preemptive_writeback(struct bcache *cache)
 {
 	// FIXME: this ignores those blocks that are in the error state.  Track
 	// nr_clean instead?
-	unsigned nr_available = cache->nr_cache_blocks - (cache->nr_dirty - cache->nr_io_pending);
+	unsigned nr_available;
+
+	if (cache->nr_dirty <= cache->nr_io_pending)
+		return;
+
+	nr_available = cache->nr_cache_blocks - (cache->nr_dirty - cache->nr_io_pending);
 	if (nr_available < (WRITEBACK_LOW_THRESHOLD_PERCENT * cache->nr_cache_blocks / 100))
 		_writeback(cache, (WRITEBACK_HIGH_THRESHOLD_PERCENT * cache->nr_cache_blocks / 100) - nr_available);
 
@@ -1193,6 +1208,7 @@ struct bcache *bcache_create(sector_t block_sectors, unsigned nr_cache_blocks,
 	_fd_table_size = FD_TABLE_INC;
 
 	if (!(_fd_table = malloc(sizeof(int) * _fd_table_size))) {
+		_exit_free_list(cache);
 		cache->engine->destroy(cache->engine);
 		radix_tree_destroy(cache->rtree);
 		free(cache);
@@ -1236,13 +1252,18 @@ unsigned bcache_max_prefetches(struct bcache *cache)
 	return cache->max_io;
 }
 
-void bcache_prefetch(struct bcache *cache, int di, block_address i)
+void bcache_prefetch(struct bcache *cache, int di, block_address index)
 {
-	struct block *b = _block_lookup(cache, di, i);
+	struct block *b;
+
+	if (!_di_valid(di))
+		return;
+
+	b = _block_lookup(cache, di, index);
 
 	if (!b) {
 		if (cache->nr_io_pending < cache->max_io) {
-			b = _new_block(cache, di, i, false);
+			b = _new_block(cache, di, index, false);
 			if (b) {
 				cache->prefetches++;
 				_issue_read(b);
@@ -1260,15 +1281,15 @@ static void _recycle_block(struct bcache *cache, struct block *b)
 	_free_block(b);
 }
 
-bool bcache_get(struct bcache *cache, int di, block_address i,
+bool bcache_get(struct bcache *cache, int di, block_address index,
 	        unsigned flags, struct block **result)
 {
 	struct block *b;
 
-	if (di >= _fd_table_size)
+	if (!_di_valid(di))
 		goto bad;
 
-	b = _lookup_or_read_block(cache, di, i, flags);
+	b = _lookup_or_read_block(cache, di, index, flags);
 	if (b) {
 		if (b->error) {
 			if (b->io_dir == DIR_READ) {
@@ -1290,7 +1311,7 @@ bool bcache_get(struct bcache *cache, int di, block_address i,
 bad:
 	*result = NULL;
 
-	log_error("bcache failed to get block %u di %d", (uint32_t) i, di);
+	log_error("bcache failed to get block %llu di %d", (unsigned long long) index, di);
 	return false;
 }
 
@@ -1372,9 +1393,12 @@ static bool _invalidate_block(struct bcache *cache, struct block *b)
 	return true;
 }
 
-bool bcache_invalidate(struct bcache *cache, int di, block_address i)
+bool bcache_invalidate(struct bcache *cache, int di, block_address index)
 {
-	return _invalidate_block(cache, _block_lookup(cache, di, i));
+	if (!_di_valid(di))
+		return false;
+
+	return _invalidate_block(cache, _block_lookup(cache, di, index));
 }
 
 //----------------------------------------------------------------
@@ -1481,13 +1505,14 @@ void bcache_abort_di(struct bcache *cache, int di)
 
 //----------------------------------------------------------------
 
-void bcache_set_last_byte(struct bcache *cache, int di, uint64_t offset, int sector_size)
+void bcache_set_last_byte(struct bcache *cache, int di, uint64_t offset, size_t sector_size)
 {
 	_last_byte_di = di;
 	_last_byte_offset = offset;
-	_last_byte_sector_size = sector_size;
 	if (!sector_size)
 		_last_byte_sector_size = 512;
+	else
+		_last_byte_sector_size = sector_size;
 }
 
 void bcache_unset_last_byte(struct bcache *cache, int di)
@@ -1542,19 +1567,15 @@ int bcache_set_fd(int fd)
 
 void bcache_clear_fd(int di)
 {
-	if (di >= _fd_table_size)
+	if (!_di_valid(di))
 		return;
 	_fd_table[di] = -1;
 }
 
 int bcache_change_fd(int di, int fd)
 {
-	if (di >= _fd_table_size)
+	if (!_di_valid(di))
 		return 0;
-	if (di < 0) {
-		log_error(INTERNAL_ERROR "Cannot change not opened DI with FD:%d", fd);
-		return 0;
-	}
 	_fd_table[di] = fd;
 	return 1;
 }

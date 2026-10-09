@@ -82,6 +82,7 @@ AC_PROG_RANLIB
 AC_CHECK_TOOL([READELF], [readelf])
 AC_CHECK_TOOL(AR, ar)
 AC_PATH_TOOL(CFLOW_CMD, cflow)
+AC_PATH_TOOL(CPPCHECK_CMD, cppcheck)
 AC_PATH_TOOL(CSCOPE_CMD, cscope)
 AC_PATH_TOOL(CHMOD, chmod)
 AC_PATH_TOOL(WC, wc)
@@ -146,7 +147,7 @@ AC_CHECK_FUNCS([ftruncate gethostname getpagesize gettimeofday localtime_r \
   memchr memset mkdir mkfifo munmap nl_langinfo pselect realpath rmdir setenv \
   setlocale strcasecmp strchr strcspn strdup strerror strncasecmp strndup \
   strrchr strspn strstr strtol strtoul uname], , [AC_MSG_ERROR(bailing out)])
-AC_CHECK_FUNCS([ffs mallinfo2 prlimit versionsort])
+AC_CHECK_FUNCS([ffs mallinfo2 prlimit renameat2 versionsort])
 AC_FUNC_ALLOCA
 AC_FUNC_CLOSEDIR_VOID
 AC_FUNC_CHOWN
@@ -770,33 +771,6 @@ AC_DEFINE_UNQUOTED(DEFAULT_RUN_DIR, ["$DEFAULT_RUN_DIR"],
 		   [Default LVM run directory.])
 
 ################################################################################
-dnl -- Build cluster mirror log daemon
-AC_MSG_CHECKING([whether to build cluster mirror log daemon])
-AC_ARG_ENABLE(cmirrord,
-	      AS_HELP_STRING([--enable-cmirrord],
-			     [enable the cluster mirror log daemon]),
-	      BUILD_CMIRRORD=$enableval, BUILD_CMIRRORD="no")
-AC_MSG_RESULT([$BUILD_CMIRRORD])
-
-################################################################################
-dnl -- cmirrord pidfile
-AS_IF([test "$BUILD_CMIRRORD" = "yes"], [
-	AC_ARG_WITH(cmirrord-pidfile,
-		    AS_HELP_STRING([--with-cmirrord-pidfile=PATH],
-				   [cmirrord pidfile [PID_DIR/cmirrord.pid]]),
-		    CMIRRORD_PIDFILE=$withval,
-		    CMIRRORD_PIDFILE="$DEFAULT_PID_DIR/cmirrord.pid")
-	AC_DEFINE_UNQUOTED(CMIRRORD_PIDFILE, ["$CMIRRORD_PIDFILE"],
-			   [Path to cmirrord pidfile.])
-])
-
-################################################################################
-dnl -- Look for corosync libraries if required.
-AS_IF([test "$BUILD_CMIRRORD" = "yes" && test "$HAVE_CPG" != "yes"], [
-	PKG_CHECK_MODULES([CPG], [libcpg])
-])
-
-################################################################################
 dnl -- Enable debugging
 AC_MSG_CHECKING([whether to enable debugging])
 AC_ARG_ENABLE(debug, AS_HELP_STRING([--enable-debug], [enable debugging]),
@@ -873,6 +847,79 @@ AS_IF([test "$PROFILING" = "yes"], [
     ])
   ])
 ])
+
+################################################################################
+dnl -- Enable AddressSanitizer
+AC_MSG_CHECKING([whether to enable AddressSanitizer])
+AC_ARG_ENABLE(asan,
+	      AS_HELP_STRING([--enable-asan],
+			     [enable AddressSanitizer and UndefinedBehaviorSanitizer]),
+	      ASAN=$enableval, ASAN="no")
+AC_MSG_RESULT([$ASAN])
+
+dnl -- Enable ThreadSanitizer
+AC_MSG_CHECKING([whether to enable ThreadSanitizer])
+AC_ARG_ENABLE(tsan,
+	      AS_HELP_STRING([--enable-tsan],
+			     [enable ThreadSanitizer]),
+	      TSAN=$enableval, TSAN="no")
+AC_MSG_RESULT([$TSAN])
+
+AS_IF([test "$ASAN" = "yes" && test "$TSAN" = "yes"],
+  [AC_MSG_ERROR([--enable-asan and --enable-tsan are mutually exclusive])])
+
+SANITIZER=no
+
+AS_IF([test "$ASAN" = "yes"], [
+	ac_save_CFLAGS="$CFLAGS"
+	ac_save_LDFLAGS="$LDFLAGS"
+	CFLAGS="-fsanitize=address"
+	LDFLAGS="-fsanitize=address"
+	AC_MSG_CHECKING([whether $CC supports -fsanitize=address])
+	AC_LINK_IFELSE([AC_LANG_PROGRAM()],
+		       [AC_MSG_RESULT([yes])],
+		       [AC_MSG_RESULT([no])
+			AC_MSG_ERROR([compiler does not support -fsanitize=address])])
+	CFLAGS="$ac_save_CFLAGS"
+	LDFLAGS="$ac_save_LDFLAGS"
+
+	dnl -- Sanitizer flags are NOT added to COPTIMISE_FLAG.
+	dnl -- make.tmpl.in adds SANITIZER_CFLAGS to CFLAGS for lib/tools/daemons.
+	dnl -- libdm/make.tmpl.in compiles separate %-san.o objects with SANITIZER_CFLAGS.
+	SANITIZER=asan
+	SANITIZER_CFLAGS="-fsanitize=address -fsanitize=undefined -fsanitize=bounds-strict -fno-omit-frame-pointer"
+	SANITIZER_LDFLAGS="-fsanitize=address -fsanitize=undefined"
+	ELDFLAGS="$ELDFLAGS $SANITIZER_LDFLAGS"
+	CLDFLAGS="$CLDFLAGS -fno-sanitize=all"
+	AC_DEFINE([ENABLE_ASAN], 1, [Enable AddressSanitizer build])
+	AC_DEFINE([ENABLE_SANITIZER], 1, [Build with sanitizer support])
+])
+
+AS_IF([test "$TSAN" = "yes"], [
+	ac_save_CFLAGS="$CFLAGS"
+	ac_save_LDFLAGS="$LDFLAGS"
+	CFLAGS="-fsanitize=thread"
+	LDFLAGS="-fsanitize=thread"
+	AC_MSG_CHECKING([whether $CC supports -fsanitize=thread])
+	AC_LINK_IFELSE([AC_LANG_PROGRAM()],
+		       [AC_MSG_RESULT([yes])],
+		       [AC_MSG_RESULT([no])
+			AC_MSG_ERROR([compiler does not support -fsanitize=thread])])
+	CFLAGS="$ac_save_CFLAGS"
+	LDFLAGS="$ac_save_LDFLAGS"
+
+	SANITIZER=tsan
+	SANITIZER_CFLAGS="-fsanitize=thread -fno-omit-frame-pointer"
+	SANITIZER_LDFLAGS="-fsanitize=thread"
+	ELDFLAGS="$ELDFLAGS $SANITIZER_LDFLAGS"
+	CLDFLAGS="$CLDFLAGS -fno-sanitize=all"
+	AC_DEFINE([ENABLE_TSAN], 1, [Enable ThreadSanitizer build])
+	AC_DEFINE([ENABLE_SANITIZER], 1, [Build with sanitizer support])
+])
+
+AC_SUBST(SANITIZER)
+AC_SUBST(SANITIZER_CFLAGS)
+AC_SUBST(SANITIZER_LDFLAGS)
 
 ################################################################################
 dnl -- Set LVM2 testsuite data
@@ -1630,7 +1677,7 @@ AS_IF([test "$INTL" = "yes"], [
 		    AS_HELP_STRING([--with-localedir=DIR],
 				   [locale-dependent data [DATAROOTDIR/locale]]),
 		    localedir=$withval, localedir=${localedir-'${datarootdir}/locale'})
-	AC_DEFINE_UNQUOTED([INTL_PACKAGE], ["$INTL_PACKAGE"], [Internalization package])
+	AC_DEFINE_UNQUOTED([INTL_PACKAGE], ["$INTL_PACKAGE"], [Internationalization package])
 	# double eval needed ${datarootdir} -> ${prefix}/share -> real path
 	AC_DEFINE_UNQUOTED([LOCALEDIR], ["$(eval echo $(eval echo $localedir))"], [Locale-dependent data])
 ])
@@ -1719,10 +1766,6 @@ AS_IF([test "$EDITLINE" = "yes"], [
 ])
 AC_MSG_CHECKING([whether to enable editline])
 AC_MSG_RESULT([$EDITLINE])
-
-AS_IF([test "$BUILD_CMIRRORD" = "yes"], [
-	AC_CHECK_FUNCS(atexit,,hard_bailout)
-])
 
 AS_IF([test "$BUILD_LVMLOCKD" = "yes"], [
 	AS_IF([test "$HAVE_REALTIME" != "yes"], [
@@ -1894,8 +1937,8 @@ VER=$(echo "$VER" | $AWK '{print $1}')
 LVM_RELEASE="\"$(echo "$VER" | $AWK -F '-' '{print $2}')\""
 VER=$(echo "$VER" | $AWK -F '-' '{print $1}')
 LVM_MAJOR=$(echo "$VER" | $AWK -F '.' '{print $1}')
-LVM_MINOR=$(echo "$VER" | $AWK -F '.' '{print $2}')
-LVM_PATCHLEVEL=$(echo "$VER" | $AWK -F '[[(.]]' '{print $3}')
+LVM_MINOR=$(echo "$VER" | $AWK -F '.' '{print $2 + 0}')
+LVM_PATCHLEVEL=$(echo "$VER" | $AWK -F '[[(.]]' '{print $3 + 0}')
 LVM_LIBAPI=$(echo "$VER" | $AWK -F '[[()]]' '{print $2}')
 
 AC_DEFINE_UNQUOTED(LVM_CONFIGURE_LINE, "$CONFIGURE_LINE", [configure command line used])
@@ -1916,7 +1959,6 @@ AC_SUBST(AWK)
 AC_SUBST(BLKDEACTIVATE)
 AC_SUBST(BLKID_PC)
 AC_SUBST(BLKID_STATIC_LIBS)
-AC_SUBST(BUILD_CMIRRORD)
 AC_SUBST(BUILD_DMEVENTD)
 AC_SUBST(BUILD_DMFILEMAPD)
 AC_SUBST(BUILD_LOCKDDLM)
@@ -1933,12 +1975,12 @@ AC_SUBST(CACHE_REPAIR_CMD)
 AC_SUBST(CACHE_RESTORE_CMD)
 AC_SUBST(CFLAGS)
 AC_SUBST(CFLOW_CMD)
+AC_SUBST(CPPCHECK_CMD)
 AC_SUBST(CHMOD)
 AC_SUBST(CLDFLAGS)
 AC_SUBST(CLDNOWHOLEARCHIVE)
 AC_SUBST(CLDWHOLEARCHIVE)
 AC_SUBST(CMDLIB)
-AC_SUBST(CMIRRORD_PIDFILE)
 AC_SUBST(CONFDIR)
 AC_SUBST(COPTIMISE_FLAG)
 AC_SUBST(CPPFLAGS)
@@ -2007,6 +2049,7 @@ AC_SUBST(PYTHON2DIR)
 AC_SUBST(PYTHON3)
 AC_SUBST(PYTHON3DIR)
 AC_SUBST(RT_LIBS)
+AC_SUBST(RUN_DIR)
 AC_SUBST(SBINDIR)
 AC_SUBST(SD_NOTIFY_SUPPORT)
 AC_SUBST(SELINUX_LIBS)
@@ -2064,7 +2107,6 @@ Makefile
 make.tmpl
 libdm/make.tmpl
 daemons/Makefile
-daemons/cmirrord/Makefile
 daemons/dmeventd/Makefile
 daemons/dmeventd/libdevmapper-event.pc
 daemons/dmeventd/plugins/Makefile
@@ -2101,11 +2143,9 @@ scripts/lvm2-pvscan.service
 scripts/blkdeactivate.sh
 scripts/blk_availability_init_red_hat
 scripts/blk_availability_systemd_red_hat.service
-scripts/cmirrord_init_red_hat
 scripts/com.redhat.lvmdbus1.service
 scripts/dm_event_systemd_red_hat.service
 scripts/dm_event_systemd_red_hat.socket
-scripts/lvm2_cmirrord_systemd_red_hat.service
 scripts/lvm2_lvmdbusd_systemd_red_hat.service
 scripts/lvm2_lvmpolld_init_red_hat
 scripts/lvm2_lvmpolld_systemd_red_hat.service

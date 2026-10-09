@@ -32,7 +32,6 @@
 #include <unistd.h>
 #include <time.h>
 #include <dirent.h>
-#include <locale.h>
 #include <sys/types.h>
 #include <sys/file.h>
 #include <sys/sysmacros.h>
@@ -51,8 +50,8 @@ static const char _searched_file_new[] = DEFAULT_RUN_DIR "/searched_devnames_new
 static const char _searched_file_dir[] = DEFAULT_RUN_DIR;
 
 /* Only for displaying in lvmdevices command output. */
-char devices_file_hostname_orig[PATH_MAX]; 
-char devices_file_product_uuid_orig[PATH_MAX]; 
+char devices_file_hostname_orig[PATH_MAX];
+char devices_file_product_uuid_orig[PATH_MAX];
 
 static uint64_t _get_refresh_timestamp(unsigned int add_seconds)
 {
@@ -109,7 +108,7 @@ static uint64_t _new_refresh_timestamp(struct cmd_context *cmd)
  * . return a buffer is ID_LEN+1 in size, even
  *   if the pvid string is shorter.
  */
-char *strdup_pvid(char *pvid)
+char *strdup_pvid(const char *pvid)
 {
 	char *buf;
 	if (!(buf = zalloc(ID_LEN + 1)))
@@ -329,7 +328,7 @@ int pv_device_id_is_stale(const struct physical_volume *pv)
  *    filters.  lvmcache is populated with summary info about each PV
  *    during this phase.
  * 5. device_ids_validate() checks if the PVIDs saved in the devices
- *    file are correct based on the PVIDs read from disk in the 
+ *    file are correct based on the PVIDs read from disk in the
  *    previous step.  If not it updates the devices file.
  *
  * cmd->use_devices reflect the entries in the devices file.
@@ -455,7 +454,7 @@ static void _remove_leading_underscores(char *buf, size_t bufsize)
 	free(tmpbuf);
 }
 
-static void _remove_trailing_underscores(char *buf, int bufsize)
+static void _remove_trailing_underscores(char *buf)
 {
 	char *end;
 
@@ -589,7 +588,7 @@ static int _dev_has_lvmlv_uuid(struct cmd_context *cmd, struct device *dev, char
  * The numbers 1,2,3 for NAA,EUI,T10 are part of the standard
  * and are used in the vpd data.
  */
-static int _scsi_wwid_type_num(char *id)
+static int _scsi_wwid_type_num(const char *id)
 {
 	if (!strncmp(id, "naa.", 4))
 		return 3;
@@ -628,7 +627,7 @@ int idtype_to_scsi_type(int idtype)
  * sysfs wwid file will return "nvme." identifier when one of the
  * others is not available.
  */
-static int _nvme_wwid_type_num(char *id)
+static int _nvme_wwid_type_num(const char *id)
 {
 	if (!strncmp(id, "uuid.", 5))
 		return 3;		/* UUID is 16 bytes */
@@ -680,7 +679,7 @@ void free_wwids(struct dm_list *ids)
  * in /etc/multipath/wwids.
  */
 
-struct dev_wwid *dev_add_wwid(char *id, int dw_type, int is_nvme, struct dm_list *ids)
+struct dev_wwid *dev_add_wwid(const char *id, int dw_type, int is_nvme, struct dm_list *ids)
 {
 	struct dev_wwid *dw;
 	uint16_t scsi_type = 0;
@@ -705,12 +704,12 @@ struct dev_wwid *dev_add_wwid(char *id, int dw_type, int is_nvme, struct dm_list
 	return dw;
 }
 
-struct dev_wwid *dev_add_scsi_wwid(char *id, int dw_type, struct dm_list *ids)
+struct dev_wwid *dev_add_scsi_wwid(const char *id, int dw_type, struct dm_list *ids)
 {
 	return dev_add_wwid(id, dw_type, 0, ids);
 }
 
-struct dev_wwid *dev_add_nvme_wwid(char *id, int dw_type, struct dm_list *ids)
+struct dev_wwid *dev_add_nvme_wwid(const char *id, int dw_type, struct dm_list *ids)
 {
 	return dev_add_wwid(id, dw_type, 1, ids);
 }
@@ -728,8 +727,11 @@ int dev_read_vpd_wwids(struct cmd_context *cmd, struct device *dev)
 		return 0;
 	if (!vpd_datalen)
 		return 0;
+	if (vpd_datalen > VPD_SIZE)
+		vpd_datalen = VPD_SIZE; /* sanitize data size */
 
 	/* adds dev_wwid entry to dev->wwids for each id in vpd data */
+	/* coverity[tainted_scalar] VPD is read into a VPD_SIZE buffer, id sizes are clamped to it */
 	parse_vpd_ids((const unsigned char *)vpd_data, vpd_datalen, &dev->wwids);
 	return 1;
 }
@@ -812,7 +814,7 @@ static int _dev_read_sys_serial(struct cmd_context *cmd, struct device *dev,
 		if (outbuf[0])
 			return 1;
 	}
-	
+
 	devname = dev_name(dev);
 	if (!strncmp(devname, "/dev/vd", 7)) {
 		char path[PATH_MAX];
@@ -957,7 +959,7 @@ char *device_id_system_read(struct cmd_context *cmd, struct device *dev, uint16_
 	    (idtype == DEV_ID_TYPE_SYS_SERIAL)) {
 		memcpy(sysbuf2, sysbuf, sizeof(sysbuf2));
 		_remove_leading_underscores(sysbuf2, sizeof(sysbuf2));
-		_remove_trailing_underscores(sysbuf2, sizeof(sysbuf2));
+		_remove_trailing_underscores(sysbuf2);
 		if (idtype == DEV_ID_TYPE_SYS_WWID && !strncmp(sysbuf2, "t10", 3) && strstr(sysbuf2, "__"))
 			_reduce_repeating_underscores(sysbuf2, sizeof(sysbuf2));
 		if (memcmp(sysbuf, sysbuf2, sizeof(sysbuf)))
@@ -976,7 +978,7 @@ char *device_id_system_read(struct cmd_context *cmd, struct device *dev, uint16_
 	return NULL;
 }
 
-static int device_id_system_read_preferred(struct cmd_context *cmd, struct device *dev,
+static int _device_id_system_read_preferred(struct cmd_context *cmd, struct device *dev,
 					   uint16_t *new_idtype, char **new_idname)
 {
 	char *idname = NULL;
@@ -1225,7 +1227,7 @@ static const char *_dev_idname(struct device *dev, uint16_t idtype)
 	return NULL;
 }
 
-static struct dev_id *get_dev_id(struct device *dev, uint16_t idtype)
+static struct dev_id *_get_dev_id(struct device *dev, uint16_t idtype)
 {
 	struct dev_id *id;
 
@@ -1278,7 +1280,7 @@ int device_ids_read(struct cmd_context *cmd)
 {
 	char line[PATH_MAX];
 	char buf[PATH_MAX];
-	char check_id[PATH_MAX]; 
+	char check_id[PATH_MAX];
 	char *idtype, *idname, *devname, *pvid, *part;
 	struct dev_use *du;
 	FILE *fp;
@@ -1505,40 +1507,14 @@ int device_ids_read(struct cmd_context *cmd)
  * backup files with version >9999:
  * 31 chars + 5+ chars (uint32 counter, not zero padded, up to 10 chars) + null byte
  */
-#define BACKUP_NAME_SIZE 48  /* larger than the longest backup file name */
-
-static int _filter_backup_files(const struct dirent *de)
+static void _devices_file_backup(struct cmd_context *cmd, char *fc, char *fb, time_t *tp, uint32_t df_counter)
 {
-	int len = strlen(de->d_name);
-
-	if (len < 35 || len > BACKUP_NAME_SIZE-1)
-		return 0;
-	if (strncmp(de->d_name, "system.devices-", 15))
-		return 0;
-	return 1;
-}
-
-static void devices_file_backup(struct cmd_context *cmd, char *fc, char *fb, time_t *tp, uint32_t df_counter)
-{
-	struct dirent *de;
-	struct dirent **namelist = NULL;
-	DIR *dir = NULL;
 	FILE *fp = NULL;
 	struct tm *tm;
 	char dirpath[PATH_MAX];
 	char path[PATH_MAX];
 	char datetime_str[48];
-	char de_date_str[16];
-	char de_time_str[16];
-	char de_count_str[16];
-	char low_name[BACKUP_NAME_SIZE] = { 0 }; /* oldest backup file name */
-	uint32_t low_date = 0, low_time = 0, low_count = 0;
-	uint32_t de_date, de_time, de_count;
-	unsigned int backup_limit = 0, backup_count = 0, remove_count;
-	int namelen;
-	int sort_count;
-	int dir_fd;
-	int i;
+	unsigned int backup_limit = 0;
 
 	/* Skip backup with --devicesfile <name>, only back up default system.devices. */
 	if (cmd->devicesfile)
@@ -1597,115 +1573,14 @@ static void devices_file_backup(struct cmd_context *cmd, char *fc, char *fb, tim
 	}
 	if (fclose(fp))
 		stack;
-	fp = NULL;
 	log_debug("Wrote backup %s", path);
 
-	/* Open dir after backup file is written, so it can be accounted */
-	if (!(dir = opendir(dirpath))) {
-		log_sys_debug("opendir", dirpath);
-		return;
-	}
-
-	/* Possibly remove old backup files per configurable limit on backup files. */
-
-	while ((de = readdir(dir))) {
-		if (de->d_name[0] == '.')
-			continue;
-
-		namelen = strlen(de->d_name);
-
-		if (namelen < 35 || namelen > BACKUP_NAME_SIZE-1)
-			continue;
-
-		memset(de_date_str, 0, sizeof(de_date_str));
-		memset(de_time_str, 0, sizeof(de_time_str));
-		memset(de_count_str, 0, sizeof(de_count_str));
-
-		/*
-		 * Save the oldest backup file name:
-		 *
-		 * backup files with version 1-9999 have 4 digit suffix:
-		 * system.devices-YYYYMMDD.HHMMSS.NNNN
-		 * 12345678901234567890123456789012345 (len 35)
-		 * date YYYYMMDD is 8 chars 16-23
-		 * time HHMMSS is 6 chars 25-30
-		 * count NNNN is 4 chars 32-35
-		 *
-		 * backup files with version >9999 have
-		 * non-zero-padded variable length suffix:
-		 * system.devices-YYYYMMDD.HHMMSS.NNNNN...
-		 */
-		memcpy(de_date_str, de->d_name+15, 8);
-		memcpy(de_time_str, de->d_name+24, 6);
-		memcpy(de_count_str, de->d_name+31, namelen - 31);
-
-		de_date = (uint32_t)strtoul(de_date_str, NULL, 10);
-		de_time = (uint32_t)strtoul(de_time_str, NULL, 10);
-		de_count = (uint32_t)strtoul(de_count_str, NULL, 10);
-
-		if (!low_date ||
-		    (de_date < low_date) ||
-		    (de_date == low_date && de_time < low_time) ||
-		    (de_date == low_date && de_time == low_time && de_count < low_count)) {
-			dm_strncpy(low_name, de->d_name, sizeof(low_name));
-			low_date = de_date;
-			low_time = de_time;
-			low_count = de_count;
-		}
-		backup_count++;
-	}
-
-	if (backup_count <= backup_limit)
-		goto out;
-
-	remove_count = backup_count - backup_limit;
-
-	if ((dir_fd = dirfd(dir)) < 0) {
-		log_sys_debug("dirfd", dirpath);
-		goto out;
-	}
-
-	/* The common case removes the oldest file and can avoid sorting. */
-	if (remove_count == 1 && low_name[0]) {
-		log_debug("Remove backup %s", low_name);
-		if (unlinkat(dir_fd, low_name, 0) < 0 && errno != ENOENT)
-			log_sys_debug("unlinkat", low_name);
-		goto out;
-	}
-
-	/* Remove the n oldest files by sorting system.devices-*. */
-	setlocale(LC_COLLATE, "C"); /* Avoid sorting by locales */
-	#ifndef HAVE_VERSIONSORT
-	/* fallback to alphasort when versionsort is not defined */
-	#define versionsort     alphasort
-	#endif /* !HAVE_VERSIONSORT */
-	sort_count = scandir(dirpath, &namelist, _filter_backup_files, versionsort);
-	setlocale(LC_COLLATE, "");
-	if (sort_count < 0) {
-		log_warn("WARNING: Failed to sort backup devices files.");
-		goto out;
-	}
-
-	log_debug("Limit backup %u found %u sorted %d removing %u.",
-		  backup_limit, backup_count, sort_count, remove_count);
-
-	for (i = 0; namelist && i < sort_count; i++) {
-		if (remove_count) {
-			log_debug("Remove backup %s", namelist[i]->d_name);
-			if (unlinkat(dir_fd, namelist[i]->d_name, 0) < 0 && errno != ENOENT)
-				log_sys_debug("unlinkat", namelist[i]->d_name);
-			remove_count--;
-		}
-		free(namelist[i]);
-	}
-	free(namelist);
+	backup_dir_cleanup(dirpath, "system.devices-", backup_limit, 0);
+	return;
 
 out:
 	if (fp && fclose(fp))
 		stack;
-
-	if (dir && closedir(dir))
-		log_sys_debug("closedir", dirpath);
 }
 
 int device_ids_write(struct cmd_context *cmd)
@@ -1943,7 +1818,7 @@ int device_ids_write(struct cmd_context *cmd)
 	log_debug("Wrote devices file %s hash %u hashed size %d total size %d",
 		  version_buf, hash, fb_bytes, fb_bytes + fc_bytes);
 
-	devices_file_backup(cmd, fc, fb, &t, df_counter+1);
+	_devices_file_backup(cmd, fc, fb, &t, df_counter+1);
 
 out:
 	if (fb)
@@ -2190,7 +2065,7 @@ int device_id_add(struct cmd_context *cmd, struct device *dev, const char *pvid_
 		}
 	}
 
-	if (!device_id_system_read_preferred(cmd, dev, &idtype, &idname))
+	if (!_device_id_system_read_preferred(cmd, dev, &idtype, &idname))
 		return_0;
 	if (!idname)
 		return_0;
@@ -2532,36 +2407,26 @@ void device_id_update_vg_uuid(struct cmd_context *cmd, struct volume_group *vg, 
 
 static int _idtype_compatible_with_major_number(struct cmd_context *cmd, int idtype, unsigned major)
 {
-	/* devname can be used with any kind of device */
-	if (idtype == DEV_ID_TYPE_DEVNAME)
+	switch (idtype) {
+	case DEV_ID_TYPE_DEVNAME:
 		return 1;
-
-	if (idtype == DEV_ID_TYPE_MPATH_UUID ||
-	    idtype == DEV_ID_TYPE_CRYPT_UUID ||
-	    idtype == DEV_ID_TYPE_LVMLV_UUID)
+	case DEV_ID_TYPE_MPATH_UUID:
+	case DEV_ID_TYPE_CRYPT_UUID:
+	case DEV_ID_TYPE_LVMLV_UUID:
 		return (major == cmd->dev_types->device_mapper_major);
-
-	if (idtype == DEV_ID_TYPE_MD_UUID)
+	case DEV_ID_TYPE_MD_UUID:
 		return (major == cmd->dev_types->md_major);
-
-	if (idtype == DEV_ID_TYPE_LOOP_FILE)
+	case DEV_ID_TYPE_LOOP_FILE:
 		return (major == cmd->dev_types->loop_major);
-
-	if (major == cmd->dev_types->device_mapper_major)
-		return (idtype == DEV_ID_TYPE_MPATH_UUID ||
-			idtype == DEV_ID_TYPE_CRYPT_UUID ||
-			idtype == DEV_ID_TYPE_LVMLV_UUID ||
-			idtype == DEV_ID_TYPE_DEVNAME);
-
-	if (major == cmd->dev_types->md_major)
-		return (idtype == DEV_ID_TYPE_MD_UUID ||
-			idtype == DEV_ID_TYPE_DEVNAME);
-
-	if (major == cmd->dev_types->loop_major)
-		return (idtype == DEV_ID_TYPE_LOOP_FILE ||
-			idtype == DEV_ID_TYPE_DEVNAME);
-
-	return 1;
+	default:
+		if (major == cmd->dev_types->device_mapper_major)
+			return 0;
+		if (major == cmd->dev_types->md_major)
+			return 0;
+		if (major == cmd->dev_types->loop_major)
+			return 0;
+		return 1;
+	}
 }
 
 static int _match_dm_names(struct cmd_context *cmd, char *idname, struct device *dev)
@@ -2739,7 +2604,7 @@ static int _match_du_to_dev(struct cmd_context *cmd, struct dev_use *du, struct 
 	if (((du->idtype == DEV_ID_TYPE_SYS_WWID) || (du->idtype == DEV_ID_TYPE_SYS_SERIAL)) &&
 	    strchr(du_idname, '_')) {
 		_remove_leading_underscores(du_idname, sizeof(du_idname));
-		_remove_trailing_underscores(du_idname, sizeof(du_idname));
+		_remove_trailing_underscores(du_idname);
 		if (du->idtype == DEV_ID_TYPE_SYS_WWID && !strncmp(du_idname, "t10", 3) && strstr(du_idname, "__"))
 			_reduce_repeating_underscores(du_idname, sizeof(du_idname));
 	}
@@ -2845,13 +2710,17 @@ static int _match_du_to_dev(struct cmd_context *cmd, struct dev_use *du, struct 
 
 		dm_list_iterate_items(dw, &dev->wwids) {
 			if (!strcmp(dw->id, du_idname)) {
-				if (!(id = zalloc(sizeof(struct dev_id))))
-					return_0;
+				int idtype;
 				/* scsi/nvme types are 1,2,3 and idtypes are DEV_ID_TYPE_ */
 				if (dev_is_nvme(dev))
-					id->idtype = nvme_type_to_idtype(dw->nvme_type);
+					idtype = nvme_type_to_idtype(dw->nvme_type);
 				else
-					id->idtype = scsi_type_to_idtype(dw->scsi_type);
+					idtype = scsi_type_to_idtype(dw->scsi_type);
+				if (idtype < 0)
+					continue;
+				if (!(id = zalloc(sizeof(struct dev_id))))
+					return_0;
+				id->idtype = idtype;
 				if (!(id->idname = strdup(dw->id))) {
 					free(id);
 					return_0;
@@ -3297,7 +3166,7 @@ void device_ids_validate(struct cmd_context *cmd, struct dm_list *scanned_devs, 
 			continue;
 		if (!(du->dev->flags & DEV_UPDATE_USE_ID))
 			continue;
-		if ((id = get_dev_id(du->dev, DEV_ID_TYPE_SYS_WWID)) && id->idname) {
+		if ((id = _get_dev_id(du->dev, DEV_ID_TYPE_SYS_WWID)) && id->idname) {
 			log_debug("Validate %s %s PVID %s on %s: replace old wwid with %s",
 				  idtype_to_str(du->idtype), du->idname ?: ".", du->pvid ?: ".",
 				  dev_name(du->dev), id->idname);
@@ -3342,7 +3211,7 @@ void device_ids_validate(struct cmd_context *cmd, struct dm_list *scanned_devs, 
 		 * The matched device could not be read so we do not have
 		 * the PVID from disk and cannot verify the devices file entry.
 		 */
-		if (dev->flags & DEV_SCAN_NOT_READ) {
+		if (dev_scan_io_failed(dev)) {
 			log_debug("Validate %s %s PVID %s on %s: not read",
 				  idtype_to_str(du->idtype), du->idname ?: ".", du->pvid ?: ".", dev_name(dev));
 			continue;
@@ -3448,7 +3317,7 @@ void device_ids_validate(struct cmd_context *cmd, struct dm_list *scanned_devs, 
 		if (!du->pvid)
 			continue;
 
-		/* 
+		/*
 		 * Correctly matched du and dev.
 		 * The DEVNAME hint could still need an update.
 		 */
@@ -3499,7 +3368,7 @@ void device_ids_validate(struct cmd_context *cmd, struct dm_list *scanned_devs, 
 			devname = dev_name(du->dev);
 
 			if ((scanned_devs && !device_list_find_dev(scanned_devs, du->dev)) ||
-			    (du->dev->flags & DEV_SCAN_NOT_READ)) {
+			    dev_scan_io_failed(du->dev)) {
 				log_debug("Validate %s %s PVID %s on %s: not scanned",
 					  idtype_to_str(du->idtype), du->idname ?: ".", du->pvid ?: ".", devname);
 			} else {
@@ -3568,7 +3437,7 @@ void device_ids_validate(struct cmd_context *cmd, struct dm_list *scanned_devs, 
 	 * devs that have not been scanned yet.
 	 */
 	dm_list_iterate_items(du, &cmd->use_devices) {
-		/* 
+		/*
 		 * Only search for devname type entries unless the refresh
 		 * trigger is set due to a machine change, in which case
 		 * we look for missing PVIDs on new devs with real idtypes.
@@ -4243,7 +4112,7 @@ void device_ids_search(struct cmd_context *cmd, struct dm_list *new_devs,
 		 * dev in search_list_devs has a proper/stable device id
 		 * (e.g. wwid, serial, loop, mpath), then we don't need to
 		 * read it to check for missing PVIDs.
-		 * 
+		 *
 		 * search_for_devnames="all" means we should search every
 		 * device, so we skip this optimization.
 		 *
@@ -4345,23 +4214,23 @@ void device_ids_search(struct cmd_context *cmd, struct dm_list *new_devs,
 		new_idtype = 0;
 		new_idname = NULL;
 		new_idname2 = NULL;
-		new_devname = NULL;
 
 		if (cmd->device_ids_refresh_trigger || all_ids) {
-			if (!device_id_system_read_preferred(cmd, dev, &new_idtype, &new_idname))
+			if (!_device_id_system_read_preferred(cmd, dev, &new_idtype, &new_idname))
 				continue;
-			new_idname2 = strdup(new_idname);
-			new_devname = strdup(devname);
+			if (new_idname)
+				new_idname2 = strdup(new_idname);
 			log_print_unless_silent("Devices file PVID %s has new device ID %s %s from %s.",
 				  du->pvid ?: "", idtype_to_str(new_idtype), new_idname ?: "", devname);
 		} else {
-			/* Use the new device name as the new idname. */
 			new_idtype = DEV_ID_TYPE_DEVNAME;
 			new_idname = strdup(devname);
 			new_idname2 = strdup(devname);
-			new_devname = strdup(devname);
 			log_debug("Found new device name %s for PVID %s.", devname, du->pvid ?: "");
 		}
+
+		/* DEVNAME in the devices file is always the current device name. */
+		new_devname = strdup(devname);
 
 		id = zalloc(sizeof(struct dev_id));
 

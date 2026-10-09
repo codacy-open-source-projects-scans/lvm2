@@ -20,7 +20,7 @@
 
 static void *_mem_init(void)
 {
-	struct dm_pool *mem = dm_pool_create("bitset test", 1024);
+	struct dm_pool *mem = dm_pool_create("regex test", 1024);
 	if (!mem) {
 		fprintf(stderr, "out of memory");
 		exit(1);
@@ -51,10 +51,10 @@ static void test_fingerprints(void *fixture)
 	struct dm_regex *scanner;
 
 	scanner = make_scanner(mem, dev_patterns);
-	T_ASSERT_EQUAL(dm_regex_fingerprint(scanner), 0x7f556c09);
+	T_ASSERT_EQUAL(dm_regex_fingerprint(scanner), 0xc0f6e9d0);
 
 	scanner = make_scanner(mem, random_patterns);
-	T_ASSERT_EQUAL(dm_regex_fingerprint(scanner), 0x9f11076c);
+	T_ASSERT_EQUAL(dm_regex_fingerprint(scanner), 0xeae862bc);
 }
 
 static void test_matching(void *fixture)
@@ -104,8 +104,28 @@ static void test_kabi_query(void *fixture)
 			test_fail("'%s' expected to match '%s', but matched %s",
 				  _cases[i].input,
 				  _cases[i].r >= DM_ARRAY_SIZE(_patterns) ? "<nothing>" : _patterns[_cases[i].r],
-				  r >= (int)DM_ARRAY_SIZE(_patterns) ? "<nothing>" : _patterns[r]);
+				  (r < 0 || r >= (int)DM_ARRAY_SIZE(_patterns)) ? "<nothing>" : _patterns[r]);
 		}
+	}
+}
+
+static void test_invalid_patterns(void *fixture)
+{
+	struct dm_pool *mem = fixture;
+	struct dm_regex *scanner;
+	unsigned i;
+
+	static const char * const _bad_patterns[] = {
+		"[abc",		/* unterminated character class */
+		"[^abc",	/* unterminated negated character class */
+		"[a-",		/* incomplete range specification */
+		"[\\",		/* badly quoted character in class */
+		"abc\\",	/* badly quoted character at end */
+	};
+
+	for (i = 0; i < DM_ARRAY_SIZE(_bad_patterns); i++) {
+		scanner = dm_regex_create(mem, &_bad_patterns[i], 1);
+		T_ASSERT(scanner == NULL);
 	}
 }
 
@@ -120,6 +140,7 @@ void regex_tests(struct dm_list *all_tests)
 	}
 
 	T("fingerprints", "not sure", test_fingerprints);
+	T("invalid-patterns", "test that invalid regexes are rejected", test_invalid_patterns);
 	T("matching", "test the matcher with a variety of regexes", test_matching);
 	T("kabi-query", "test the matcher with some specific patterns", test_kabi_query);
 

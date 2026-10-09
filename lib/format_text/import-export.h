@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2006 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_TEXT_IMPORT_EXPORT_H
-#define _LVM_TEXT_IMPORT_EXPORT_H
+#ifndef LVM_TEXT_IMPORT_EXPORT_H
+#define LVM_TEXT_IMPORT_EXPORT_H
 
 #include "lib/config/config.h"
 #include "lib/metadata/metadata.h"
@@ -53,8 +53,8 @@ struct text_vg_version_ops {
 					 struct format_instance *fid,
 					 const struct dm_config_tree *cft);
 
-	void (*read_desc) (struct dm_pool * mem, const struct dm_config_tree *cf,
-			   time_t *when, char **desc);
+	int (*read_desc) (struct dm_pool * mem, const struct dm_config_tree *cf,
+			  time_t *when, char **desc);
 
 	int (*read_vgsummary) (const struct format_type *fmt,
 			       const struct dm_config_tree *cft,

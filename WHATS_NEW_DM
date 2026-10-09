@@ -1,5 +1,39 @@
-Version 1.02.215 - 
+Version 1.02.218 - 
 ===================
+  Fix dmstats handling of stale group members after @stats_delete.
+  Fix dmstats histogram bounds leak when statistics regions are re-listed.
+  Validate dmsetup vdostats device name before use.
+  Only prefix log output with source location when verbose is enabled.
+
+Version 1.02.217 - 30th September 2026
+======================================
+  Ignore stale raid sync/nosync in active table for reload suppression.
+  Fix dmvdostats help -c to list VDO report fields instead of dmstats fields.
+  Resolve dmsetup vdostats through device tree and try -vpool name suffix.
+  Make library initialization and finalization safe with dlopen and dlclose.
+  Disable LeakSanitizer for the dmsetup udevcomplete udev rule.
+  Hard limit config parser to 128 section nesting.
+  Convert recursive config cloning to iteration.
+  Fix missing pthread key delete. (1.02.216)
+  Set parent pointers in dm_config_clone_node_with_mem when cloning nodes.
+  Fix dm_config_parent_name for root nodes in tree parsed by dm_config_parse.
+
+Version 1.02.216 - 06th August 2026
+===================================
+  Make libdm thread safe.
+  Add use_kernel_format to dm_vdo_target_params.
+  Introduce libdevmapper-san library with --enable-asan/--enable-tsan.
+  Parent table force reload when child device table changes.
+
+Version 1.02.215 - 15th May 2026
+================================
+  Fix ttree insert/lookup depth mismatch in libdm.
+  Fix broken dm_struct_field macro precedence and paren balance.
+  Fix regex parser error handling and NULL-state fingerprint.
+  Validate task type in dm_ioctl_exec.
+  Check errno for ERANGE in dmvdostats _parse_uint64.
+  Add missing NULL check for stats_str in dmvdostats report path.
+  Use _register_mutex for env_registry in dmeventd.
 
 Version 1.02.214 - 28th April 2026
 ==================================

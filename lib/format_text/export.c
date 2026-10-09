@@ -168,7 +168,8 @@ static int _out_with_comment_file(struct formatter *f, const char *comment,
 		white_space[i] = '\t';
 	white_space[i] = '\0';
 	fputs(white_space, f->data.fp);
-	i = vfprintf(f->data.fp, fmt, ap);
+	if ((i = vfprintf(f->data.fp, fmt, ap)) < 0)
+		return 0;
 
 	if (comment) {
 		/*
@@ -266,7 +267,7 @@ int out_newline(struct formatter *f)
 
 /*
  * Appends a comment giving a size in more easily
- * readable form (eg, 4M instead of 8096).
+ * readable form (eg, 4M instead of 8192).
  */
 int out_size(struct formatter *f, uint64_t size, const char *fmt, ...)
 {
@@ -277,10 +278,9 @@ int out_size(struct formatter *f, uint64_t size, const char *fmt, ...)
 	if (f->with_comment) {
 		if (!_sectors_to_units(size, buffer, sizeof(buffer)))
 			return 0;
-	} else
-		buffer[0] = 0;
+	}
 
-	_out_with_comment(f, buffer, fmt, ap);
+	_out_with_comment(f, f->with_comment ? buffer : NULL, fmt, ap);
 
 	return r;
 }
@@ -461,7 +461,7 @@ static int _print_vg(struct formatter *f, struct volume_group *vg)
 
 	if (!_out_list(f, &vg->tags, "tags"))
 		return_0;
- 
+
 	if (vg->system_id && *vg->system_id)
 		outf(f, "system_id = \"%s\"", vg->system_id);
 
@@ -1064,7 +1064,8 @@ size_t text_vg_export_raw(struct volume_group *vg, const char *desc, char **buf,
 
 	if (!_text_vg_export(&f, vg, desc)) {
 		free(f.data.buf.start);
-		return 0;
+		/* coverity[leaked_storage] _text_vg_export always frees f.pv_idx */
+		return_0;
 	}
 
 	r = f.data.buf.used + 1;

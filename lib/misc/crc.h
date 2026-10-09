@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2006 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,13 +13,13 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_CRC_H
-#define _LVM_CRC_H
+#ifndef LVM_CRC_H
+#define LVM_CRC_H
 
 #include <inttypes.h>
 
 #define INITIAL_CRC 0xf597a6cf
 
-uint32_t calc_crc(uint32_t initial, const uint8_t *buf, uint32_t size);
+uint32_t calc_crc(uint32_t initial, const uint8_t *buf, size_t size);
 
 #endif

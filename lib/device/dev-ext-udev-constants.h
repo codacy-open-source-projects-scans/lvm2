@@ -12,6 +12,9 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#ifndef LVM_DEV_EXT_UDEV_CONSTANTS_H
+#define LVM_DEV_EXT_UDEV_CONSTANTS_H
+
 /*************************************************************************
  * Properties saved in udev db and accessible via libudev and used by LVM *
  *************************************************************************/
@@ -33,11 +36,11 @@
 #define DEV_EXT_UDEV_BLKID_TYPE_SW_RAID         "linux_raid_member"
 #define DEV_EXT_UDEV_BLKID_PART_TABLE_TYPE      "ID_PART_TABLE_TYPE"
 
-#define DEV_EXT_UDEV_DEVTYPE			"DEVTYPE"
-#define DEV_EXT_UDEV_DEVTYPE_DISK		"disk"
+#define DEV_EXT_UDEV_DEVTYPE                    "DEVTYPE"
+#define DEV_EXT_UDEV_DEVTYPE_DISK               "disk"
 
 /* the list of symlinks associated with device node */
-#define DEV_EXT_UDEV_DEVLINKS			"DEVLINKS"
+#define DEV_EXT_UDEV_DEVLINKS                   "DEVLINKS"
 
 /*
  * DEV_EXT_UDEV_MPATH_DEVICE_PATH is set by multipath in udev db
@@ -52,6 +55,8 @@
  * Sysfs attributes accessible via libudev and used by LVM *
  ***********************************************************/
 
-/* the value of size sysfs attribute is size in bytes */
+/* the value of size sysfs attribute is in 512-byte sectors */
 #define DEV_EXT_UDEV_SYSFS_ATTR_SIZE            "size"
+
+#endif
 

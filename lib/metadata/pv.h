@@ -12,8 +12,8 @@
  * along with this program; if not, write to the Free Software Foundation,
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
-#ifndef _LVM_PV_H
-#define _LVM_PV_H
+#ifndef LVM_PV_H
+#define LVM_PV_H
 
 #include "lib/id/id.h"
 #include "libdm/libdevmapper.h"
@@ -60,12 +60,12 @@ struct physical_volume {
 	uint64_t pe_align;
 	uint64_t pe_align_offset;
 
-        /* This is true whenever the represented PV has a label associated. */
-        uint64_t is_labelled:1;
-        uint64_t unused_missing_cleared:1;
-	uint64_t wrong_vg:1; /* vg metadata includes this PVID but the PV is actually in a different vg */
+	/* This is true whenever the represented PV has a label associated. */
+	unsigned int is_labelled:1;
+	unsigned int unused_missing_cleared:1;
+	unsigned int wrong_vg:1; /* vg metadata includes this PVID but the PV is actually in a different vg */
 
-        /* NB. label_sector is valid whenever is_labelled is true */
+	/* NB. label_sector is valid whenever is_labelled is true */
 	uint64_t label_sector;
 
 	struct dm_list segments;	/* Ordered pv_segments covering complete PV */
@@ -100,11 +100,11 @@ uint64_t pv_mda_free(const struct physical_volume *pv);
 uint64_t pv_used(const struct physical_volume *pv);
 uint32_t pv_mda_count(const struct physical_volume *pv);
 uint32_t pv_mda_used_count(const struct physical_volume *pv);
-unsigned pv_mda_set_ignored(const struct physical_volume *pv, unsigned mda_ignored);
+unsigned pv_mda_set_ignored(struct physical_volume *pv, unsigned mda_ignored);
 int is_orphan(const struct physical_volume *pv);
 int is_missing_pv(const struct physical_volume *pv);
 int is_used_pv(const struct physical_volume *pv);
 int is_pv(const struct physical_volume *pv);
 struct label *pv_label(const struct physical_volume *pv);
 
-#endif /* _LVM_PV_H */
+#endif /* LVM_PV_H */

@@ -8,10 +8,11 @@
  * of the GNU Lesser General Public License v.2.1.
  */
 
-#ifndef _LVM_LVMLOCKD_INTERNAL_H
-#define _LVM_LVMLOCKD_INTERNAL_H
+#ifndef LVM_LVMLOCKD_INTERNAL_H
+#define LVM_LVMLOCKD_INTERNAL_H
 
 #include "base/memory/container_of.h"
+#include "lib/misc/util.h"
 
 #include <stdint.h>
 #include <pthread.h>
@@ -68,6 +69,7 @@ enum {
 	LD_OP_SETLOCKARGS_BEFORE,
 	LD_OP_SETLOCKARGS_FINAL,
 	LD_OP_SET_REMOTE_LV_LOCK, /* test-only: simulate remote node holding LV lock */
+	LD_OP_GET_START_RESULT,
 };
 
 /* resource types */
@@ -126,6 +128,7 @@ struct client {
 #define LD_AF_REPAIR		   0x00800000
 #define LD_AF_NO_TIMEOUT	   0x01000000
 #define LD_AF_HOSTS_UNKNOWN	   0x02000000
+#define LD_AF_NOWATCHDOG	   0x04000000
 
 /*
  * Number of times to repeat a lock request after
@@ -192,10 +195,10 @@ struct action {
 	int8_t mode;			/* lock mode LD_LK_ */
 	int8_t lm_type;			/* lock manager: LM_DLM, LM_SANLOCK */
 	int retries;
-	int max_retries;
 	int result;
 	int lm_rv;			/* return value from lm_ function */
 	int align_mb;
+	unsigned int force_fence_retry : 1;
 	char *path;
 	char vg_uuid[64];
 	char vg_name[MAX_NAME+1];
@@ -261,6 +264,7 @@ struct lockspace {
 	pthread_mutex_t mutex;
 	unsigned int create_fail : 1;
 	unsigned int create_done : 1;
+	int create_result;
 	unsigned int thread_work : 1;
 	unsigned int thread_stop : 1;
 	unsigned int thread_done : 1;
@@ -269,12 +273,20 @@ struct lockspace {
 	unsigned int kill_vg: 1;
 	unsigned int fence_pr: 1;
 	unsigned int no_timeout: 1;
+	unsigned int no_watchdog: 1;
 	unsigned int using_caw : 1;
 
 	struct list_head actions;	/* new client actions */
 	struct list_head resources;	/* resource/lock state for gl/vg/lv */
 	struct list_head dispose;	/* resources to free */
 	struct list_head fence_history;	/* internally created actions for fencing */
+};
+
+struct start_result {
+	struct list_head list;
+	char vg_name[MAX_NAME+1];
+	int result;
+	uint32_t client_id;
 };
 
 /* val_blk version */
@@ -298,6 +310,9 @@ static inline void INIT_LIST_HEAD(struct list_head *list)
 	list->prev = list;
 }
 
+/* Suppress false positive warnings from gcc -fanalyzer. */
+GCC_SUPPRESS_BUFFER_WARNING
+
 static inline void __list_add(struct list_head *new,
                               struct list_head *prev,
                               struct list_head *next)
@@ -318,6 +333,8 @@ static inline void list_add(struct list_head *new, struct list_head *head)
 {
 	__list_add(new, head, head->next);
 }
+
+GCC_UNSUPPRESS_WARNINGS
 
 static inline void list_add_tail(struct list_head *new, struct list_head *head)
 {
@@ -566,9 +583,7 @@ static inline int lm_get_lockspaces_dlm(struct list_head *ls_rejoin)
 
 static inline int lm_data_size_dlm(void)
 {
-	if (daemon_test)
-		return 0;
-	return -1;
+	return 0;
 }
 
 static inline int lm_is_running_dlm(void)
@@ -609,7 +624,7 @@ int lm_init_lv_sanlock(struct lockspace *ls, char *ls_name, char *vg_name, char 
 int lm_free_lv_sanlock(struct lockspace *ls, struct resource *r);
 int lm_rename_vg_sanlock(char *ls_name, char *vg_name, uint32_t flags, char *vg_args);
 int lm_prepare_lockspace_sanlock(struct lockspace *ls, uint64_t *prev_generation, int repair);
-int lm_add_lockspace_sanlock(struct lockspace *ls, int adopt_only, int adopt_ok, int nodelay);
+int lm_add_lockspace_sanlock(struct lockspace *ls, int adopt_only, int adopt_ok, int nodelay, int no_watchdog);
 int lm_rem_lockspace_sanlock(struct lockspace *ls, int free_vg);
 int lm_add_resource_sanlock(struct lockspace *ls, struct resource *r);
 int lm_lock_sanlock(struct lockspace *ls, struct resource *r, int ld_mode,
@@ -665,7 +680,7 @@ static inline int lm_prepare_lockspace_sanlock(struct lockspace *ls, uint64_t *p
 	return -1;
 }
 
-static inline int lm_add_lockspace_sanlock(struct lockspace *ls, int adopt_only, int adopt_ok, int nodelay)
+static inline int lm_add_lockspace_sanlock(struct lockspace *ls, int adopt_only, int adopt_ok, int nodelay, int no_watchdog)
 {
 	return -1;
 }
@@ -731,7 +746,7 @@ static inline int lm_get_lockspaces_sanlock(struct list_head *ls_rejoin)
 
 static inline int lm_data_size_sanlock(void)
 {
-	return -1;
+	return 0;
 }
 
 static inline int lm_is_running_sanlock(void)
@@ -799,7 +814,7 @@ static inline int lm_support_idm(void)
 
 static inline int lm_data_size_idm(void)
 {
-	return -1;
+	return 0;
 }
 
 static inline int lm_init_vg_idm(char *ls_name, char *vg_name, uint32_t flags,
@@ -874,4 +889,4 @@ static inline int lm_support_idm(void)
 
 #endif /* Seagate IDM support */
 
-#endif	/* _LVM_LVMLOCKD_INTERNAL_H */
+#endif	/* LVM_LVMLOCKD_INTERNAL_H */

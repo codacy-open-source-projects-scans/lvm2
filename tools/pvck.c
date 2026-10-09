@@ -92,7 +92,7 @@ static char *_chars_to_str(const void *in, void *out, int num, int max, const ch
 	return out;
 }
 
-/* 
+/*
  * This is used to print mda_header.magic as a series of hex values
  * since it only contains some printable chars.
  */
@@ -806,6 +806,12 @@ static int _dump_raw_locn(struct device *dev, struct devicefile *def, int print_
 	meta_checksum = htole32(rlocn->checksum);
 	meta_flags = htole32(rlocn->flags);
 
+	/* Corrupt offset; clear it so _dump_current_text() cannot wrap underflow. */
+	if (meta_offset > mda_size) {
+		log_print("CHECK: mda_header_%u.raw_locn[%u].offset larger than metadata area size", mn, ri);
+		meta_offset = 0;
+	}
+
 	if (meta_offset + meta_size > mda_size)
 		wrapped = 1;
 
@@ -1166,7 +1172,7 @@ static int _dump_label_and_pv_header(struct cmd_context *cmd, uint64_t labelsect
 			 * mda1 offset is page size from machine that created it,
 			 * warn if it's not one of the expected page sizes.
 			 */
-			if ((*mda1_offset != 4096) && 
+			if ((*mda1_offset != 4096) &&
 			    (*mda1_offset != 8192) &&
 			    (*mda1_offset != 16384) &&
 			    (*mda1_offset != 65536)) {
@@ -1976,7 +1982,7 @@ static int _repair_label_header(struct cmd_context *cmd, const char *repair,
 	               LABEL_SIZE - ((uint8_t *) &lh->offset_xl - (uint8_t *) lh));
 
 	lh->crc_xl = htole32(crc);
-       
+
 	log_print("Writing label_header.crc 0x%08x", crc);
 
 	if (arg_is_set(cmd, test_ARG)) {
@@ -2137,7 +2143,7 @@ static int _check_for_mda2(struct cmd_context *cmd, struct device *dev,
 			   uint64_t *mda2_offset, uint64_t *mda2_size)
 {
 	struct mda_header *mh;
-	char buf2[256];
+	char buf2[257];
 	char *buf;
 	uint64_t mda_offset, mda_size, extra_bytes; /* bytes */
 	unsigned i, found = 0;
@@ -2186,7 +2192,8 @@ static int _check_for_mda2(struct cmd_context *cmd, struct device *dev,
 	 * in the first half of the metadata area.
 	 */
 	for (i = 0; i < (mda_size / 1024); i++) {
-		memcpy(buf2, buf + 512 + (i * 512), sizeof(buf2));
+		memcpy(buf2, buf + 512 + (i * 512), sizeof(buf2) - 1);
+		buf2[sizeof(buf2) - 1] = '\0';
 
 		if (strstr(buf2, mf->vgid_str)) {
 			log_print("Found mda2 header at offset %llu size %llu",
@@ -2812,6 +2819,7 @@ static int _backup_file_to_raw_metadata(char *back_buf, uint64_t back_size,
 	return 1;
 }
 
+__attribute__((nonnull(1, 2)))
 static int _is_backup_file(struct cmd_context *cmd, char *text_buf, uint64_t text_size)
 {
 	if ((text_buf[0] == '#') && !strncmp(text_buf, "# Generated", 11))
@@ -2912,11 +2920,11 @@ fail_close:
 }
 
 /* all sizes and offsets in bytes */
-
+__attribute__((nonnull(1, 2, 3)))
 static int _check_metadata_file(struct cmd_context *cmd, struct metadata_file *mf,
 				char *text_buf, uint64_t text_size)
 {
-	char *vgid;
+	char *vgid, *p;
 	int namelen;
 
 	if (text_size < NAME_LEN+1) {
@@ -2943,9 +2951,10 @@ static int _check_metadata_file(struct cmd_context *cmd, struct metadata_file *m
 		return 0;
 	}
 
-	if (text_buf[text_size-1] != '\0' ||
-	    text_buf[text_size-2] != '\n' ||
-	    text_buf[text_size-3] != '\n')
+	/* Check last 3 bytes of text_buf[text_size] for valid '\n\n\0' ending.
+	 * text_size >= NAME_LEN+1 (>= 129) ensured by check above. */
+	p = text_buf + text_size - 1;
+	if (*p != '\0' || *(--p) != '\n' || *(--p) != '\n')
 		log_warn("WARNING: Unexpected final bytes of raw metadata, expected \\n\\n\\0.");
 
 	if (_check_vgname_start(text_buf, &namelen)) {

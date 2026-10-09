@@ -170,7 +170,7 @@ aux lvmconf "devices/hints = \"all\"" \
 	"devices/obtain_device_list_from_udev = 1" \
 	"devices/search_for_devnames = \"none\""
 
-rm $DF || true
+rm "$DF" || true
 
 # create 2 disk MD raid0 array
 # by default using metadata format 1.0 with data at the end of device
@@ -204,10 +204,10 @@ pvs > out
 not grep "$dev1" out
 not grep "$dev2" out
 
-grep "$mddev" "$HINTS"
-grep "$dev3" "$HINTS"
-not grep "$dev1" "$HINTS"
-not grep "$dev2" "$HINTS"
+grep "^scan:.*$mddev" "$HINTS"
+grep "^scan:.*$dev3" "$HINTS"
+not grep "^scan:.*$dev1" "$HINTS"
+not grep "^scan:.*$dev2" "$HINTS"
 
 vgchange -an $vg
 

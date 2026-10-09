@@ -13,7 +13,7 @@
 
 . lib/inittest --skip-with-lvmpolld
 
-which mkfs.ext4 || skip
+aux have_fs ext4 || skip
 aux have_integrity 1 5 0 || skip
 # Avoid 4K ramdisk devices on older kernels
 aux kernel_at_least  5 10 || export LVM_TEST_PREFER_BRD=0
@@ -72,7 +72,9 @@ _test1() {
 		[ "$i" -gt 1 ] && [ $# -lt 3 ] && continue  # only  raid5 has rimage_2
 		[ "$(get lv_field $vg/${lv1}_rimage_${i} integritymismatches)" = "0" ] || baddev=$(( baddev + 1 ))
 	done
-	[ "$baddev" -eq 1 ] || die "Unexpected number of integritymismatched devices ($baddev)!"
+	# ideally baddev should be 1, but raid5 syncaction can report
+	# integrity mismatches on non-corrupted legs in the parity group
+	[ "$baddev" -ge 1 ] || die "Unexpected number of integritymismatched devices ($baddev)!"
 
 	mount "$DM_DEV_DIR/$vg/$lv1" "$mnt"
 	cmp -b "$mnt/fileA" fileA
@@ -138,6 +140,69 @@ aux wait_recalc $vg/${lv1}_rimage_1
 aux wait_recalc $vg/$lv1
 _test2
 not check lv_field $vg/$lv1 integritymismatches "0"
+lvchange -an $vg/$lv1
+lvconvert --raidintegrity n $vg/$lv1
+lvremove $vg/$lv1
+vgremove -ff $vg
+
+# Test syncaction repair with raid+integrity
+_prepare_vg
+lvcreate --type raid1 -m1 --raidintegrity y -n $lv1 -l 6 $vg "$dev1" "$dev2"
+aux wait_recalc $vg/${lv1}_rimage_0
+aux wait_recalc $vg/${lv1}_rimage_1
+aux wait_recalc $vg/$lv1
+mkfs.ext4 -b 4096 "$DM_DEV_DIR/$vg/$lv1"
+mount "$DM_DEV_DIR/$vg/$lv1" "$mnt"
+cp fileA "$mnt"
+cp fileB "$mnt"
+cp fileC "$mnt"
+umount "$mnt"
+lvchange -an $vg/$lv1
+aux corrupt_dev "$dev1" BBBBBBBBBBBBBBBBB BBBBBBBBCBBBBBBBB
+lvchange -ay $vg/$lv1
+lvchange --syncaction check $vg/$lv1
+aux wait_recalc $vg/$lv1
+not check lv_field $vg/$lv1 raid_mismatch_count "0"
+lvchange --syncaction repair $vg/$lv1
+aux wait_recalc $vg/$lv1
+lvchange --syncaction check $vg/$lv1
+aux wait_recalc $vg/$lv1
+check lv_field $vg/$lv1 raid_mismatch_count "0"
+mount "$DM_DEV_DIR/$vg/$lv1" "$mnt"
+cmp -b "$mnt/fileA" fileA
+cmp -b "$mnt/fileB" fileB
+cmp -b "$mnt/fileC" fileC
+umount "$mnt"
+lvchange -an $vg/$lv1
+lvconvert --raidintegrity n $vg/$lv1
+lvremove $vg/$lv1
+vgremove -ff $vg
+
+# Test syncaction repair for raid mismatch without integrity errors.
+# Write to one rimage through its integrity layer while the raid is
+# suspended, so both images have valid integrity checksums but the
+# data differs between them.
+_prepare_vg
+lvcreate --type raid1 -m1 --raidintegrity y -n $lv1 -l 6 $vg "$dev1" "$dev2"
+aux wait_recalc $vg/${lv1}_rimage_0
+aux wait_recalc $vg/${lv1}_rimage_1
+aux wait_recalc $vg/$lv1
+mkfs.ext4 -b 4096 "$DM_DEV_DIR/$vg/$lv1"
+dmsetup suspend ${vg}-${lv1}
+dd if=/dev/urandom of="$DM_DEV_DIR/mapper/${vg}-${lv1}_rimage_0" bs=4096 count=1 seek=10 oflag=direct
+dmsetup resume ${vg}-${lv1}
+check lv_field $vg/${lv1}_rimage_0 integritymismatches "0"
+check lv_field $vg/${lv1}_rimage_1 integritymismatches "0"
+lvchange --syncaction check $vg/$lv1
+aux wait_recalc $vg/$lv1
+not check lv_field $vg/$lv1 raid_mismatch_count "0"
+check lv_field $vg/${lv1}_rimage_0 integritymismatches "0"
+check lv_field $vg/${lv1}_rimage_1 integritymismatches "0"
+lvchange --syncaction repair $vg/$lv1
+aux wait_recalc $vg/$lv1
+lvchange --syncaction check $vg/$lv1
+aux wait_recalc $vg/$lv1
+check lv_field $vg/$lv1 raid_mismatch_count "0"
 lvchange -an $vg/$lv1
 lvconvert --raidintegrity n $vg/$lv1
 lvremove $vg/$lv1

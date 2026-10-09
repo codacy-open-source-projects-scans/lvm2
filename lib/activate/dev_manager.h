@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2002-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2002-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2012 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_DEV_MANAGER_H
-#define _LVM_DEV_MANAGER_H
+#ifndef LVM_DEV_MANAGER_H
+#define LVM_DEV_MANAGER_H
 
 #include "lib/metadata/metadata-exported.h"
 
@@ -30,7 +30,7 @@ struct lv_seg_status;
 
 int read_only_lv(const struct logical_volume *lv, const struct lv_activate_opts *laopts, const char *layer);
 
-int get_crypt_table_offset(dev_t crypt_devt, uint32_t *offset_bytes);
+int get_crypt_table_offset(dev_t crypt_devt, uint64_t *offset_bytes);
 
 /*
  * Constructor and destructor.
@@ -40,7 +40,6 @@ struct dev_manager *dev_manager_create(struct cmd_context *cmd,
 				       unsigned track_pvmove_deps);
 void dev_manager_destroy(struct dev_manager *dm);
 void dev_manager_release(void);
-void dev_manager_exit(void);
 
 /*
  * The device handler is responsible for creating all the layered
@@ -72,8 +71,8 @@ int dev_manager_raid_message(struct dev_manager *dm,
 			     const struct logical_volume *lv,
 			     const char *msg);
 int dev_manager_writecache_message(struct dev_manager *dm,
-                                   const struct logical_volume *lv,
-                                   const char *msg);
+				   const struct logical_volume *lv,
+				   const char *msg);
 int dev_manager_cache_status(struct dev_manager *dm,
 			     const struct logical_volume *lv,
 			     struct lv_status_cache **status, int *exists);
@@ -82,7 +81,7 @@ int dev_manager_thin_status(struct dev_manager *dm,
 			    struct lv_status_thin **status, int *exists);
 int dev_manager_thin_device_id(struct dev_manager *dm,
 			       const struct logical_volume *lv,
-			       uint32_t *device_id, int *exist);
+			       uint32_t *device_id, int *exists);
 int dev_manager_thin_pool_status(struct dev_manager *dm,
 				 const struct logical_volume *lv, int flush,
 				 struct lv_status_thin_pool **status, int *exists);
@@ -103,13 +102,8 @@ int dev_manager_transient(struct dev_manager *dm, const struct logical_volume *l
 
 int dev_manager_mknodes(const struct logical_volume *lv);
 
-/*
- * Put the desired changes into effect.
- */
-int dev_manager_execute(struct dev_manager *dm);
-
 int dev_manager_device_uses_vg(struct device *dev,
-			       struct volume_group *vg);
+			       const struct volume_group *vg);
 
 int dev_manager_check_prefix_dm_major_minor(uint32_t major, uint32_t minor, const char *prefix);
 int dev_manager_get_dm_active_devices(const char *prefix, struct dm_list **devs,

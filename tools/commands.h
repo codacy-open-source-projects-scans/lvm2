@@ -62,7 +62,7 @@ xx(lvextend,
    ALLOW_HINTS | ALTERNATIVE_EXTENTS)
 
 xx(lvmchange,
-   "With the device mapper, this is obsolete and does nothing.",
+   "With the device mapper, this is obsolete and does nothing",
    0)
 
 xx(lvmconfig,
@@ -188,7 +188,7 @@ xx(vgck,
    ALL_VGS_IS_DEFAULT | LOCKD_VG_SH)
 
 xx(vgconvert,
-   "Change volume group metadata format",
+   "Removed: vgconvert has been removed along with the lvm1 format",
    0)
 
 xx(vgcreate,
@@ -216,7 +216,7 @@ xx(vgimportclone,
    ALLOW_EXPORTED)
 
 xx(vgimportdevices,
-   "Add devices for a VG to the devices file.",
+   "Add devices for a VG to the devices file",
    ALL_VGS_IS_DEFAULT | ALLOW_EXPORTED)
 
 xx(vgmerge,

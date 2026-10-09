@@ -179,6 +179,20 @@ out:
 	return NULL;
 }
 
+static int _vdo_pool_stats_supported(const struct logical_volume *lv)
+{
+	const struct segment_type *segtype;
+	unsigned attrs = 0;
+
+	if (!(segtype = get_segtype_from_flag(lv->vg->cmd, SEG_VDO_POOL)) ||
+	    !segtype->ops || !segtype->ops->target_present ||
+	    !segtype->ops->target_present(lv->vg->cmd, NULL, &attrs))
+		return 0;
+
+	/* dm-vdo added "stats" in target version 8.2.0, also marked by VERSION4. */
+	return (attrs & VDO_FEATURE_VERSION4) ? 1 : 0;
+}
+
 /* Read data_blocks_used and logical_blocks_used from VDO stats message */
 static int _vdo_pool_message_stats(struct dm_pool *mem,
 				   const struct logical_volume *lv,
@@ -192,6 +206,12 @@ static int _vdo_pool_message_stats(struct dm_pool *mem,
 
 	status->data_blocks_used = ULLONG_MAX;
 	status->logical_blocks_used = ULLONG_MAX;
+
+	if (!_vdo_pool_stats_supported(lv)) {
+		/* Missing stats are not an error; leave values unset for sysfs fallback. */
+		r = 1;
+		goto out;
+	}
 
 	if (!(dlid = build_dm_uuid(mem, lv, lv_layer(lv))))
 		return_0;
@@ -218,9 +238,91 @@ static int _vdo_pool_message_stats(struct dm_pool *mem,
 
 	r = 1;
 out:
-	dm_task_destroy(dmt);
+	if (dmt)
+		dm_task_destroy(dmt);
 
 	return r;
+}
+
+/*
+ * Old dm-raid kernels reset health chars after table reload (suspend/resume),
+ * reporting 'A' for devices that are actually missing. Cross-check against
+ * the DM table where missing devices show as "- -" and correct to 'D'.
+ */
+static void _raid_health_fixup_from_table(const struct dm_info *dminfo,
+					  struct dm_status_raid *s,
+					  const struct lv_segment *seg)
+{
+	struct dm_task *dmt;
+	uint64_t start, length;
+	char *type, *params, *p, *copy, *tok;
+	unsigned num_params, num_devs, i, attrs = 0;
+	int fixed = 0;
+
+	if (seg->segtype->ops->target_present &&
+	    seg->segtype->ops->target_present(seg->lv->vg->cmd, seg, &attrs) &&
+	    (attrs & RAID_FEATURE_FIXED_HEALTH_CHARS))
+		return;
+
+	if (!(dmt = _setup_task_run(DM_DEVICE_TABLE, NULL, NULL, NULL, 0,
+				    dminfo->major, dminfo->minor, 0, 0, 0)))
+		return;
+
+	(void) dm_get_next_target(dmt, NULL, &start, &length, &type, &params);
+
+	if (!type || !params || strcmp(type, TARGET_NAME_RAID))
+		goto out;
+
+	if (!(copy = dm_strdup(params)))
+		goto out;
+
+	p = copy;
+
+	/* Table: <raid_type> <#raid_params> [params...] <#devs> [<meta> <data>]... */
+	if (!(tok = strtok(p, " ")))	/* raid_type */
+		goto bad;
+
+	if (!(tok = strtok(NULL, " ")))	/* #raid_params */
+		goto bad;
+
+	num_params = (unsigned) atoi(tok);
+
+	for (i = 0; i < num_params; i++)
+		if (!strtok(NULL, " "))
+			goto bad;
+
+	if (!(tok = strtok(NULL, " ")))	/* #devs */
+		goto bad;
+
+	num_devs = (unsigned) atoi(tok);
+
+	if (num_devs != strlen(s->dev_health))
+		goto bad;
+
+	for (i = 0; i < num_devs; i++) {
+		char *meta = strtok(NULL, " ");
+		char *data = strtok(NULL, " ");
+
+		if (!meta || !data)
+			break;
+
+		if ((*meta == '-' || *data == '-') && s->dev_health[i] != 'D') {
+			log_warn("WARNING: Kernel RAID health char at position %u is '%c'"
+				 " but device-mapper table shows missing device"
+				 " -- overriding to 'D'.",
+				 i, s->dev_health[i]);
+			s->dev_health[i] = 'D';
+			fixed++;
+		}
+	}
+
+	if (fixed)
+		log_warn("WARNING: Kernel dm-raid health status is stale"
+			 " (known old kernel bug after table reload).");
+bad:
+	dm_free(copy);
+out:
+	dm_task_destroy(dmt);
 }
 
 static int _get_segment_status_from_target_params(const char *target_name,
@@ -271,6 +373,7 @@ static int _get_segment_status_from_target_params(const char *target_name,
 	} else if (segtype_is_raid(segtype)) {
 		if (!dm_get_status_raid(seg_status->mem, params, &seg_status->raid))
 			return_0;
+		_raid_health_fixup_from_table(dminfo, seg_status->raid, seg);
 		seg_status->type = SEG_STATUS_RAID;
 	} else if (segtype_is_thin_volume(segtype)) {
 		if (!dm_get_status_thin(seg_status->mem, params, &seg_status->thin))
@@ -399,7 +502,7 @@ static int _info_run(const char *dlid, struct dm_info *dminfo,
 
 	r = 1;
 
-      out:
+out:
 	dm_task_destroy(dmt);
 
 	return r;
@@ -485,8 +588,10 @@ static int _ignore_blocked_mirror_devices(struct cmd_context *cmd,
 					         .check_blocked = 1,
 					         .check_suspended = ignore_suspended_devices(),
 					         .check_error_target = 1,
-					         .check_reserved = 0 }, NULL))
+					         .check_reserved = 0 }, NULL)) {
+				r = 1;
 				goto out; /* safe to use */
+			}
 			stack;
 		}
 	}
@@ -735,7 +840,7 @@ static int _is_usable_uuid(const struct device *dev, const char *name, const cha
 		return 0;
 	}
 
-        return 1;
+	return 1;
 }
 
 /*
@@ -883,7 +988,7 @@ int dm_device_is_usable(struct cmd_context *cmd, struct device *dev, struct dev_
 
 	r = 1;
 
-      out:
+out:
 	dm_task_destroy(dmt);
 	return r;
 }
@@ -1043,7 +1148,7 @@ int dev_manager_get_dm_active_devices(const char *prefix, struct dm_list **devs,
 		goto_out;
 	}
 
-    out:
+out:
 	dm_task_destroy(dmt);
 
 	return r;
@@ -1243,8 +1348,9 @@ int add_linear_area_to_dtree(struct dm_tree_node *node, uint64_t size, uint32_t 
 		/*
 		 * We'll use the extent size as the stripe size.
 		 * Extent size and page size are always powers of 2.
-		 * The striped target requires that the stripe size is
-		 * divisible by the page size.
+		 * The striped target supports sub-page stripe sizes now, but
+		 * keep the conservative linear fallback for extent sizes below
+		 * the page size.
 		 */
 		if (extent_size >= page_size) {
 			/* Use striped target */
@@ -1253,9 +1359,8 @@ int add_linear_area_to_dtree(struct dm_tree_node *node, uint64_t size, uint32_t 
 			return 1;
 		}
 
-		/* Some exotic cases are unsupported by striped. */
-		log_warn("WARNING: Using linear target for %s/%s: Striped requires extent size "
-			 "(" FMTu32 " sectors) >= page size (" FMTu32 ").",
+		log_warn("WARNING: Using linear target for %s/%s: extent size "
+			 "(" FMTu32 " sectors) is smaller than page size (" FMTu32 ").",
 			 vgname, lvname, extent_size, page_size);
 	}
 
@@ -1385,10 +1490,10 @@ static int _percent_run(struct dev_manager *dm, const char *name,
 			     display_percent(dm->cmd, *overall_percent));
 	r = 1;
 
-    out:
+out:
 	dm_task_destroy(dmt);
 
-    bad:
+bad:
 	if (wait) {
 		sigint_restore();
 
@@ -1486,7 +1591,7 @@ int dev_manager_transient(struct dev_manager *dm, const struct logical_volume *l
 
 	r = 1;
 
-      out:
+out:
 	dm_task_destroy(dmt);
 	return r;
 }
@@ -1603,11 +1708,6 @@ void dev_manager_destroy(struct dev_manager *dm)
 void dev_manager_release(void)
 {
 	dm_lib_release();
-}
-
-void dev_manager_exit(void)
-{
-	dm_lib_exit();
 }
 
 int dev_manager_snapshot_percent(struct dev_manager *dm,
@@ -2473,6 +2573,74 @@ static int _add_dev_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 	return 1;
 }
 
+/*
+ * Build a list of all DM devices belonging to this VG.
+ * Uses DM LIST ioctl filtered by VG name prefix.
+ * Skips devices with open_count > 0 (still referenced by a parent).
+ */
+static int _add_missing_devs_to_clean_tree(struct dev_manager *dm,
+					   struct dm_tree *dtree)
+{
+	struct dm_list *devs;
+	struct dm_active_device *dm_dev;
+	struct dm_info info;
+	unsigned devs_features = 0;
+	char *vg_name, *lv_name, *layer;
+	char *dm_prefix;
+	size_t prefix_len;
+
+	if (!(dm_prefix = dm_build_dm_name(dm->mem, dm->vg_name, "", NULL)))
+		return_0;
+
+	prefix_len = strlen(dm_prefix);
+
+	if (!dev_manager_get_dm_active_devices(NULL, &devs, &devs_features))
+		return_0;
+
+	dm_list_iterate_items(dm_dev, devs) {
+		if (!dm_dev->name)
+			continue;
+
+		if (strncmp(dm_dev->name, dm_prefix, prefix_len))
+			continue;
+
+		if (!dm_split_lvm_name(dm->mem, dm_dev->name,
+				       &vg_name, &lv_name, &layer))
+			continue;
+
+		if (strncmp(layer, "missing_", 8))
+			continue;
+
+		if (!_info_run(NULL, &info, NULL, NULL, NULL, 1, 0,
+			       MAJOR(dm_dev->devno), MINOR(dm_dev->devno)))
+			continue;
+
+		if (!info.exists)
+			continue;
+
+		if (info.open_count) {
+			log_debug_activation("Skipping in-use missing dev %s-%s "
+					     "(open_count %d).",
+					     lv_name, layer, info.open_count);
+			continue;
+		}
+
+		log_debug_activation("Adding orphaned missing dev %s-%s "
+				     "to clean tree.", lv_name, layer);
+
+		if (!dm_tree_add_dev_with_udev_flags(dtree,
+						     MAJOR(dm_dev->devno),
+						     MINOR(dm_dev->devno), 0)) {
+			dm_device_list_destroy(&devs);
+			return_0;
+		}
+	}
+
+	dm_device_list_destroy(&devs);
+
+	return 1;
+}
+
 struct pool_cb_data {
 	struct dev_manager *dm;
 	const struct logical_volume *pool_lv;
@@ -2671,7 +2839,7 @@ static int _pool_register_callback(struct dev_manager *dm,
 		data->exec = global_thin_check_executable_CFG;
 		data->opts = global_thin_check_options_CFG;
 		data->global = "thin";
-	} else if (lv_is_cache(lv)) { /* cache pool */
+	} else if (lv_is_cache(lv)) { /* cached LV */
 		data->pool_lv = first_seg(lv)->pool_lv;
 		data->skip_zero = 1; /* cheap read-error detection */
 		data->exec = global_cache_check_executable_CFG;
@@ -2947,6 +3115,8 @@ static int _add_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 			if (seg_type(seg, s) == AREA_LV && seg_lv(seg, s) &&
 			    /* origin only for cache without pending delete */
 			    (!dm->track_pending_delete || !lv_is_cache(lv)) &&
+			    /* Deactivation: treat pvmove LV as PV boundary */
+			    (dm->activation || dm->suspend || !lv_is_pvmove(seg_lv(seg, s))) &&
 			    !_add_lv_to_dtree(dm, dtree, seg_lv(seg, s),
 					      lv_is_vdo_pool(seg_lv(seg, s)) ? 1 : 0))
 				return_0;
@@ -3126,15 +3296,14 @@ int add_areas_line(struct dev_manager *dm, struct lv_segment *seg,
 				return_0;
 			num_error_areas++;
 		} else if (seg_type(seg, s) == AREA_PV) {
-			struct device *dev = seg_dev(seg, s);
-			name = dm_list_empty(&dev->aliases) ? NULL : dev_name(dev);
+			name = dev_name(seg_dev(seg, s));
 
 			if (!dm_tree_node_add_target_area(node, name, NULL,
 				    (seg_pv(seg, s)->pe_start + (extent_size * seg_pe(seg, s)))))
 				return_0;
 		} else if (seg_is_raid(seg)) {
 			/*
-			 * RAID can handle unassigned areas.  It simple puts
+			 * RAID can handle unassigned areas.  It simply puts
 			 * '- -' in for the metadata/data device pair.  This
 			 * is a valid way to indicate to the RAID target that
 			 * the device is missing.
@@ -3180,7 +3349,7 @@ int add_areas_line(struct dev_manager *dm, struct lv_segment *seg,
 		}
 	}
 
-        if (num_error_areas) {
+	if (num_error_areas) {
 		/* Thins currently do not support partial activation */
 		if (lv_is_thin_type(seg->lv)) {
 			log_error("Cannot activate %s: pool incomplete.",
@@ -3471,6 +3640,18 @@ static int _add_segment_to_dtree(struct dev_manager *dm,
 	    !_add_new_lv_to_dtree(dm, dtree, seg->writecache, laopts,
 				  lv_layer(seg->writecache)))
 		return_0;
+
+	/* Integrity reads superblock during TABLE_LOAD -- fails with EIO
+	 * when backing device uses error target (missing PV).
+	 * Use error target for the whole integrity device so RAID handles
+	 * degradation via I/O errors, same as simple error-backed rimage. */
+	if (seg_is_integrity(seg) && lv_is_partial(seg->lv)) {
+		log_debug_activation("Using error for partial integrity %s.",
+				     display_lvname(seg->lv));
+		if (!dm_tree_node_add_error_target(dnode, (uint64_t)seg->lv->vg->extent_size * _seg_len(seg)))
+			return_0;
+		return 1;
+	}
 
 	if (seg->integrity_meta_dev && !laopts->origin_only &&
 	    !_add_new_lv_to_dtree(dm, dtree, seg->integrity_meta_dev, laopts,
@@ -3825,7 +4006,8 @@ static int _add_new_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
 		read_ahead_flags = DM_READ_AHEAD_MINIMUM_FLAG;
 	}
 
-	dm_tree_node_set_read_ahead(dnode, read_ahead, read_ahead_flags);
+	if (!lv_is_lockd_sanlock_lv(lv))
+		dm_tree_node_set_read_ahead(dnode, read_ahead, read_ahead_flags);
 
 	/* Add any LVs referencing a PVMOVE LV unless told not to */
 	if (dm->track_pvmove_deps && lv_is_pvmove(lv))
@@ -4041,6 +4223,8 @@ static int _tree_action(struct dev_manager *dm, const struct logical_volume *lv,
 	case CLEAN:
 		if (retry_deactivation())
 			dm_tree_retry_remove(root);
+		if (!_add_missing_devs_to_clean_tree(dm, dtree))
+			goto_out;
 		/* Deactivate any unused non-toplevel nodes */
 		if (!_clean_tree(dm, root, laopts->origin_only ? dlid : NULL))
 			goto_out;
@@ -4167,7 +4351,7 @@ int dev_manager_suspend(struct dev_manager *dm, const struct logical_volume *lv,
  * Returns 1 if uncertain.
  */
 int dev_manager_device_uses_vg(struct device *dev,
-			       struct volume_group *vg)
+			       const struct volume_group *vg)
 {
 	struct dm_tree *dtree;
 	struct dm_tree_node *root;
@@ -4212,7 +4396,7 @@ out:
  * The offset needs to be subtracted from the LV size to get the
  * size used to resize the crypt device.
  */
-int get_crypt_table_offset(dev_t crypt_devt, uint32_t *offset_bytes)
+int get_crypt_table_offset(dev_t crypt_devt, uint64_t *offset_bytes)
 {
 	struct dm_task *dmt;
 	uint64_t start, length;
@@ -4264,6 +4448,6 @@ int get_crypt_table_offset(dev_t crypt_devt, uint32_t *offset_bytes)
 	if (!offset_str[0])
 		return_0;
 
-	*offset_bytes = ((uint32_t)strtoul(offset_str, NULL, 0) * 512);
+	*offset_bytes = (uint64_t)strtoul(offset_str, NULL, 0) * 512;
 	return 1;
 }

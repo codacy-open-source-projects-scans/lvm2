@@ -41,7 +41,7 @@ static void _process_status_code(dm_status_mirror_health_t health,
 	 *    S => Sync - A synchronization failure occurred, mirror out-of-sync
 	 *    R => Read - A read failure occurred, mirror data unaffected
 	 *    U => Unclassified failure (bug)
-	 */ 
+	 */
 	switch (health) {
 	case DM_STATUS_MIRROR_ALIVE:
 		return;
@@ -66,7 +66,7 @@ static void _process_status_code(dm_status_mirror_health_t health,
 	}
 }
 
-static int _get_mirror_event(struct dso_state *state, char *params)
+static int _get_mirror_event(struct dso_state *state, const char *params)
 {
 	int r = ME_INSYNC;
 	unsigned i;
@@ -98,17 +98,16 @@ static int _get_mirror_event(struct dso_state *state, char *params)
 	return r;
 }
 
-static int _remove_failed_devices(const char *cmd_lvconvert, const char *device)
+static void _repair_mirror_lv(const char *cmd_lvconvert, const char *device)
 {
 	/* if repair goes OK, report success even if lvscan has failed */
 	if (!dmeventd_lvm2_run_with_lock(cmd_lvconvert)) {
 		log_error("Repair of mirrored device %s failed.", device);
-		return 0;
+		log_error("Failed to remove faulty devices in %s.", device);
+		return;
 	}
 
 	log_info("Repair of mirrored device %s finished successfully.", device);
-
-	return 1;
 }
 
 void process_event(struct dm_task *dmt,
@@ -138,18 +137,21 @@ void process_event(struct dm_task *dmt,
 
 		switch(_get_mirror_event(state, params)) {
 		case ME_INSYNC:
-			/* FIXME: all we really know is that this
-			   _part_ of the device is in sync
-			   Also, this is not an error
-			*/
 			log_notice("%s is now in-sync.", device);
+			/*
+			 * Run repair even on ME_INSYNC.  dm-mirror may not
+			 * report device health when legs fail (e.g. flush
+			 * errors on offline SCSI devices), so status can stay
+			 * all-alive while PVs are missing.  lvconvert --repair
+			 * detects missing PVs via metadata and is a fast no-op
+			 * when the LV is consistent.  Mirror repair uses
+			 * noflush suspend so it does not deadlock on I/O.
+			 */
+			_repair_mirror_lv(state->cmd_lvconvert, device);
 			break;
 		case ME_FAILURE:
 			log_error("Device failure in %s.", device);
-			if (!_remove_failed_devices(state->cmd_lvconvert, device))
-				/* FIXME Why are all the error return codes unused? Get rid of them? */
-				log_error("Failed to remove faulty devices in %s.",
-					  device);
+			_repair_mirror_lv(state->cmd_lvconvert, device);
 			/* Should check before warning user that device is now linear
 			else
 				log_notice("%s is now a linear device.",
@@ -165,7 +167,7 @@ void process_event(struct dm_task *dmt,
 	} while (next);
 }
 
-int register_device(const char *device,
+int register_device(const char *device_name,
 		    const char *uuid __attribute__((unused)),
 		    int major __attribute__((unused)),
 		    int minor __attribute__((unused)),
@@ -178,16 +180,16 @@ int register_device(const char *device,
 
         /* CANNOT use --config as this disables cached content */
 	if (!dmeventd_lvm2_command(state->mem, state->cmd_lvconvert, sizeof(state->cmd_lvconvert),
-				   "lvconvert --repair --use-policies", device))
+				   "lvconvert --repair --use-policies", device_name))
 		goto_bad;
 
 	*user = state;
 
-	log_info("Monitoring mirror device %s for events.", device);
+	log_info("Monitoring mirror device %s for events.", device_name);
 
 	return 1;
 bad:
-	log_error("Failed to monitor mirror %s.", device);
+	log_error("Failed to monitor mirror %s.", device_name);
 
 	if (state)
 		dmeventd_lvm2_exit_with_pool(state);
@@ -195,7 +197,7 @@ bad:
 	return 0;
 }
 
-int unregister_device(const char *device,
+int unregister_device(const char *device_name,
 		      const char *uuid __attribute__((unused)),
 		      int major __attribute__((unused)),
 		      int minor __attribute__((unused)),
@@ -205,7 +207,7 @@ int unregister_device(const char *device,
 
 	dmeventd_lvm2_exit_with_pool(state);
 	log_info("No longer monitoring mirror device %s for events.",
-		 device);
+		 device_name);
 
 	return 1;
 }

@@ -1933,7 +1933,7 @@ static int _do_metadatalv_disp(struct dm_report *rh, struct dm_pool *mem __attri
 	struct logical_volume *metadata_lv = lv_metadata_lv(lv);
 
 	if (!metadata_lv)
-		return _field_set_value(field, "", NULL);		
+		return _field_set_value(field, "", NULL);
 
 	if (uuid)
 		return _uuid_disp(rh, mem, field, &metadata_lv->lvid.id[1], private);
@@ -2412,13 +2412,13 @@ static int _uint32_disp(struct dm_report *rh, struct dm_pool *mem __attribute__(
 	return dm_report_field_uint32(rh, field, data);
 }
 
-static int _int8_disp(struct dm_report *rh, struct dm_pool *mem __attribute__((unused)),
+static int _uint8_disp(struct dm_report *rh, struct dm_pool *mem __attribute__((unused)),
 		       struct dm_report_field *field,
 		       const void *data, void *private __attribute__((unused)))
 {
-	const int32_t val = *(const int8_t *)data;
+	const uint32_t val = *(const uint8_t *)data;
 
-	return dm_report_field_int32(rh, field, &val);
+	return dm_report_field_uint32(rh, field, &val);
 }
 
 static int _int32_disp(struct dm_report *rh, struct dm_pool *mem __attribute__((unused)),
@@ -4704,8 +4704,8 @@ int report_devtypes(void *handle)
 {
 	int devtypeind = 0;
 
-	while (_dev_known_types[devtypeind].name[0])
-		if (!_report_devtype_single(handle, &_dev_known_types[devtypeind++]))
+	while (dev_known_types[devtypeind].name[0])
+		if (!_report_devtype_single(handle, &dev_known_types[devtypeind++]))
 			return 0;
 
 	return 1;
@@ -4744,7 +4744,7 @@ void report_reset_cmdlog_seqnum(void)
 	_log_seqnum = 1;
 }
 
-int report_current_object_cmdlog(const char *type, const char *msg, int32_t ret_code)
+int report_current_object_cmdlog(const char *type, const char *msg, int ret_code)
 {
 	log_report_t log_state = log_get_report_state();
 

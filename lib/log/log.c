@@ -93,7 +93,7 @@ static int _set_custom_log_stream(struct log_stream_item *stream_item, int custo
 		goto out;
 
 	if (is_valid_fd(custom_fd)) {
-		if ((flags = fcntl(custom_fd, F_GETFL)) > 0) {
+		if ((flags = fcntl(custom_fd, F_GETFL)) >= 0) {
 			if ((flags & O_ACCMODE) == O_RDONLY) {
 				log_error("File descriptor %d already open in read-only "
 					  "mode, expected write-only or read-write mode.",
@@ -274,7 +274,7 @@ void init_log_file(const char *log_file, int append)
 
 	_log_file_path[0] = '\0';
 	if ((env = getenv("LVM_LOG_FILE_EPOCH"))) {
-		while (isalpha(env[i]) && i < 32) /* Up to 32 alphas */
+		while (i < 32 && isalpha(env[i])) /* Up to 32 alphas */
 			i++;
 		if (env[i]) {
 			if (i)
@@ -608,8 +608,8 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
 	if (_store_errmsg && (level <= _LOG_ERR) &&
 	    _lvm_errmsg_len < MAX_ERRMSG_LEN) {
 		msglen = strlen(message);
-		if ((_lvm_errmsg_len + msglen + 1) >= _lvm_errmsg_size) {
-			_lvm_errmsg_size = 2 * (_lvm_errmsg_len + msglen + 1);
+		if ((_lvm_errmsg_len + msglen + 2) >= _lvm_errmsg_size) {
+			_lvm_errmsg_size = 2 * (_lvm_errmsg_len + msglen + 2);
 			if ((newbuf = realloc(_lvm_errmsg,
 						 _lvm_errmsg_size)))
 				_lvm_errmsg = newbuf;
@@ -633,7 +633,7 @@ static void _vprint_log(int level, const char *file, int line, int dm_errno_or_c
 			if (dm_hash_lookup(_duplicated, message))
 				level = _LOG_NOTICE;
 			else
-				(void) dm_hash_insert(_duplicated, message, (void*)1);
+				(void) dm_hash_insert(_duplicated, message, (void *)(uintptr_t)1);
 		}
 	}
 
@@ -856,10 +856,10 @@ void log_set_report_object_type(log_report_object_type_t object_type)
 	_log_report.object_type = object_type;
 }
 
-void log_set_report_object_group_and_group_id(const char *group, const struct id *id)
+void log_set_report_object_group_and_group_id(const char *group, const struct id *group_id)
 {
 	_log_report.object_group = group;
-	_log_report.object_group_id = id;
+	_log_report.object_group_id = group_id;
 }
 
 void log_set_report_object_name_and_id(const char *name, const struct id *id)

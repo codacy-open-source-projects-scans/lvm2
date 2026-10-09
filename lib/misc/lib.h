@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -16,8 +16,8 @@
 /*
  * This file must be included first by every library source file.
  */
-#ifndef _LVM_LIB_H
-#define _LVM_LIB_H
+#ifndef LVM_LIB_H
+#define LVM_LIB_H
 
 #include "libdm/libdevmapper.h"
 #include "base/memory/zalloc.h"

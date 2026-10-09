@@ -349,6 +349,9 @@ void pdst_locked_destroy_all_pdlvs(const struct lvmpolld_store *pdst)
 		pdlv_destroy(dm_hash_get_data(pdst->store, n));
 }
 
+/* Suppress false positive FD leak warnings from gcc -fanalyzer. */
+GCC_SUPPRESS_FD_WARNINGS
+
 struct lvmpolld_thread_data *lvmpolld_thread_data_constructor(struct lvmpolld_lv *pdlv)
 {
 	struct lvmpolld_thread_data *data = (struct lvmpolld_thread_data *) malloc(sizeof(struct lvmpolld_thread_data));
@@ -391,14 +394,14 @@ void lvmpolld_thread_data_destroy(void *thread_private)
 		 * FIXME: skip this step if lvmpolld is activated
 		 * 	  by systemd.
 		 */
-		if (!pdlv_get_polling_finished(data->pdlv))
+		if (!pdlv_get_polling_finished(data->pdlv) &&
+		    data->pdlv->cmd_pid > 0)
 			kill(data->pdlv->cmd_pid, SIGTERM);
 		pdlv_set_polling_finished(data->pdlv, 1);
 		pdst_locked_dec(data->pdlv->pdst);
 		pdst_unlock(data->pdlv->pdst);
 	}
 
-	/* may get reallocated in getline(). free must not be used */
 	free(data->line);
 
 	if (data->fout && !fclose(data->fout))
@@ -421,3 +424,5 @@ void lvmpolld_thread_data_destroy(void *thread_private)
 
 	free(data);
 }
+
+GCC_UNSUPPRESS_WARNINGS

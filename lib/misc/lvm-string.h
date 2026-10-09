@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_STRING_H
-#define _LVM_STRING_H
+#ifndef LVM_STRING_H
+#define LVM_STRING_H
 
 #define NAME_LEN 128
 #define UUID_PREFIX "LVM-"
@@ -22,7 +22,6 @@
 #include <sys/types.h>
 
 struct dm_pool;
-struct pool;
 struct logical_volume;
 
 typedef enum name_error {
@@ -37,11 +36,11 @@ typedef enum name_error {
 int emit_to_buffer(char **buffer, size_t *size, const char *fmt, ...)
   __attribute__ ((format(printf, 3, 4)));
 
-char *build_dm_uuid(struct dm_pool *mem, const struct logical_volume *lvid,
+char *build_dm_uuid(struct dm_pool *mem, const struct logical_volume *lv,
 		    const char *layer);
 
 int validate_name(const char *n);
-name_error_t validate_name_detailed(const char *n);
+name_error_t validate_name_detailed(const char *name);
 int validate_tag(const char *n);
 
 void copy_systemid_chars(const char *src, char *dst);

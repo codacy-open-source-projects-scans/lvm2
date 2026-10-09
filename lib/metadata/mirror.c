@@ -130,8 +130,7 @@ struct lv_segment *find_mirror_seg(struct lv_segment *seg)
  */
 uint32_t adjusted_mirror_region_size(struct cmd_context *cmd,
 				     uint32_t extent_size, uint32_t extents,
-				     uint32_t region_size, int internal,
-				     int clustered __attribute__((unused)))
+				     uint32_t region_size, int internal)
 {
 	uint64_t region_max;
 
@@ -231,7 +230,11 @@ static int _write_log_header(struct cmd_context *cmd, struct logical_volume *lv)
 	}
 
 	if (!label_scan_open(dev)) {
-		log_error("Failed to open %s/%s to write log header.", lv->vg->name, lv->name);
+		if (dev_scan_io_failed(dev))
+			log_debug_devs("Skipping mirror log header write on %s: excluded after earlier I/O error.",
+				       dev_name(dev));
+		else
+			log_error("Failed to open %s/%s to write log header.", lv->vg->name, lv->name);
 		return 0;
 	}
 
@@ -364,18 +367,50 @@ const struct logical_volume *find_active_pvmoved_lv(const struct logical_volume 
 	return NULL;
 }
 
-int activate_pvmoved_lvs(const struct dm_list *lvs)
+int refresh_pvmoved_lvs(const struct dm_list *lvs)
 {
 	const struct logical_volume *lv;
-	struct lv_list *lvl;
+	struct lv_list *lvl, *lvl2;
+	int already_done;
 	int r = 1;
 
 	dm_list_iterate_items(lvl, lvs) {
 		if (!(lv = find_active_pvmoved_lv(lvl->lv)))
 			continue;
 
-		if (!activate_lv(lv->vg->cmd, lv)) {
-			log_error("Failed to activate %s.", display_lvname(lv));
+		/* Multiple component LVs (e.g. _tmeta, _tdata) may share
+		 * the same lock holder; skip if already refreshed. */
+		already_done = 0;
+		dm_list_iterate_items(lvl2, lvs) {
+			if (lvl2 == lvl)
+				break;
+			if (find_active_pvmoved_lv(lvl2->lv) == lv) {
+				already_done = 1;
+				break;
+			}
+		}
+		if (already_done) {
+			log_debug_activation("Holder %s already refreshed, skipping.",
+					     display_lvname(lv));
+			continue;
+		}
+
+		/*
+		 * Use suspend+resume to force kernel DM table reload.
+		 * activate_lv() cannot be used here; it skips LVs that
+		 * are already active without reloading sub-device tables.
+		 * After pvmove layer removal, component LVs (e.g. _tmeta)
+		 * still have kernel tables pointing to the old pvmove
+		 * device; suspend+resume forces them to pick up the new
+		 * post-pvmove mappings from committed metadata.
+		 *
+		 * This is safe because pvmove skips LVs whose holders are
+		 * active on other nodes, so all participating active LVs
+		 * are guaranteed to have local DM devices.
+		 */
+		log_debug_activation("Refreshing %s after pvmove.", display_lvname(lv));
+		if (!lv_refresh_suspend_resume(lv)) {
+			log_error("Failed to refresh %s after pvmove.", display_lvname(lv));
 			r = 0;
 		}
 	}
@@ -1120,7 +1155,7 @@ static int _remove_mirror_images(struct logical_volume *lv,
 	if (!lv_update_and_reload_origin(mirrored_seg->lv))
 		return_0;
 
-	if (!activate_pvmoved_lvs(&lvs_changed))
+	if (!refresh_pvmoved_lvs(&lvs_changed))
 		return_0;
 
 	/* Save or delete the 'orphan' LVs */
@@ -1593,8 +1628,7 @@ static int _add_mirrors_that_preserve_segments(struct logical_volume *lv,
 	if (!(adjusted_region_size = adjusted_mirror_region_size(cmd,
 								lv->vg->extent_size,
 								lv->le_count,
-								region_size, 1,
-								vg_is_clustered(lv->vg))))
+								region_size, 1)))
 		return_0;
 
 	if (!(ah = allocate_extents(lv->vg, NULL, segtype, 1, mirrors, 0, 0,

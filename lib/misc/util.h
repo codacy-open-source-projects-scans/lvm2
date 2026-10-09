@@ -12,10 +12,37 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_UTIL_H
-#define _LVM_UTIL_H
+#ifndef LVM_UTIL_H
+#define LVM_UTIL_H
 
 #include "libdm/libdevmapper.h"
+
+/*
+ * GCC -fanalyzer has limitations in certain code patterns.
+ */
+#if defined(__GNUC__) && (__GNUC__ >= 13) && !defined(__clang__)
+# define GCC_SUPPRESS_FD_WARNINGS \
+	_Pragma("GCC diagnostic push") \
+	_Pragma("GCC diagnostic ignored \"-Wanalyzer-fd-leak\"") \
+	_Pragma("GCC diagnostic ignored \"-Wanalyzer-fd-use-without-check\"")
+
+# define GCC_SUPPRESS_LEAK_WARNING \
+	_Pragma("GCC diagnostic push") \
+	_Pragma("GCC diagnostic ignored \"-Wanalyzer-malloc-leak\"")
+
+# define GCC_SUPPRESS_BUFFER_WARNING \
+	_Pragma("GCC diagnostic push") \
+	_Pragma("GCC diagnostic ignored \"-Wanalyzer-use-after-free\"") \
+	_Pragma("GCC diagnostic ignored \"-Wanalyzer-out-of-bounds\"")
+
+# define GCC_UNSUPPRESS_WARNINGS \
+	_Pragma("GCC diagnostic pop")
+#else
+# define GCC_SUPPRESS_FD_WARNINGS
+# define GCC_SUPPRESS_LEAK_WARNING
+# define GCC_SUPPRESS_BUFFER_WARNING
+# define GCC_UNSUPPRESS_WARNINGS
+#endif
 
 #define min(a, b) ({ __typeof__(a) _a = (a); \
 		     __typeof__(b) _b = (b); \
@@ -28,12 +55,6 @@
 		     _a > _b ? _a : _b; })
 
 #define is_power_of_2(n) ((n) && !((n) & ((n) - 1)))
-
-#if defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 4 && __GNUC_MINOR__ >= 6)
-#define uninitialized_var(x) x
-#else
-#define uninitialized_var(x) x = x
-#endif
 
 /* Use wrapper for checked results */
 static inline __attribute__((warn_unused_result))
@@ -48,12 +69,13 @@ static inline __attribute__((warn_unused_result))
  * and comparisons for older compilers.
  */
 #ifdef HAVE___BUILTIN_CLZ
-#define clz(x) __builtin_clz((x))
+#define clz(x) ((x) ? __builtin_clz((x)) : 32)
 #else /* ifdef HAVE___BUILTIN_CLZ */
-static unsigned _dm_clz(unsigned x)
+static inline unsigned _dm_clz(unsigned x)
 {
-	int n;
+	unsigned n;
 
+	/* branchless: if (!x) return 32; if (x >> 31) return 0; */
 	if ((int)x <= 0) return (~x >> 26) & 32;
 
 	n = 1;
@@ -84,9 +106,9 @@ static unsigned _dm_clz(unsigned x)
 #endif /* ifdef HAVE___BUILTIN_CLZ */
 
 #ifdef HAVE___BUILTIN_CLZLL
-#define clzll(x) __builtin_clzll((x))
+#define clzll(x) ((x) ? __builtin_clzll((x)) : 64)
 #else /* ifdef HAVE___BUILTIN_CLZLL */
-static unsigned _dm_clzll(unsigned long long x)
+static inline unsigned _dm_clzll(unsigned long long x)
 {
 	if (x <= 0xffffffff)
 		return 32 + clz((unsigned) (x & 0xffffffff));

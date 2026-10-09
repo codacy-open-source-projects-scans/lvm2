@@ -32,11 +32,11 @@ int lvmnotify_is_supported(void)
 	return 1;
 }
 
-static int lvmdbusd_running(void)
+static int _lvmdbusd_running(void)
 {
-	int fd = 0;
+	int fd = -1;
 	int rc = 0;
-	int errno_cpy = 0;
+	int errno_cpy;
 	int running = 0;
 	const char *lockfile = NULL;
 
@@ -55,7 +55,7 @@ static int lvmdbusd_running(void)
 
 	errno = 0;
 	fd = open(lockfile, O_RDWR);
-	if (-1 == fd) {
+	if (fd == -1) {
 		errno_cpy = errno;
 		if (errno_cpy == ENOENT) {
 			return 0;
@@ -69,7 +69,7 @@ static int lvmdbusd_running(void)
 	/* Need to ensure we close lock FD now */
 	errno = 0;
 	rc = lockf(fd, F_TEST, 0);
-	if (-1 != rc) {
+	if (rc != -1) {
 		/* Not locked, thus not running */
 		running = 0;
 	} else {
@@ -108,7 +108,7 @@ void lvmnotify_send(struct cmd_context *cmd)
 	cmd->pv_notify = 0;
 
 	/* If lvmdbusd isn't running, don't notify as you will start it as it will auto activate */
-	if (!lvmdbusd_running()) {
+	if (!_lvmdbusd_running()) {
 		log_debug_dbus("dbus daemon not running, not notifying");
 		return;
 	}
@@ -136,9 +136,11 @@ void lvmnotify_send(struct cmd_context *cmd)
 	if (ret < 0) {
 		if (sd_bus_error_has_name(&error, SD_BUS_SYSTEMD_NO_SUCH_UNIT_ERROR) ||
 		    sd_bus_error_has_name(&error, SD_BUS_DBUS_SERVICE_UNKNOWN_ERROR))
-			log_debug_dbus("%s: %s", _dbus_notification_failed_msg, error.message);
+			log_debug_dbus("%s: %s", _dbus_notification_failed_msg,
+				       error.message ?: "");
 		else
-			log_warn("WARNING: %s: %s", _dbus_notification_failed_msg, error.message);
+			log_warn("WARNING: %s: %s", _dbus_notification_failed_msg,
+				 error.message ?: "");
 		goto out;
 	}
 

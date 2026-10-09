@@ -28,9 +28,6 @@
 /* Define to 1 if the 'closedir' function returns void instead of int. */
 #undef CLOSEDIR_VOID
 
-/* Path to cmirrord pidfile. */
-#undef CMIRRORD_PIDFILE
-
 /* Define to 1 if using 'alloca.c'. */
 #undef C_ALLOCA
 
@@ -136,6 +133,15 @@
 /* Define to 1 to include the LVM editline shell. */
 #undef EDITLINE_SUPPORT
 
+/* Enable AddressSanitizer build */
+#undef ENABLE_ASAN
+
+/* Build with sanitizer support */
+#undef ENABLE_SANITIZER
+
+/* Enable ThreadSanitizer build */
+#undef ENABLE_TSAN
+
 /* Path to fsadm binary. */
 #undef FSADM_PATH
 
@@ -159,9 +165,6 @@
 
 /* Define to 1 if you have the <assert.h> header file. */
 #undef HAVE_ASSERT_H
-
-/* Define to 1 if you have the 'atexit' function. */
-#undef HAVE_ATEXIT
 
 /* Define if blkid.h has BLKID_SUBLKS_FSINFO */
 #undef HAVE_BLKID_SUBLKS_FSINFO
@@ -340,6 +343,9 @@
 
 /* Define to 1 to include support for realtime clock. */
 #undef HAVE_REALTIME
+
+/* Define to 1 if you have the 'renameat2' function. */
+#undef HAVE_RENAMEAT2
 
 /* Define to 1 if you have the 'rl_completion_matches' function. */
 #undef HAVE_RL_COMPLETION_MATCHES
@@ -567,7 +573,7 @@
 /* Define to 1 to include built-in support for integrity. */
 #undef INTEGRITY_INTERNAL
 
-/* Internalization package */
+/* Internationalization package */
 #undef INTL_PACKAGE
 
 /* Locale-dependent data */

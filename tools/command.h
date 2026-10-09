@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2015 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_COMMAND_H
-#define _LVM_COMMAND_H
+#ifndef LVM_COMMAND_H
+#define LVM_COMMAND_H
 
 #include "tools/command_enums.h"
 
@@ -27,7 +27,7 @@ struct logical_volume;
 typedef int (*command_fn) (struct cmd_context *cmd, int argc, char **argv);
 
 struct command_function {
-	int command_enum;
+	unsigned command_enum;
 	command_fn fn; /* new style */
 };
 
@@ -66,48 +66,48 @@ struct command_name_args {
  */
 
 /* arg_def flags */
-#define ARG_DEF_FLAG_NEW_VG             1 << 0
-#define ARG_DEF_FLAG_NEW_LV             1 << 1
-#define ARG_DEF_FLAG_MAY_REPEAT         1 << 2
+#define ARG_DEF_FLAG_NEW_VG             (1 << 0)
+#define ARG_DEF_FLAG_NEW_LV             (1 << 1)
+#define ARG_DEF_FLAG_MAY_REPEAT         (1 << 2)
 
-static inline int val_bit_is_set(uint64_t val_bits, int val_enum)
+static inline int val_bit_is_set(uint64_t val_bits, unsigned int val_enum)
 {
 	return (val_bits & (1ULL << val_enum)) ? 1 : 0;
 }
 
-static inline uint64_t val_enum_to_bit(int val_enum)
+static inline uint64_t val_enum_to_bit(unsigned int val_enum)
 {
 	return (1ULL << val_enum);
 }
 
-static inline int lvp_bit_is_set(uint64_t lvp_bits, int lvp_enum)
+static inline int lvp_bit_is_set(uint64_t lvp_bits, unsigned int lvp_enum)
 {
 	return (lvp_bits & (1ULL << lvp_enum)) ? 1 : 0;
 }
 
-static inline uint64_t lvp_enum_to_bit(int lvp_enum)
+static inline uint64_t lvp_enum_to_bit(unsigned int lvp_enum)
 {
 	return (1ULL << lvp_enum);
 }
 
-static inline int lvt_bit_is_set(uint64_t lvt_bits, int lvt_enum)
+static inline int lvt_bit_is_set(uint64_t lvt_bits, unsigned int lvt_enum)
 {
 	return (lvt_bits & (1ULL << lvt_enum)) ? 1 : 0;
 }
 
-static inline uint64_t lvt_enum_to_bit(int lvt_enum)
+static inline uint64_t lvt_enum_to_bit(unsigned int lvt_enum)
 {
 	return (1ULL << lvt_enum);
 }
 
-/* Description a value that follows an option or exists in a position. */
+/* Description of a value that follows an option or exists in a position. */
 
 struct arg_def {
 	uint64_t val_bits;   /* bits of x_VAL, can be multiple for pos_arg */
 	uint64_t lvt_bits;   /* lvt_enum_to_bit(x_LVT) for lv_VAL, can be multiple */
-	const char *str;     /* a literal string for constnum_VAL */
+	const char *str;     /* a literal string for conststr_VAL */
 	uint32_t flags;      /* ARG_DEF_FLAG_ */
-	uint16_t num;        /* a literal number for conststr_VAL */
+	uint16_t num;        /* a literal number for constnum_VAL */
 };
 
 /* Description of an option and the value that follows it. */
@@ -212,8 +212,8 @@ struct command {
 	struct cmd_rule rules[CMD_MAX_RULES];
 
 	/* usually only one autotype, in one case there are two */
-	char *autotype;
-	char *autotype2;
+	const char *autotype;
+	const char *autotype2;
 
 	uint16_t any_ro_count;
 

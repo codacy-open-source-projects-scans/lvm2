@@ -85,14 +85,14 @@ aux wipefs_a "$dev3"
 aux wipefs_a "$dev4"
 
 vgcreate $vg1 "$dev1"
-eval "$(pvs --noheading --nameprefixes -o major,minor,uuid "$dev1")"
+eval "$(pvs --noheadings --nameprefixes -o major,minor,uuid "$dev1")"
 MAJOR1=$LVM2_PV_MAJOR
 MINOR1=$LVM2_PV_MINOR
 OPVID1=$LVM2_PV_UUID
 PVID1=${OPVID1//-/}
 
 vgcreate $vg2 "$dev2"
-eval "$(pvs --noheading --nameprefixes -o major,minor,uuid "$dev2")"
+eval "$(pvs --noheadings --nameprefixes -o major,minor,uuid "$dev2")"
 MAJOR2=$LVM2_PV_MAJOR
 MINOR2=$LVM2_PV_MINOR
 OPVID2=$LVM2_PV_UUID
@@ -101,12 +101,12 @@ PVID2=${OPVID2//-/}
 # just using pvcreate/pvs to get MAJOR MINOR
 
 pvcreate "$dev3"
-eval "$(pvs --noheading --nameprefixes -o major,minor,uuid "$dev3")"
+eval "$(pvs --noheadings --nameprefixes -o major,minor,uuid "$dev3")"
 MAJOR3=$LVM2_PV_MAJOR
 MINOR3=$LVM2_PV_MINOR
 
 pvcreate "$dev4"
-eval "$(pvs --noheading --nameprefixes -o major,minor,uuid "$dev4")"
+eval "$(pvs --noheadings --nameprefixes -o major,minor,uuid "$dev4")"
 MAJOR4=$LVM2_PV_MAJOR
 MINOR4=$LVM2_PV_MINOR
 
@@ -142,7 +142,7 @@ not grep "$dev4" out
 
 # Prints the deviceid that's saved in metadata.
 pvs -o uuid,deviceid "$dev1" | tee out
-grep $OPVID1 out
+grep "$OPVID1" out
 grep $SERIAL1 out
 
 # PV1 moves from dev1 to dev3 (and dev1 goes away)
@@ -201,7 +201,7 @@ not grep $SERIAL4 "$DF"
 # "invalid" is printed when displaying the outdated
 # deviceid from the metadata.
 pvs -o uuid,deviceid "$dev3" | tee out
-grep $OPVID1 out
+grep "$OPVID1" out
 grep invalid out
 
 # bring back dev1

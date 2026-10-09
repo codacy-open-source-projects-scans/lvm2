@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_FORMAT_TEXT_H
-#define _LVM_FORMAT_TEXT_H
+#ifndef LVM_FORMAT_TEXT_H
+#define LVM_FORMAT_TEXT_H
 
 #include "lib/metadata/metadata.h"
 
@@ -31,7 +31,7 @@
  */
 int archive_vg(struct volume_group *vg,
 	       const char *dir,
-	       const char *desc, uint32_t retain_days, uint32_t min_archive);
+	       const char *desc, uint32_t retain_days, uint32_t min_archives);
 
 /*
  * Displays a list of vg backups in a particular archive directory.
@@ -57,7 +57,7 @@ int pvhdr_read(struct device *dev, char *buf);
 int add_da(struct dm_pool *mem, struct dm_list *das,
 	   uint64_t start, uint64_t size);
 void del_das(struct dm_list *das);
-int add_ba(struct dm_pool *mem, struct dm_list *eas,
+int add_ba(struct dm_pool *mem, struct dm_list *bas,
 	   uint64_t start, uint64_t size);
 void del_bas(struct dm_list *bas);
 int add_mda(const struct format_type *fmt, struct dm_pool *mem, struct dm_list *mdas,
@@ -65,7 +65,7 @@ int add_mda(const struct format_type *fmt, struct dm_pool *mem, struct dm_list *
 	    struct metadata_area **mda_new);
 void del_mdas(struct dm_list *mdas);
 
-/* On disk */
+/* On disk, packed to prevent future padding if fields change */
 struct disk_locn {
 	uint64_t offset;	/* Offset in bytes to start sector */
 	uint64_t size;		/* Bytes */

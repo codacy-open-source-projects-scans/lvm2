@@ -173,9 +173,14 @@ static int _text_lv_setup(struct format_instance *fid __attribute__((unused)),
 	return 1;
 }
 
-static void _xlate_mdah(struct mda_header *mdah)
+/* Return 0 if the raw_locns list is not terminated within the header,
+ * which means the header is corrupt.  Called from read and write paths. */
+static int _xlate_mdah(struct mda_header *mdah)
 {
-	struct raw_locn *rl;
+	struct raw_locn *rl, *end;
+
+	/* raw_locns is a NULL-terminated list that must fit within one sector */
+	end = (struct raw_locn *)((char *)mdah + MDA_HEADER_SIZE);
 
 	mdah->version = htole32(mdah->version);
 	mdah->start = htole64(mdah->start);
@@ -186,8 +191,16 @@ static void _xlate_mdah(struct mda_header *mdah)
 		rl->checksum = htole32(rl->checksum);
 		rl->offset = htole64(rl->offset);
 		rl->size = htole64(rl->size);
+		/* flags was not historically byte-swapped; detect cross-endian */
+		if (rl->flags > 0xFF)
+			rl->flags = bswap_32(rl->flags);
 		rl++;
+
+		if ((rl + 1) > end)
+			return_0; /* next raw_locn does not fit */
 	}
+
+	return 1;
 }
 
 int raw_parse_mda_header(struct mda_header *mdah, struct device_area *dev_area,
@@ -202,7 +215,11 @@ int raw_parse_mda_header(struct mda_header *mdah, struct device_area *dev_area,
 		*bad_fields |= BAD_MDA_CHECKSUM;
 	}
 
-	_xlate_mdah(mdah);
+	if (!_xlate_mdah(mdah)) {
+		log_warn("WARNING: Metadata raw_locns list not terminated in mda header on %s at %llu.",
+			 dev_name(dev_area->dev), (unsigned long long)dev_area->start);
+		*bad_fields |= BAD_MDA_HEADER;
+	}
 
 	if (memcmp(mdah->magic, FMTT_MAGIC, sizeof(mdah->magic))) {
 		log_warn("WARNING: Wrong magic number in mda header on %s at %llu.",
@@ -283,7 +300,11 @@ static int _raw_write_mda_header(const struct format_type *fmt,
 	mdah->version = FMTT_VERSION;
 	mdah->start = start_byte;
 
-	_xlate_mdah(mdah);
+	if (!_xlate_mdah(mdah)) {
+		log_error(INTERNAL_ERROR "Invalid raw_locns list.");
+		return 0;
+	}
+
 	mdah->checksum_xl = htole32(calc_crc(INITIAL_CRC, (uint8_t *)mdah->magic,
 					     MDA_HEADER_SIZE -
 					     sizeof(mdah->checksum_xl)));
@@ -937,7 +958,7 @@ static int _vg_write_raw(struct format_instance *fid, struct volume_group *vg,
 				   vg->name, vg->seqno,
 				   (unsigned long long)write1_last - extra_size,
 				   (unsigned long long)write1_last, extra_size);
-		  
+
 		if (write1_size > write_buf_size) {
 			/* sanity check, shouldn't happen */
 			log_error("VG %s %u %s adjusted metadata end %llu extra %u larger than write buffer %llu",
@@ -950,7 +971,7 @@ static int _vg_write_raw(struct format_instance *fid, struct volume_group *vg,
 
 	if (write2_over) {
 		extra_size = 512 - write2_over; /* this many extra zero bytes written after metadata text */
-		write2_size += extra_size; 
+		write2_size += extra_size;
 		write2_last = write2_start + write2_size - 1;
 
 		log_debug_metadata("VG %s %u metadata last align from %llu to %llu (+%u) (wrapped)",
@@ -981,7 +1002,7 @@ static int _vg_write_raw(struct format_instance *fid, struct volume_group *vg,
 
 	dev_set_last_byte(mdac->area.dev, mda_start + mdah->size);
 
-	log_debug_metadata("VG %s %u metadata write at %llu size %llu (wrap %llu)", 
+	log_debug_metadata("VG %s %u metadata write at %llu size %llu (wrap %llu)",
 			   vg->name, vg->seqno,
 			   (unsigned long long)write1_start,
 			   (unsigned long long)write1_size,
@@ -1686,7 +1707,7 @@ static int _text_pv_write(struct cmd_context *cmd, const struct format_type *fmt
 	unsigned mda_index;
 
 	if (is_orphan_vg(pv->vg_name))
-		memcpy(vgid, pv->vg_name, ID_LEN);
+		strncpy(vgid, pv->vg_name, ID_LEN);
 	else if (pv->vg)
 		memcpy(vgid, &pv->vg->id.uuid, ID_LEN);
 
@@ -1771,7 +1792,7 @@ static int _text_pv_write(struct cmd_context *cmd, const struct format_type *fmt
 		return_0;
 
 	if (!label_write(pv->dev, label)) {
-		stack;
+		log_error("Failed to write PV label for %s.", dev_name(pv->dev));
 		return 0;
 	}
 
@@ -1867,7 +1888,7 @@ static int _text_pv_initialise(const struct format_type *fmt,
 		  (unsigned long long)data_alignment_sectors, (unsigned long long)data_alignment_offset_sectors);
 
 	if (!data_alignment_sectors) {
-		data_alignment_sectors = find_config_tree_int(pv->fmt->cmd, devices_data_alignment_CFG, NULL) * 2;
+		data_alignment_sectors = (uint64_t) find_config_tree_int64(pv->fmt->cmd, devices_data_alignment_CFG, NULL) * 2ULL;
 		if (data_alignment_sectors)
 			log_debug("PV init config data_alignment_sectors %llu",
 				  (unsigned long long)data_alignment_sectors);
@@ -2281,6 +2302,7 @@ static int _text_pv_add_metadata_area(const struct format_type *fmt,
 	uint64_t wipe_size = 8 << SECTOR_SHIFT;
 	uint64_t zero_len;
 	size_t page_size = lvm_getpagesize();
+	unsigned mda_size_min = 8 * (unsigned) page_size;
 	struct metadata_area *mda;
 	struct mda_context *mdac;
 	const char *limit_name;
@@ -2348,7 +2370,7 @@ static int _text_pv_add_metadata_area(const struct format_type *fmt,
 		mda_start = LABEL_SCAN_SIZE;
 
 		/* Align MDA0 start with page size if possible. */
-		if (limit - mda_start >= MDA_SIZE_MIN) {
+		if (limit - mda_start >= mda_size_min) {
 			if ((adjustment = mda_start % page_size))
 				mda_start += (page_size - adjustment);
 		}
@@ -2485,9 +2507,9 @@ static int _text_pv_add_metadata_area(const struct format_type *fmt,
 				  mda_size, limit_name, limit);
 
 	if (mda_size) {
-		if (mda_size < MDA_SIZE_MIN) {
+		if (mda_size < mda_size_min) {
 			log_error("Metadata area size too small: " FMTu64 " bytes. "
-				  "It must be at least %u bytes.", mda_size, MDA_SIZE_MIN);
+				  "It must be at least %u bytes.", mda_size, mda_size_min);
 			goto bad;
 		}
 
@@ -2715,7 +2737,7 @@ int text_wipe_outdated_pv_mda(struct cmd_context *cmd, struct device *dev,
 	rlocn_slot1->offset = 0;
 	rlocn_slot1->size = 0;
 	rlocn_slot1->checksum = 0;
-         
+
 	if (!_raw_write_mda_header(cmd->fmt, dev, mda_is_primary(mda), start_byte, mdab)) {
 		log_error("Failed to write outdated pv mda header on %s", dev_name(dev));
 		return 0;

@@ -12,8 +12,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_DEV_TYPE_H
-#define _LVM_DEV_TYPE_H
+#ifndef LVM_DEV_TYPE_H
+#define LVM_DEV_TYPE_H
 
 #include "lib/device/device.h"
 #include "lib/metadata/metadata-exported.h"
@@ -56,7 +56,7 @@ struct dev_types *create_dev_types(const char *proc_dir, const struct dm_config_
 /* Subsystems */
 int dev_subsystem_part_major(struct dev_types *dt, struct device *dev);
 const char *dev_subsystem_name(struct dev_types *dt, struct device *dev);
-int major_is_scsi_device(struct dev_types *dt, int major);
+int major_is_scsi_device(struct dev_types *dt, unsigned major);
 
 /* Signature/superblock recognition with position returned where found. */
 int dev_is_md_component(struct cmd_context *cmd, struct device *dev, uint64_t *offset_found, int full);
@@ -83,7 +83,7 @@ unsigned long dev_md_stripe_width(struct dev_types *dt, struct device *dev);
 int dev_is_md_with_end_superblock(struct dev_types *dt, struct device *dev);
 
 /* Partitioning */
-int major_max_partitions(struct dev_types *dt, int major);
+int major_max_partitions(struct dev_types *dt, unsigned major);
 int dev_is_partitioned(struct cmd_context *cmd, struct device *dev);
 int dev_get_primary_dev(struct dev_types *dt, struct device *dev, dev_t *result);
 int dev_get_partition_number(struct device *dev, int *num);
@@ -95,7 +95,7 @@ unsigned long dev_optimal_io_size(struct dev_types *dt, struct device *dev);
 unsigned long dev_discard_max_bytes(struct dev_types *dt, struct device *dev);
 unsigned long dev_discard_granularity(struct dev_types *dt, struct device *dev);
 
-int dm_uuid_has_prefix(char *sysbuf, const char *prefix);
+int dm_uuid_has_prefix(const char *sysbuf, const char *prefix);
 
 int dev_is_rotational(struct dev_types *dt, struct device *dev);
 
@@ -106,7 +106,6 @@ int dev_is_scsi(struct cmd_context *cmd, struct device *dev);
 int dev_is_mpath(struct cmd_context *cmd, struct device *dev);
 int dev_is_lv(struct cmd_context *cmd, struct device *dev);
 
-#define FSTYPE_MAX 16
 int fs_block_size_and_type(const char *pathname, uint32_t *fs_block_size_bytes, char *fstype, int *nofs);
 int fs_get_blkid(const char *pathname, struct fs_info *fsi);
 

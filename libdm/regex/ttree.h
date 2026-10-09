@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
  *
  * This file is part of the device-mapper userspace tools.
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _DM_TTREE_H
-#define _DM_TTREE_H
+#ifndef DM_TTREE_H
+#define DM_TTREE_H
 
 #include "libdm/misc/dmlib.h"
 
@@ -22,7 +22,7 @@ struct ttree;
 
 struct ttree *ttree_create(struct dm_pool *mem, unsigned int klen);
 
-void *ttree_lookup(struct ttree *tt, unsigned *key);
-int ttree_insert(struct ttree *tt, unsigned *key, void *data);
+void *ttree_lookup(const struct ttree *tt, const unsigned int *key);
+int ttree_insert(struct ttree *tt, const unsigned int *key, void *data);
 
 #endif

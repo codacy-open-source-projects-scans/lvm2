@@ -23,6 +23,12 @@ expect_failure() {
         echo "TEST EXPECT FAILURE"
 }
 
+with_sanitizer() {
+	local _ver
+	_ver=$(lvm version 2>/dev/null) || return 1
+	[[ "$_ver" == *enable-[at]san* ]]
+}
+
 check_daemon_in_builddir() {
 	# skip if we don't have our own daemon...
 	if [[ -z "${installed_testsuite+varset}" ]]; then
@@ -130,12 +136,10 @@ prepare_lvmlockd() {
 	pgrep lvmlockd && skip "Cannot run while existing lvmlockd process exists."
 
 	if [[ "${LVM_TEST_LOCK_TYPE_SANLOCK:-0}" != 0 ]]; then
-		# make check_lvmlockd_sanlock
 		echo "Starting lvmlockd for sanlock."
 		lvmlockd -o 2
 
 	elif [[ "${LVM_TEST_LOCK_TYPE_DLM:-0}" != 0 ]]; then
-		# make check_lvmlockd_dlm
 		echo "Starting lvmlockd for dlm."
 		lvmlockd
 
@@ -380,7 +384,9 @@ teardown_devs_prefixed() {
 	done
 
 	# Resume suspended devices first
-	for dm in $(dm_info name -S "name=~$PREFIX&&suspended=Suspended"); do
+	local suspended_dms=()
+	suspended_dms=( $(dm_info name -S "name=~$PREFIX&&suspended=Suspended" || true) )
+	for dm in ${suspended_dms[@]+"${suspended_dms[@]}"}; do
 		[[ "$dm" != "No devices found" ]] || break
 		echo "## resuming: dmsetup resume \"$dm\""
 		dmsetup clear "$dm" &
@@ -519,8 +525,29 @@ kill_sleep_kill_() {
 		sleep "$sleep_time"
 	done
 
+	# Process survived the graceful-wait window: dump its state (zombie 'Z',
+	# uninterruptible 'D', alive) and where each thread is blocked (wchan)
+	# before SIGKILL - it answers why the daemon did not shut down.
+	if ps "${pid[@]}" >/dev/null 2>&1 ; then
+		ls_proc_state_ "$(basename "$pidfile") not exiting on SIGTERM" "${pid[@]}" || true
+	fi
+
 	# After timeout, use SIGKILL as last resort
 	kill -KILL "${pid[@]}" 2>/dev/null || true
+}
+
+# Print process/thread state for diagnostics: whether a process is a zombie
+# ('Z'), in uninterruptible sleep ('D') or still alive, plus where each of
+# its threads is blocked (wchan).  Expected to leave no error behind even
+# when /proc entries disappear, so it is safe under 'set -e'.
+ls_proc_state_() {
+	local label=$1; shift
+	local pid
+	for pid in "$@" ; do
+		[[ -e "/proc/$pid" ]] || continue
+		echo "## $label: $(ps -o pid=,stat=,etime=,wchan:32=,cmd= -p "$pid" 2>/dev/null || echo "pid $pid not listed by ps")"
+		ps -L -p "$pid" -o pid=,tid=,stat=,wchan:32= 2>/dev/null | sed "s/^/## $label\t/" || true
+	done
 }
 
 print_procs_by_tag_() {
@@ -560,6 +587,7 @@ kill_tagged_processes() {
 }
 
 teardown() {
+	local test_exit_status=$?
 	local cfg
 	local TEST_LEAKED_DEVICES=""
 	local had_devices=0
@@ -570,10 +598,15 @@ teardown() {
 
 	if [[ ! -f SKIP_THIS_TEST  ]]; then
 		# Evaluate left devices only for non-skipped tests
-		TEST_LEAKED_DEVICES=$(dmsetup table | grep "$PREFIX" | \
-			grep -Ev "${PREFIX}(pv|[0-9])" | \
-			grep -v "$(cat ERR_DEV_NAME 2>/dev/null)" | \
-			grep -v "$(cat ZERO_DEV_NAME 2>/dev/null)") || true
+		if [[ -s DM_DEV_BASELINE ]]; then
+			# Compare against device baseline captured after prepare_devs
+			TEST_LEAKED_DEVICES=$(dmsetup info -c --noheadings -o name | \
+				grep "^${PREFIX}" | sort | \
+				comm -23 - DM_DEV_BASELINE) || true
+		else
+			TEST_LEAKED_DEVICES=$(dmsetup table | grep "$PREFIX" | \
+				grep -Ev "${PREFIX}(pv|[0-9])") || true
+		fi
 	fi
 
 	kill_tagged_processes
@@ -603,7 +636,20 @@ teardown() {
 
 	echo -n .
 
-	kill_sleep_kill_ LOCAL_DMEVENTD "${LVM_VALGRIND_DMEVENTD:-0}"
+	if [[ -s LOCAL_DMEVENTD ]]; then
+		kill_sleep_kill_ LOCAL_DMEVENTD "${LVM_VALGRIND_DMEVENTD:-0}"
+		# Kill any dmeventd auto-restarted with a new PID after a crash
+		if DPID=$(pgrep dmeventd 2>/dev/null); then
+			ls_proc_state_ "dmeventd survived SIGTERM" $DPID || true
+			echo "## killing leftover dmeventd ($DPID)"
+			kill -KILL $DPID 2>/dev/null || true
+			sleep 1 || true
+			# Recheck in case dmeventd is uninterruptible ('D') and ignores SIGKILL
+			if DPID=$(pgrep dmeventd 2>/dev/null); then
+				ls_proc_state_ "dmeventd survived SIGKILL" $DPID || true
+			fi
+		fi
+	fi
 
 	echo -n .
 
@@ -617,14 +663,25 @@ teardown() {
 	fi
 
 	if [[ -n "${TEST_LEAKED_DEVICES-}" ]]; then
-		echo "## unexpected devices left dm table:"
-		echo "$TEST_LEAKED_DEVICES"
-		return 1
+		if [[ "$test_exit_status" -eq 0 ]]; then
+			echo "## unexpected devices left dm table:"
+			echo "$TEST_LEAKED_DEVICES"
+			return 1
+		else
+			echo "## devices left after test failure (expected):"
+			echo "$TEST_LEAKED_DEVICES"
+		fi
 	fi
 
 	if [[ "${LVM_TEST_PARALLEL:-0}" = 0 && -z "$RUNNING_DMEVENTD" ]]; then
-		rm -f debug.log* # no trace of lvm2 command for this case
+		# Final check has to run before removing debug logs: when it fails,
+		# STACKTRACE prints debug.log* (incl. debug.log_DMEVENTD_out) and the
+		# state below shows whether the survivor is a zombie or 'D' state.
+		if DPID=$(pgrep dmeventd 2>/dev/null); then
+			ls_proc_state_ "dmeventd survived all SIGKILLs at final check" $DPID || true
+		fi
 		not pgrep dmeventd &>/dev/null # printed in STACKTRACE
+		rm -f debug.log* # no trace of lvm2 command for this case
 	fi
 
 	if [[ -n "${TESTDIR-}" ]]; then
@@ -651,9 +708,10 @@ teardown() {
 
 	# Find dangling symlinks with test prefix and remove them
 	# -xtype l matches symlinks whose target no longer exists
+	# maxdepth 2 catches VG/LV symlinks like /dev/TESTvg/lvname
 	local ALL_DANGLING
 	ALL_DANGLING=( $(find /dev/mapper -maxdepth 1 -name "${LEAKED_PREFIX}*" -xtype l -print 2>/dev/null
-		find /dev -maxdepth 1 -name "${LEAKED_PREFIX}*" -xtype l -print 2>/dev/null) ) || true
+		find /dev -maxdepth 2 -path "/dev/${LEAKED_PREFIX}*" -xtype l -print 2>/dev/null) ) || true
 
 	# Check which of the dangling links belong to this test specifically
 	LEAKED_LINKS=()
@@ -741,6 +799,45 @@ prepare_ramdisk() {
 	touch RAMDISK
 }
 
+prepare_ramdisk_static() {
+	local size=$1
+
+	# brd built-in: /dev/ram0 exists from boot at a fixed size given on the
+	# kernel command line (brd.rd_size=...).  There is no module to reload
+	# (and no resizing), so reuse it only when it is BOTH big enough for
+	# this request AND unused -- otherwise fall back to a loop device.
+	# prepare_devs() blkdiscards it for freshness right after
+	# prepare_backing_dev().
+	[[ -d /sys/block/ram0 ]] || return 1
+
+	local rd_mb=$(( $(blockdev --getsize64 /dev/ram0) >> 20 ))
+	[[ "$size" -le "$rd_mb" ]] || return 1
+
+	# "in use" checks -- mirrors the 'modprobe -r brd' busy test used by the
+	# module path: never touch the ram disk if somebody else is using it.
+	local h
+	for h in /sys/block/ram0/holders/*; do
+		[[ -e "$h" ]] && return 1	# dm/md device stacked on top
+		break
+	done
+	if grep -qw /dev/ram0 /proc/mounts; then
+		return 1			# a filesystem is mounted from it
+	fi
+	# A device-mapper device depending on this ram disk counts as in use;
+	# 'dmsetup deps' reports dependencies as stable decimal "(maj, min)"
+	# tuples, far more robust than parsing target table strings.
+	local mj mn
+	read -r mj mn < <(stat -Lc '%t %T' /dev/ram0)
+	if dmsetup deps 2>/dev/null | grep -qE "\($(( 0x$mj )), $(( 0x$mn ))\)"; then
+		return 1
+	fi
+
+	echo -n "## preparing static ramdisk device..."
+	BACKING_DEV=/dev/ram0
+	echo "ok ($BACKING_DEV)"
+	touch RAMDISK
+}
+
 prepare_real_devs() {
 	lvmconf 'devices/scan = "/dev"'
 
@@ -791,10 +888,18 @@ prepare_scsi_debug_dev() {
 		skip "Not enough vmalloc space (need ${NEED_KB}kB, total ${VTOTAL}kB)"
 
 	# Create the scsi_debug device and determine the new scsi device's name
-	# NOTE: it will _never_ make sense to pass num_tgts param;
-	# last param wins.. so num_tgts=1 is imposed
+	local DELAY="delay=0"
+	local NUM_TGTS="num_tgts=1"
+	local p
+	for p in "$@" ; do
+		case "$p" in
+		delay=*) DELAY= ;;
+		num_tgts=*) NUM_TGTS= ;;
+		esac
+	done
 	touch SCSI_DEBUG_DEV
-	modprobe scsi_debug dev_size_mb="$(( DEV_SIZE + 2 ))" "$@" num_tgts=1 || skip
+	modprobe scsi_debug dev_size_mb="$(( DEV_SIZE + 2 ))" \
+		${DELAY:+"$DELAY"} "$@" ${NUM_TGTS:+"$NUM_TGTS"} || skip
 
 	for i in {1..20} ; do
 		sleep .1 # allow for async Linux SCSI device registration
@@ -910,14 +1015,16 @@ cleanup_md_dev() {
 	# try to find and remove any DM device on top of cleaned MD
 	# assume  /dev/mdXXX is  9:MINOR
 	local minor=${mddev##/dev/md}
-	for i in $(dmsetup table | grep 9:"$minor" | cut -d: -f1) ; do
+	local dm_on_md=()
+	dm_on_md=( $(dmsetup table | grep "9:$minor" | cut -d: -f1 || true) )
+	for i in ${dm_on_md[@]+"${dm_on_md[@]}"}; do
 		dmsetup remove "$i" || {
 			dmsetup --force remove "$i" || true
 		}
 	done
 
 	for i in {0..10} ; do
-		grep -q "$base" /proc/mdstat || break
+		grep -q "^$base " /proc/mdstat || break
 		if [[ "$i" != 0 ]]; then
 			sleep .1
 			echo "$mddev is still present, stopping again"
@@ -926,6 +1033,10 @@ cleanup_md_dev() {
 		mdadm --stop "$mddev" || true
 		udev_wait  # wait till events are process, not zeroing to early
 	done
+	if grep -q "^$base " /proc/mdstat; then
+		echo "$mddev is still present after stop retries."
+		return 1
+	fi
 
 	[[ "$DM_DEV_DIR" = "/dev" ]] || rm -f "$(< MD_DEV_PV)"
 
@@ -1027,13 +1138,17 @@ clear_devs() {
 corrupt_dev() {
 	local position
 
+	# Drop page cache to ensure we read actual device content,
+	# not stale cache from a different I/O path (e.g. dm-integrity bio writes)
+	blockdev --flushbufs "$1" 2>/dev/null || true
+
 	# Find byte offset of the pattern in file
 	position=$(grep -oba -m 1 -F "$2" "$1" | head -n 1 | cut -d: -f1) || true
 
 	[[ -n "$position" ]] || return 0
 
 	# Seek to the position and replace with corruption pattern
-	echo -n "$3" | LANG=C dd of="$1" bs=1 seek="$position" conv=notrunc,fdatasync 2>/dev/null
+	echo -n "$3" | LANG=C dd of="$1" bs=1 seek="$position" conv=notrunc,fdatasync
 }
 
 prepare_backing_dev() {
@@ -1058,8 +1173,7 @@ prepare_backing_dev() {
 		BACKING_DEV=${BACKING_DEVICE_ARRAY[0]}
 		echo "$BACKING_DEV" > BACKING_DEV
 		return 0
-	elif [[ "${LVM_TEST_PREFER_BRD-1}" = "1" && \
-	     ! -d /sys/block/ram0 ]] && \
+	elif [[ "${LVM_TEST_PREFER_BRD-1}" = "1" ]] && \
 	     kernel_at_least 4 16 0 && \
 	     [[ "$size" -lt 16384 ]]; then
 		# try to use ramdisk if possible, but for
@@ -1070,7 +1184,17 @@ prepare_backing_dev() {
 		# and  bio-based 'error' device.
 		# However with request based DAX brd device we get this:
 		# device-mapper: ioctl: can't change device type after initial table load.
-		prepare_ramdisk "$size" "$@" && return
+		#
+		# Two possible brd setups:
+		#   * brd built-in: ram disks exist from boot, sized by the kernel
+		#     command line (brd.rd_size=...).  No module reload is possible
+		#     (nor needed) -- reuse the fixed-size device.
+		#   * brd as a module: reload it with the size needed by this test.
+		if [[ -d /sys/block/ram0 ]]; then
+			prepare_ramdisk_static "$size" "$@" && return
+		else
+			prepare_ramdisk "$size" "$@" && return
+		fi
 		echo "(failed)"
 	fi
 
@@ -1160,6 +1284,10 @@ prepare_devs() {
 
 	printf "%s\\n" "${DEVICES[@]}" > DEVICES
 #	( IFS=$'\n'; echo "${DEVICES[*]}" ) >DEVICES
+
+	# Save DM device baseline for leak detection in teardown
+	dmsetup info -c --noheadings -o name | grep "^${PREFIX}" | sort > DM_DEV_BASELINE 2>/dev/null || true
+
 	echo "ok"
 }
 
@@ -1273,8 +1401,9 @@ disable_dev() {
 
 	udev_wait
 	for dev in "$@"; do
-		maj=$(($(stat -L --printf=0x%t "$dev")))
-		min=$(($(stat -L --printf=0x%T "$dev")))
+		read -r maj min < <(stat -L --format '0x%t 0x%T' "$dev")
+		maj=$(( maj ))
+		min=$(( min ))
 		echo "Disabling device $dev ($maj:$min)"
 		notify="$notify $maj:$min"
 		if [[ -n "$error" ]]; then
@@ -1662,8 +1791,8 @@ generate_config() {
 			dmeventd/executable = "$abs_top_builddir/test/lib/dmeventd"
 			activation/udev_rules = 1
 			activation/udev_sync = 1
-			global/fsadm_executable = "$abs_top_builddir/test/lib/fsadm"
-			global/lvresize_fs_helper_executable = "$abs_top_builddir/test/lib/lvresize_fs_helper"
+			global/fsadm_executable = "${LVM_TEST_BINDIR:-$abs_top_builddir/test/lib}/fsadm"
+			global/lvresize_fs_helper_executable = "${LVM_TEST_BINDIR:-$abs_top_builddir/test/lib}/lvresize_fs_helper"
 			global/library_dir = "$TESTDIR/lib"
 			global/locking_dir = "$TESTDIR/var/lock/lvm"
 			EOF
@@ -1843,7 +1972,12 @@ udev_wait() {
 		which udevadm &>/dev/null || { echo "" >UDEV_PID ; return 0 ; }
 	fi
 
-	[[ -s UDEV_PID ]] && { udevadm settle "$arg" 2>/dev/null || true ; }
+	# be careful: with no udev running the UDEV_PID file stays empty, so do
+	# NOT try to settle -- and never let that (or a failed settle) fail
+	# udev_wait: it is called from teardown where set -e + ERR trap would
+	# mark the whole test as failed.
+	[[ -s UDEV_PID ]] || return 0
+	udevadm settle "$arg" 2>/dev/null || true
 }
 
 # wait_for_sync <VG/LV>
@@ -1863,7 +1997,7 @@ wait_recalc() {
 	local sync
 	local checklv=$1
 
-	for i in {1..100} ; do
+	for i in {1..200} ; do
 		sync=$(get lv_field "$checklv" sync_percent | cut -d. -f1)
 		echo "sync_percent is $sync"
 
@@ -1909,7 +2043,7 @@ version_at_least() {
 	[[ "$minor" -eq "$2" ]] || return 1
 
 	[[ -n "${3:-}" ]] || return 0
-	[[ "$revision" -ge "$3" ]] 2>/dev/null || return 1
+	[[ "$revision" -ge "$3" ]] 2>/dev/null
 }
 #
 # Check whether kernel [dm module] target exist
@@ -1979,19 +2113,29 @@ have_thin() {
 	fi
 }
 
+have_vdoformat() {
+	local vdoformat
+
+	vdoformat=$(lvm lvmconfig --typeconfig full --valuesonly global/vdo_format_executable || true)
+	# Remove surrounding "" around string
+	# TODO: lvmconfig should have an option to give this output directly
+	[[ -x "${vdoformat//\"}" ]]
+}
+
 have_vdo() {
 	lvm segtypes 2>/dev/null | grep 'vdo$' >/dev/null || {
 		echo "VDO is not built-in." >&2
 		return 1
 	}
 	target_at_least dm-vdo "$@"
-	local vdoformat
-
-	vdoformat=$(lvm lvmconfig --typeconfig full --valuesonly global/vdo_format_executable || true)
-	# Remove surrounding "" around string
-	# TODO: lvmconfig should have an option to give this output directly
-	vdoformat=${vdoformat//\"}
-	[[ -x "$vdoformat" ]] || { echo "No executable to format VDO \"$vdoformat\"..."; return 1; }
+	if ! have_vdoformat; then
+		if target_at_least dm-vdo 9 2 0; then
+			echo "No vdoformat executable, we rely entirely on kernel formatting"
+		else
+			echo "No executable to format VDO \"$vdoformat\"..."
+			return 1
+		fi
+	fi
 }
 
 get_vdo_stat() {
@@ -2019,11 +2163,13 @@ get_vdo_stat() {
 wait_for_vdo_index() {
 	local dmname="$1"
 	local i
-	for i in $(seq 1 30); do
-		local state
-		state=$(dmsetup status "$dmname" | awk '{for(i=1;i<=NF;i++) if($i=="online") {print "online"; exit}}')
-		test "$state" = "online" && return 0
-		sleep 1
+	for i in {1..50}; do
+		local status=()
+		status=( $(dmsetup status "$dmname") )
+		# Index state comes before compression state in VDO status;
+		# check "opening" is absent to avoid matching compression "online"
+		[[ "${status[6]}" = "online" ]] && return 0
+		sleep .1
 	done
 	echo "Timed out waiting for VDO index to come online"
 	return 1
@@ -2199,6 +2345,30 @@ wait_pvmove_lv_ready() {
 	die "Waiting for pvmove LV to get activated has timed out"
 }
 
+# Wait until each still-running pvmove in VG $1 (PIDs $2...) has a temporary
+# pvmove LV (counted via lvs), or until every listed process has exited.
+# Unlike wait_pvmove_lv_ready this does not poll lvmpolld; it assumes the
+# temporary pvmove LV is visible in lvs, which matches abort-all's needs.
+wait_pvmove_lv_started_in_vg() {
+	local vg=$1
+	shift
+	local want=0 pid n
+
+	for i in {100..0}; do
+		want=0
+		for pid in "$@"; do
+			kill -0 "$pid" 2>/dev/null && want=$((want + 1))
+		done
+		[[ "$want" -eq 0 ]] && return 0
+		n=$(lvs -a --noheadings -S 'name=~"^pvmove[0-9]+$"' "$vg" \
+		    2>/dev/null | wc -l)
+		[[ "${n:-0}" -ge "$want" ]] && return
+		sleep .1
+	done
+
+	die "Waiting for pvmove in $vg to start timed out"
+}
+
 # Holds device open with sleep which automatically expires after given timeout
 # Prints  PID of running holding sleep process in background
 hold_device_open() {
@@ -2232,6 +2402,18 @@ total_mem() {
 
 kernel_at_least() {
 	version_at_least "$(uname -r)" "$@"
+}
+
+have_fs() {
+	# Verify the kernel can mount filesystem type '$1' AND the mkfs.$1 tool
+	# is present before a test uses it (e.g. with mkfs + mount).
+	# This single check replaces the plain 'which mkfs.$1' skips in tests.
+	# Note: /proc/filesystems prefixes real filesystems with a tab.
+	local t=$1
+	command -v "mkfs.$t" >/dev/null 2>&1 || return 1
+	grep -qw "$t" /proc/filesystems && return 0
+	modprobe "$t" >/dev/null 2>&1
+	grep -qw "$t" /proc/filesystems
 }
 
 [[ "${LVM_TEST_AUX_TRACE-0}" = "0" ]] || set -x

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004 Luca Berra
  * Copyright (C) 2004-2013 Red Hat, Inc. All rights reserved.
  *
@@ -14,13 +14,13 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_FILTER_H
-#define _LVM_FILTER_H
+#ifndef LVM_FILTER_H
+#define LVM_FILTER_H
 
 #include "lib/device/dev-cache.h"
 #include "lib/device/dev-type.h"
 
-struct dev_filter *composite_filter_create(int n, struct dev_filter **filters);
+struct dev_filter *composite_filter_create(unsigned int n, struct dev_filter **filters);
 
 struct dev_filter *lvm_type_filter_create(struct dev_types *dt);
 struct dev_filter *md_filter_create(struct cmd_context *cmd, struct dev_types *dt);
@@ -33,7 +33,7 @@ struct dev_filter *signature_filter_create(struct dev_types *dt);
 struct dev_filter *deviceid_filter_create(struct cmd_context *cmd);
 
 /*
- * patterns must be an array of strings of the form:
+ * patterns is a linked list of dm_config_value nodes, each holding a string of the form:
  * [ra]<sep><regex><sep>, eg,
  * r/cdrom/          - reject cdroms
  * a|loop/[0-4]|     - accept loops 0 to 4
@@ -59,4 +59,4 @@ struct dev_filter *usable_filter_create(struct cmd_context *cmd, struct dev_type
 #define DEV_FILTERED_DEVICES_LIST	0x00001000
 #define DEV_FILTERED_IS_LV		0x00002000
 
-#endif 	/* _LVM_FILTER_H */
+#endif 	/* LVM_FILTER_H */

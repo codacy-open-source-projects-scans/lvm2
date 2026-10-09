@@ -584,6 +584,7 @@ static int _get_devs_from_saved_vg(struct cmd_context *cmd, const char *vgname,
 
 		devno = MKDEV(file_major, file_minor);
 
+		/* coverity[tainted_scalar] devname is from a root-owned /run online file, NAME_LEN-bounded */
 		if (!(dev = setup_dev_in_dev_cache(cmd, devno, file_devname[0] ? file_devname : NULL))) {
 			log_error_pvscan(cmd, "No device set up for online PV %u:%u %s PVID %s", file_major, file_minor, file_devname, pvid);
 			goto bad;
@@ -995,6 +996,7 @@ static void _set_pv_devices_online(struct cmd_context *cmd, struct volume_group 
 
 		devno = MKDEV(major, minor);
 
+		/* coverity[tainted_scalar] devname is from a root-owned /run online file, NAME_LEN-bounded */
 		if (!(dev = setup_dev_in_dev_cache(cmd, devno, file_devname[0] ? file_devname : NULL))) {
 			log_print_pvscan(cmd, "VG %s PV %s no device found for online PV %u:%u %s",
 					 vg->name, pvid, major, minor, file_devname);
@@ -1225,16 +1227,16 @@ static int _online_devs(struct cmd_context *cmd, int do_all, struct dm_list *pvs
 				if (!_count_pvid_files_from_lookup_file(cmd, dev, &pvs_online, &pvs_offline, &vgname))
 					pvs_unknown = 1;
 			}
-	
+
 			if (pvs_unknown) {
 				log_print_pvscan(cmd, "PV %s online, VG unknown.", dev_name(dev));
 				vg_complete = 0;
-	
+
 			} else if (pvs_offline) {
 				log_print_pvscan(cmd, "PV %s online, VG %s incomplete (need %d).",
 						 dev_name(dev), vgname, pvs_offline);
 				vg_complete = 0;
-	
+
 			} else {
 				log_print_pvscan(cmd, "PV %s online, VG %s is complete.", dev_name(dev), vgname);
 				if (!str_list_add(cmd->mem, complete_vgnames, dm_pool_strdup(cmd->mem, vgname)))
@@ -1489,7 +1491,7 @@ static int _pvscan_cache_args(struct cmd_context *cmd, int argc, char **argv,
 	 * devs belonging to other devices files.
 	 * Enable/disable this behavior with a config setting?
 	 */
-	 
+
 	log_debug("pvscan_cache_args: filter devs nodata");
 
 	/*
@@ -1538,14 +1540,28 @@ static int _pvscan_cache_args(struct cmd_context *cmd, int argc, char **argv,
 	if ((dm_list_size(&pvscan_devs) == 1) &&
 	    !cmd->enable_devices_file &&
 	    !cmd->enable_devices_list) {
-		char *env_str;
-		struct dm_list *env_aliases;
+		const char *env_str;
+		char *buf, *name, *end;
 		devl = dm_list_item(dm_list_first(&pvscan_devs), struct device_list);
 		if ((env_str = getenv("DEVLINKS"))) {
 			log_debug("Finding symlink names from DEVLINKS for filter regex.");
 			log_debug("DEVLINKS %s", env_str);
-			env_aliases = str_to_str_list(cmd->mem, env_str, " ", 0);
-			dm_list_splice(&devl->dev->aliases, env_aliases);
+			if ((buf = dm_pool_strdup(cmd->mem, env_str))) {
+				name = buf;
+				while (*name) {
+					while (*name == ' ')
+						name++;
+					if (!*name)
+						break;
+					end = name;
+					while (*end && *end != ' ')
+						end++;
+					if (*end)
+						*end++ = '\0';
+					dev_cache_add_alias(devl->dev, name);
+					name = end;
+				}
+			}
 		} else {
 			log_debug("Finding symlink names from /dev for filter regex.");
 			dev_cache_scan(cmd);
@@ -1664,7 +1680,7 @@ static int _get_autoactivation(struct cmd_context *cmd, int event_activation, in
 		*skip_command = 1;
 		return 1;
 	}
-	
+
 	if (!event_activation) {
 		log_print_pvscan(cmd, "Skip pvscan for event with event_activation=0.");
 		*skip_command = 1;

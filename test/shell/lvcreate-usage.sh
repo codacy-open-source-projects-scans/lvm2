@@ -77,6 +77,11 @@ grep "Invalid stripe size" err
 # Verify that the LV was not created via lvdisplay empty output
 test -z "$(lvdisplay $vg)"
 
+# 4K stripe size is accepted regardless of the page size and can be activated
+lvcreate -L 64m -n $lv -i2 --stripesize 4k $vg
+check lv_field $vg/$lv stripesize "4.00k"
+lvremove -ff $vg
+
 # Setting max_lv works. (bz490298)
 check vg_field $vg max_lv "0"
 vgchange -l 3 $vg
@@ -173,15 +178,30 @@ lvcreate -L 8 -n $lv2 --readahead none $vg
 check lv_field $vg/$lv2 lv_read_ahead "0"
 check lv_field $vg/$lv2 lv_kernel_read_ahead "0"
 lvcreate -L 8 -n $lv3 --readahead 8k $vg
-check lv_field $vg/$lv3 lv_read_ahead "8.00k"
-check lv_field $vg/$lv3 lv_kernel_read_ahead "8.00k"
+# An explicit readahead that is not a multiple of the machine page size is
+# overridden to a multiple of the page size (see tools/lvcreate.c
+# _read_activation_params), so compute the expected value from this host.
+pagesize_sectors=$(( $(getconf PAGESIZE) / 512 ))
+ra_sectors=$(( 8 * 1024 / 512 ))
+if (( ra_sectors % pagesize_sectors )); then
+	if (( ra_sectors < pagesize_sectors )); then
+		ra_sectors=$pagesize_sectors
+	else
+		ra_sectors=$(( ra_sectors / pagesize_sectors * pagesize_sectors ))
+	fi
+fi
+ra_kb=$(( ra_sectors / 2 ))
+check lv_field $vg/$lv3 lv_read_ahead "${ra_kb}.00k" --units k
+check lv_field $vg/$lv3 lv_kernel_read_ahead "${ra_kb}.00k" --units k
 lvcreate -L 8 -n $lv4 --readahead auto $vg "$dev1"
 check lv_field $vg/$lv4 lv_read_ahead "auto"
-# figure RA value of a PV origin device
+# figure RA value of a PV origin device (only applicable to DM-backed devices)
+if dmsetup info "$dev1" > /dev/null 2>&1; then
 DEVICE=$(dmsetup deps -o blkdevname "$dev1" | sed -e "s,.*:\ (\(.*\)),/dev/\1,")
 RASZ=$(( $(blockdev --getra "$DEVICE" ) / 2 ))
 test "$RASZ" -ge 128 || RASZ="128"
 check lv_field $vg/$lv4 lv_kernel_read_ahead "${RASZ}.00k" --units k
+fi
 lvcreate -vvvvv -L 8 -n $lv5 -i2 --stripesize 16k --readahead auto $vg
 check lv_field $vg/$lv5 lv_read_ahead "auto"
 # For 16k stripe we set '128k' as the is the minimum size we get when creating DM device

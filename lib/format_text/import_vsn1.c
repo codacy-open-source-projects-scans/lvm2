@@ -524,6 +524,11 @@ int text_import_areas(struct lv_segment *seg, const struct dm_config_node *sn,
 			return 0;
 		}
 
+		if (!cv->v.str) {
+			log_error(INTERNAL_ERROR "Missing volume name in areas array for segment %s.", seg_name);
+			return 0;
+		}
+
 		if (!cv->next) {
 			log_error("Missing offset in areas array for segment %s.", seg_name);
 			return 0;
@@ -531,6 +536,11 @@ int text_import_areas(struct lv_segment *seg, const struct dm_config_node *sn,
 
 		if (cv->next->type != DM_CFG_INT) {
 			log_error("Bad offset in areas array for segment %s.", seg_name);
+			return 0;
+		}
+
+		if (cv->next->v.i < 0 || cv->next->v.i > UINT32_MAX) {
+			log_error("Out-of-range offset in areas array for segment %s.", seg_name);
 			return 0;
 		}
 
@@ -546,7 +556,7 @@ int text_import_areas(struct lv_segment *seg, const struct dm_config_node *sn,
 		} else {
 			log_error("Couldn't find volume '%s' "
 				  "for segment '%s'.",
-				  cv->v.str ? : "NULL", seg_name);
+				  cv->v.str, seg_name);
 			return 0;
 		}
 
@@ -1293,8 +1303,8 @@ static struct volume_group *_read_vg(struct cmd_context *cmd,
 	return NULL;
 }
 
-static void _read_desc(struct dm_pool *mem,
-		       const struct dm_config_tree *cft, time_t *when, char **desc)
+static int _read_desc(struct dm_pool *mem,
+		      const struct dm_config_tree *cft, time_t *when, char **desc)
 {
 	const char *str;
 	unsigned int u = 0u;
@@ -1302,10 +1312,13 @@ static void _read_desc(struct dm_pool *mem,
 	if (!dm_config_get_str(cft->root, "description", &str))
 		str = "";
 
-	*desc = dm_pool_strdup(mem, str);
+	if (!(*desc = dm_pool_strdup(mem, str)))
+		return_0;
 
 	(void) dm_config_get_uint32(cft->root, "creation_time", &u);
 	*when = u;
+
+	return 1;
 }
 
 /*
@@ -1317,7 +1330,7 @@ static void _read_desc(struct dm_pool *mem,
  *          and save the data in struct volume_group
  * FIXME: why are these separate?
  */
-static int _read_vgsummary(const struct format_type *fmt, const struct dm_config_tree *cft, 
+static int _read_vgsummary(const struct format_type *fmt, const struct dm_config_tree *cft,
 			   struct lvmcache_vgsummary *vgsummary)
 {
 	const struct dm_config_node *vgn;

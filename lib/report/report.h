@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_REPORT_H
-#define _LVM_REPORT_H
+#ifndef LVM_REPORT_H
+#define LVM_REPORT_H
 
 #include "lib/metadata/metadata-exported.h"
 #include "lib/label/label.h"
@@ -100,7 +100,7 @@ void *report_init(struct cmd_context *cmd, const char *format, const char *keys,
 		  const char *selection, int multiple_output);
 int report_get_single_selection(struct cmd_context *cmd, unsigned report_type, const char **selection);
 void *report_init_for_selection(struct cmd_context *cmd, unsigned *report_type,
-				const char *selection);
+				const char *selection_criteria);
 int report_get_prefix_and_desc(unsigned report_type_id,
 			       const char **report_prefix,
 			       const char **report_desc);
@@ -125,7 +125,7 @@ void report_reset_cmdlog_seqnum(void);
 #define REPORT_OBJECT_CMDLOG_NAME "status"
 #define REPORT_OBJECT_CMDLOG_SUCCESS "success"
 #define REPORT_OBJECT_CMDLOG_FAILURE "failure"
-int report_current_object_cmdlog(const char *type, const char *msg, int32_t ret_code);
+int report_current_object_cmdlog(const char *type, const char *msg, int ret_code);
 int report_output(void *handle);
 
 #endif

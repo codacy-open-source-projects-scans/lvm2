@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2002-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2002-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_LABEL_H
-#define _LVM_LABEL_H
+#ifndef LVM_LABEL_H
+#define LVM_LABEL_H
 
 #include "lib/id/id.h"
 #include "lib/device/device.h"
@@ -22,7 +22,7 @@
 
 #define LABEL_ID "LABELONE"
 #define LABEL_SIZE SECTOR_SIZE	/* Think very carefully before changing this */
-#define LABEL_SCAN_SECTORS 4L
+#define LABEL_SCAN_SECTORS 4ULL
 #define LABEL_SCAN_SIZE (LABEL_SCAN_SECTORS << SECTOR_SHIFT)
 
 struct labeller;
@@ -47,8 +47,6 @@ struct label {
 	struct device *dev;
 	void *info;
 };
-
-struct labeller;
 
 struct label_ops {
 	/*
@@ -121,7 +119,7 @@ int label_scan_vg_online(struct cmd_context *cmd, const char *vgname,
 			 int *found_none, int *found_all, int *found_incomplete);
 
 
-int label_scan_for_pvid(struct cmd_context *cmd, char *pvid, struct device **dev_out);
+int label_scan_for_pvid(struct cmd_context *cmd, const char *pvid, struct device **dev_out);
 
 /*
  * Wrappers around bcache equivalents.

@@ -12,8 +12,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_LVMPOLLD_DATA_UTILS_H
-#define _LVM_LVMPOLLD_DATA_UTILS_H
+#ifndef LVM_LVMPOLLD_DATA_UTILS_H
+#define LVM_LVMPOLLD_DATA_UTILS_H
 
 #include "libdm/libdevmapper.h"
 
@@ -73,8 +73,6 @@ struct lvmpolld_lv {
 	unsigned polling_finished:1; /* no more updates */
 	unsigned error:1; /* unrecoverable error occurred in lvmpolld */
 };
-
-typedef void (*lvmpolld_parse_output_fn_t) (struct lvmpolld_lv *pdlv, const char *line);
 
 /* TODO: replace with configuration option */
 #define MIN_POLLING_TIMEOUT 60
@@ -220,4 +218,4 @@ static inline void pdst_locked_remove(struct lvmpolld_store *pdst, const char *k
 struct lvmpolld_thread_data *lvmpolld_thread_data_constructor(struct lvmpolld_lv *pdlv);
 void lvmpolld_thread_data_destroy(void *thread_private);
 
-#endif /* _LVM_LVMPOLLD_DATA_UTILS_H */
+#endif /* LVM_LVMPOLLD_DATA_UTILS_H */

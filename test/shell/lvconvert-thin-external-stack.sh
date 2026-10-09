@@ -17,7 +17,7 @@ export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
 
 . lib/inittest --skip-with-lvmpolld --skip-with-lvmlockd
 
-which mkfs.ext4 || skip
+aux have_fs ext4 || skip
 which fsck || skip
 
 _prepare() {
@@ -195,3 +195,5 @@ check inactive $vg orig
 check inactive $vg snap
 
 dm_table $vg-orig2-real | grep thin
+
+vgremove -f $vg

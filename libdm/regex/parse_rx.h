@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
  *
  * This file is part of the device-mapper userspace tools.
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _DM_PARSE_REGEX_H
-#define _DM_PARSE_REGEX_H
+#ifndef DM_PARSE_REGEX_H
+#define DM_PARSE_REGEX_H
 
 #include "libdm/misc/dmlib.h"
 
@@ -43,7 +43,7 @@ struct rx_node {
 	struct rx_node *left, *right;
 
 	/* used to build the dfa for the token */
-        unsigned charset_index;
+	unsigned charset_index;
 	int nullable, final;
 	dm_bitset_t firstpos;
 	dm_bitset_t lastpos;

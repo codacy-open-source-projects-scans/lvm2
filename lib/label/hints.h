@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2004-2018 Red Hat, Inc. All rights reserved.
+ * Copyright (C) 2018 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
  *
@@ -12,8 +12,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_HINTS_H
-#define _LVM_HINTS_H
+#ifndef LVM_HINTS_H
+#define LVM_HINTS_H
 
 #include "lib/commands/toolcontext.h"
 
@@ -34,7 +34,7 @@ void clear_hint_file(struct cmd_context *cmd);
 
 void invalidate_hints(struct cmd_context *cmd);
 
-int get_hints(struct cmd_context *cmd, struct dm_list *hints, int *newhints,
+int get_hints(struct cmd_context *cmd, struct dm_list *hints_out, int *newhints,
               struct dm_list *devs_in, struct dm_list *devs_out);
 
 int validate_hints(struct cmd_context *cmd, struct dm_list *hints);

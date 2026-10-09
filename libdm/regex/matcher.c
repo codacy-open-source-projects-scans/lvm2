@@ -16,7 +16,7 @@
 #include "libdm/misc/dmlib.h"
 #include "parse_rx.h"
 #include "ttree.h"
-#include "assert.h"
+#include <assert.h>
 
 struct dfa_state {
 	struct dfa_state *next;
@@ -355,7 +355,7 @@ struct dm_regex *dm_regex_create(struct dm_pool *mem, const char * const *patter
 		goto_bad;
 
 	for (i = 0; i < num_patterns; i++) {
-		ptr += sprintf(ptr, "(.*(%s)%c)", patterns[i], TARGET_TRANS);
+		ptr += snprintf(ptr, all + len + 1 - ptr, "(.*(%s)%c)", patterns[i], TARGET_TRANS);
 		if ((i + 1) < num_patterns)
 			*ptr++ = '|';
 	}
@@ -407,7 +407,7 @@ static struct dfa_state *_step_matcher(struct dm_regex *m, int c, struct dfa_sta
 			return NULL;
 	}
 
-        // yuck, we have to special case the target trans
+        /* yuck, we have to special case the target trans */
 	if ((ns->final == -1) &&
 	    !_calc_state(m, ns, TARGET_TRANS))
                 return_NULL;
@@ -540,8 +540,9 @@ static uint32_t _fingerprint(struct printer *p)
         while ((node = _pop_node(p))) {
                 result = _combine(result, (node->final < 0) ? 0 : node->final);
                 for (c = 0; c < 256; c++)
-                        result = _combine(result,
-                                          _push_node(p, node->lookup[c]));
+			if (node->lookup[c])
+				result = _combine(result,
+						  _push_node(p, node->lookup[c]));
         }
 
         return result;

@@ -12,8 +12,8 @@
  * along with this program; if not, write to the Free Software Foundation,
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
-#ifndef _LVM_LV_H
-#define _LVM_LV_H
+#ifndef LVM_LV_H
+#define LVM_LV_H
 
 #include "lib/metadata/vg.h"
 
@@ -121,9 +121,6 @@ struct logical_volume *lv_convert_lv(const struct logical_volume *lv);
 struct logical_volume *lv_origin_lv(const struct logical_volume *lv);
 struct logical_volume *lv_mirror_log_lv(const struct logical_volume *lv);
 struct logical_volume *lv_data_lv(const struct logical_volume *lv);
-struct logical_volume *lv_convert(const struct logical_volume *lv);
-struct logical_volume *lv_origin(const struct logical_volume *lv);
-struct logical_volume *lv_mirror_log(const struct logical_volume *lv);
 struct logical_volume *lv_metadata_lv(const struct logical_volume *lv);
 struct logical_volume *lv_pool_lv(const struct logical_volume *lv);
 
@@ -224,4 +221,4 @@ typedef enum {
 dm_percent_t lvseg_percent_with_info_and_seg_status(const struct lv_with_info_and_seg_status *lvdm,
 						    percent_get_t type);
 
-#endif /* _LVM_LV_H */
+#endif /* LVM_LV_H */

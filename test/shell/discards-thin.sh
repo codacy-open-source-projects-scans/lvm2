@@ -24,8 +24,16 @@ export LVM_TEST_THIN_REPAIR_CMD=${LVM_TEST_THIN_REPAIR_CMD-/bin/false}
 #
 aux have_thin 1 1 0 || skip
 
+# brd discard is only in Linux >= 6.10; loop file backing works on older RH.
+aux kernel_at_least 6 10 || export LVM_TEST_PREFER_BRD=0
+
 aux prepare_vg 2 64
 get_devs
+
+pvmajor=$(get pv_field "$dev1" major)
+pvminor=$(get pv_field "$dev1" minor)
+test "$(< "/sys/dev/block/$pvmajor:$pvminor/queue/discard_granularity")" -gt 0 ||
+	skip "Backing device lacks discard support"
 
 aux extend_filter_LVMTEST
 
@@ -38,7 +46,7 @@ check lv_field $vg/pool1 discards "nopassdown"
 check lv_field $vg/pool1 kernel_discards "nopassdown"
 lvcreate -l1 --discards passdown -T $vg/pool2
 check lv_field $vg/pool2 discards "passdown"
-check lv_field $vg/pool2 discards "passdown"
+check lv_field $vg/pool2 kernel_discards "passdown"
 
 lvchange --discards nopassdown $vg/pool2
 

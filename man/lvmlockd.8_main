@@ -246,7 +246,7 @@ directly.
 .P
 When using lvmlockd in a cluster which already uses corosync and
 dlm, then the dlm lock type should be used for shared VGs.  Otherwise,
-using sanlock is usually more straight forward.
+using sanlock is usually more straightforward.
 .P
 Details on starting or setting up each lock manager are outside the
 scope of LVM. sanlock can usually be started with a simple
@@ -380,15 +380,36 @@ Removal of PR keys for failed hosts can be considered a form of "fencing".
 For more information on using PR with LVM in general, see
 .BR lvmpersist (8).
 .P
-The vgcreate options to enable PR-based lock recovery in a new VG are shown above.
-.P
-To enable PR-based lock recovery in an existing VG:
+.I Enabling
 .br
-.B $ vgchange --setpersist y --setlockargs persist,notimeout
-.I VG
+The vgcreate options to enable PR-based lock recovery in a new VG (also
+shown above) are:
+.br
+.B $ vgcreate --shared --setpersist y --setlockargs persist,notimeout ...
 .P
-Changing the PR or lockargs settings requires the VG to be stopped on all
-other nodes.
+Use vgchange to enable PR-based lock recovery in an existing VG.  First
+enable PR for the VG (if not already done), then change the VG lock args.
+Note that changing lock args can involve stopping/starting both PR and the
+lockspace at different stages.  Changing the PR or lock args settings requires
+the VG to be stopped on all other nodes.
+.P
+Example of enabling using vgchange:
+.br
+.B $ vgcreate --shared
+.I VG
+.I devices
+.br
+.B $ vgchange --setpersist y
+.I VG
+.br
+.B $ vgchange --persist start
+.I VG
+.br
+.B $ vgchange --setlockargs persist,notimeout
+.I VG
+.br
+.B $ vgchange --persist start --lockstart
+.I VG
 .P
 Display the VG attributes configured by setpersist and setlockargs:
 .br
@@ -398,6 +419,8 @@ Display the VG attributes configured by setpersist and setlockargs:
 .B $ vgs -o+lockargs
 .I VG
 .P
+.I Starting
+.br
 When PR is enabled for a shared VG (the
 .B --setpersist y
 option), LVM requires a specific startup sequence before the VG can be used: PR
@@ -416,6 +439,8 @@ a single command:
 .B $ vgchange --persist start --lockstart
 .I VG
 .P
+.I Variations
+.br
 The sanlock lock manager can be configured to handle recovery of failed
 hosts in different ways.  The first variation (persist,notimeout) is
 considered the standard form of PR-based lock recovery.  The second
@@ -430,7 +455,7 @@ persist: lvmlockd will remove the PR key of a failed host when a lock
 request fails due to a lock owned by a failed host.  After PR key removal,
 sanlock is permitted to grant the lock.  
 .br
-notimeout: a failed host's locks will not expire and be granted to another
+notimeout: a failed host's locks will neither expire nor be granted to another
 host after a timeout (i.e. after the time when the failed host's watchdog
 has fired.)
 .br
@@ -445,7 +470,7 @@ request fails due to a lock owned by a failed host.  (PR does not need
 to be enabled for the VG.)
 .br
 timeout: a failed host's locks will expire and be granted to another
-host after a timeout indicates the failed host's watchdog has fired.
+host after a timeout that indicates the failed host's watchdog has fired.
 .br
 Watchdog expiration of a failed host is the only mechanism by which
 a failed host's locks are recovered.
@@ -458,7 +483,7 @@ request fails due to a lock owned by a failed host.  After PR key removal,
 sanlock is permitted to grant the lock.
 .br
 timeout: a failed host's locks will expire and be granted to another
-host after a timeout indicates the failed host's watchdog has fired.
+host after a timeout that indicates the failed host's watchdog has fired.
 .br
 Removal of the PR key, or watchdog expiration will both allow a failed
 host's locks to be recovered.
@@ -470,7 +495,7 @@ nopersist: lvmlockd will not remove a PR key of a failed host when a lock
 request fails due to a lock owned by a failed host.  (PR does not need
 to be enabled for the VG.)
 .br
-notimeout: a failed host's locks will not expire and be granted to another
+notimeout: a failed host's locks will neither expire nor be granted to another
 host after a timeout (i.e. after the time when the failed host's watchdog
 has fired.)
 .br
@@ -478,6 +503,35 @@ There is no automated recovery of locks with this configuration.  A user
 is responsible for manually resetting/fencing a failed host, and then
 manually notifying sanlock that the host is dead, which will allow the
 failed host's locks to be granted.
+.P
+.I nowatchdog
+.br
+With notimeout, lock recovery does not depend on the watchdog device,
+so nowatchdog can be included with notimeout in the lock args.
+With nowatchdog, hosts will not connect to the watchdog device (or wdmd)
+when starting the VG lockspace, so a host will not be reset by a watchdog
+if it loses access to VG storage.
+.IP \[bu] 2
+--setlockargs persist,notimeout,nowatchdog
+.P
+The nowatchdog behavior can also be requested per-host without writing
+it in the lock args (in VG metadata):
+.br
+.B $ vgchange --lockstart --lockopt nowatchdog
+.I VG
+.P
+.I Retrying
+.br
+If PR fencing fails (e.g. due to a missing device in the VG), lvmlockd
+caches the failure for the target host.  Subsequent lock requests for the
+same failed host_id+generation will reuse the cached failure without
+re-attempting PR fencing.  After resolving the cause of the failure (e.g.
+restoring the missing device), use
+.B --lockopt force
+in the activation command to re-attempt the PR fencing. e.g.
+.br
+.B $ lvchange -ay --lockopt force
+.IR VG / LV
 .
 .SS System ID
 .br
@@ -583,7 +637,7 @@ it reports the list of all VG names, and the vgcreate command acquires the
 global lock in exclusive mode because it creates a new VG name, and it
 takes a PV from the list of unused PVs.
 .P
-When an LVM command is given a tag argument, or uses select, it must read
+When an LVM command is given a tag argument, or uses --select, it must read
 all VGs to match the tag or selection, which causes the global lock to be
 acquired.
 .RE
@@ -610,12 +664,41 @@ held only while an LVM command is running.)
 .TP
 .I lock retries
 If a request for a global or VG lock fails due to a lock conflict with
-another host, lvmlockd automatically retries for a short time before
-returning a failure to the LVM command.  If those retries are
-insufficient, the LVM command will retry the entire lock request a number
-of times specified by global/lvmlockd_lock_retries before failing.  If a
+another host, the LVM command will retry the lock request a number of
+times specified by global/lvmlockd_lock_retries before failing.  If a
 request for an LV lock fails due to a lock conflict, the command fails
 immediately.
+.P
+The retries value specifies the number of retries per lock owner.  If the
+lock owner (host_id) changes between retries, the per-owner retry count
+resets to zero, allowing the command to wait while the lock cycles through
+multiple hosts in a busy cluster.  A ceiling of retries*10 total attempts
+prevents indefinite delays.  With the default retries=6, the lock can
+cycle through up to 10 different owners (60 seconds) before failing.
+.P
+The --lockopt option can include a "retries=N" value to override the
+number of lock retries for a single command.  This applies to global, VG,
+and LV lock requests, replacing the global/lvmlockd_lock_retries config
+value for global and VG locks, and adding retry capability for LV locks
+which otherwise have none.  Each retry waits one second before repeating
+the lock request.
+.P
+When a host in a shared VG fails, its locks are not immediately available
+to other hosts.  The sanlock host_dead_seconds interval (usually 80
+seconds) must pass before another host can acquire those locks.  Using
+"--lockopt retries=N" with a sufficiently large value allows an activation
+command to wait for this interval.
+.nf
+  lvchange -ay --lockopt retries=80 vg/lv
+.fi
+.P
+Shared lock contention during autoactivation can also cause transient
+failures when multiple nodes start simultaneously and attempt to
+acquire shared locks on the same LV.  Using retries allows the command
+to wait and reattempt:
+.nf
+  lvchange -asy --lockopt retries=10 vg/lv
+.fi
 .
 .SS Managing the global lock in sanlock VGs
 .
@@ -708,7 +791,7 @@ lock type.  In these cases, it may be possible to repair the VG by
 forcibly changing the lock type to "none".  This is done by adding
 "--lockopt force" to the normal command for changing the lock type:
 vgchange --locktype none VG.  The VG lockspace should first be stopped on
-all hosts, and be certain that no hosts are using the VG before this is
+all hosts, and you should be certain that no hosts are using the VG before this is
 done.
 .
 .SS Recover from lost PV holding sanlock locks
@@ -925,7 +1008,7 @@ Start the VG on hosts to use it:
 .br
 vgchange --lockstart <vgname>
 .P
-If lvmlockd or the cluster manager are not available, the lock type can
+If lvmlockd or the cluster manager is not available, the lock type can
 be forcibly changed with:
 .br
 vgchange --locktype sanlock|dlm \-\-lockopt force <vgname>
@@ -1057,9 +1140,11 @@ vgreduce or pvmove of a PV in a sanlock VG will fail if it holds the
 internal "lvmlock" LV that holds the sanlock locks.
 .
 .IP \[bu]
-lvmlockd uses lock retries instead of lock queueing, so high lock
-contention may require increasing global/lvmlockd_lock_retries to
-avoid transient lock failures.
+lvmlockd uses lock retries instead of lock queueing.  The per-owner
+retry count resets when the lock owner changes, so clusters with many
+nodes generally do not require increasing global/lvmlockd_lock_retries.
+Using "--lockopt retries=N" can override the retry count for a single
+command if needed.
 .
 .IP \[bu]
 lvmlockd includes VG reporting options lock_type and lock_args, and LV

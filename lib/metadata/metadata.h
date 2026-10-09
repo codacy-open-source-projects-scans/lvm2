@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2013 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -18,13 +18,14 @@
  * associated physical and logical volumes.
  */
 
-#ifndef _LVM_METADATA_H
-#define _LVM_METADATA_H
+#ifndef LVM_METADATA_H
+#define LVM_METADATA_H
 
-#include "ctype.h"
 #include "lib/device/dev-cache.h"
 #include "lib/misc/lvm-string.h"
 #include "lib/metadata/metadata-exported.h"
+
+#include <ctype.h>
 
 //#define MAX_STRIPES 128U
 //#define SECTOR_SHIFT 9L
@@ -163,7 +164,7 @@ struct metadata_area_ops {
 /* The primary metadata area on a device if the format supports more than one. */
 #define MDA_PRIMARY	 0x00000008
 
-#define mda_is_primary(mda) (((mda->status) & MDA_PRIMARY) ? 1 : 0)
+#define mda_is_primary(mda) ((((mda)->status) & MDA_PRIMARY) ? 1 : 0)
 #define MDA_CONTENT_REASON(primary_mda) ((primary_mda) ? DEV_IO_MDA_CONTENT : DEV_IO_MDA_EXTRA_CONTENT)
 #define MDA_HEADER_REASON(primary_mda)  ((primary_mda) ? DEV_IO_MDA_HEADER : DEV_IO_MDA_EXTRA_HEADER)
 
@@ -383,8 +384,8 @@ struct format_handler {
  */
 
 int get_default_pvmetadatasize_sectors(void);
-void set_pe_align(struct physical_volume *pv, uint64_t data_alignment);
-void set_pe_align_offset(struct physical_volume *pv, uint64_t data_alignment_offset);
+void set_pe_align(struct physical_volume *pv, uint64_t data_alignment_sectors);
+void set_pe_align_offset(struct physical_volume *pv, uint64_t data_alignment_offset_sectors);
 
 int check_dev_block_size_for_vg(struct device *dev, const struct volume_group *vg,
 				unsigned int *max_logical_block_size_found);
@@ -486,7 +487,7 @@ struct volume_group *vg_from_config_tree(struct cmd_context *cmd, const struct d
  */
 
 /*
- * Given mirror image or mirror log segment, find corresponding mirror segment 
+ * Given mirror image or mirror log segment, find corresponding mirror segment
  */
 int fixup_imported_mirrors(struct volume_group *vg);
 

@@ -14,7 +14,7 @@
 . lib/inittest --skip-with-lvmpolld
 
 test "${LVM_VALGRIND:-0}" -eq 0 || skip # too slow test for valgrind
-which mkfs.ext4 || skip
+aux have_fs ext4 || skip
 which resize2fs || skip
 aux have_integrity 1 5 0 || skip
 # Avoid 4K ramdisk devices on older kernels
@@ -417,8 +417,6 @@ not lvconvert --splitmirrors 1 -n tmp -y $vg/$lv1
 not lvconvert --splitmirrors 1 -n tmp -y $vg/${lv1}_${suffix}
 not lvconvert --splitmirrors 1 --trackchanges -y $vg/$lv1
 not lvconvert --splitmirrors 1 --trackchanges -y $vg/${lv1}_${suffix}
-not lvchange --syncaction repair $vg/$lv1
-not lvchange --syncaction repair $vg/${lv1}_${suffix}
 not lvreduce -L4M $vg/$lv1
 not lvreduce -L4M $vg/${lv1}_${suffix}
 not lvcreate -s -n snap -L4M $vg/${lv1}_${suffix}

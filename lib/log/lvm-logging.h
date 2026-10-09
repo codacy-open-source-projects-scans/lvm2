@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,12 +13,15 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_LOGGING_H
-#define _LVM_LOGGING_H
+#ifndef LVM_LOGGING_H
+#define LVM_LOGGING_H
 
 #include "lib/misc/lvm-file.h"
 
 #include <stdint.h>
+
+struct dm_report;
+struct id;
 
 __attribute__ ((format(printf, 5, 6)))
 void print_log(int level, const char *file, int line, int dm_errno_or_class,
@@ -28,22 +31,27 @@ __attribute__ ((format(printf, 5, 6)))
 void print_log_libdm(int level, const char *file, int line, int dm_errno_or_class,
 		     const char *format, ...);
 
-#define LOG_LINE(l, x...) \
-    print_log(l, __FILE__, __LINE__ , 0, ## x)
+#define LOG_LINE(l, ...) \
+    print_log(l, __FILE__, __LINE__ , 0, ##__VA_ARGS__)
 
-#define LOG_LINE_WITH_ERRNO(l, e, x...) \
-    print_log(l, __FILE__, __LINE__ , e, ## x)
+#define LOG_LINE_WITH_ERRNO(l, e, ...) \
+    print_log(l, __FILE__, __LINE__ , e, ##__VA_ARGS__)
 
-#define LOG_LINE_WITH_CLASS(l, c, x...) \
-    print_log(l, __FILE__, __LINE__ , c, ## x)
+#define LOG_LINE_WITH_CLASS(l, c, ...) \
+    print_log(l, __FILE__, __LINE__ , c, ##__VA_ARGS__)
 
 #include "lib/log/log.h"
 
 int init_custom_log_streams(struct custom_fds *custom_fds);
 int reopen_standard_stream(FILE **stream, const char *mode);
 
+#ifndef LVM2_LOG_FN_T_DEFINED
+#define LVM2_LOG_FN_T_DEFINED
+
 typedef void (*lvm2_log_fn_t) (int level, const char *file, int line,
 			       int dm_errno_or_class, const char *message);
+
+#endif
 
 void init_log_fn(lvm2_log_fn_t log_fn);
 
@@ -70,7 +78,6 @@ uint32_t log_journal_str_to_val(const char *str);
 void log_command(const char *cmd_line, const char *cmd_name, const char *cmd_id);
 
 
-int error_message_produced(void);
 void reset_lvm_errno(int store_errmsg);
 int stored_errno(void);
 const char *stored_errmsg(void);

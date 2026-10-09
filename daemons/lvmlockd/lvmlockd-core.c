@@ -195,6 +195,7 @@ static uint32_t helper_msg_id = 1;
  */
 static pthread_mutex_t lockspaces_mutex;
 static struct list_head lockspaces;
+static struct list_head start_results;
 
 /*
  * Client thread reads client requests and writes client results.
@@ -260,7 +261,7 @@ static int alloc_new_structs; /* used for initializing in setup_structs */
 #define DO_FORCE 1
 #define NO_FORCE 0
 
-static int add_fence_action(struct lockspace *ls, struct owner *owner);
+static int add_fence_action(struct lockspace *ls, struct owner *owner, int force_fence_retry);
 static int send_helper_request(struct action *act, char *ls_name, uint32_t new_msg_id);
 static int add_lock_action(struct action *act);
 static int str_to_lm(const char *str);
@@ -508,6 +509,8 @@ static int lockd_lockargs_get_meta_flags(const char *str, uint32_t *flags)
 			*flags |= LOCKARGS_PERSIST;
 		else if (!strcmp(argv[i], "notimeout"))
 			*flags |= LOCKARGS_NOTIMEOUT;
+		else if (!strcmp(argv[i], "nowatchdog"))
+			*flags |= LOCKARGS_NOWATCHDOG;
 		else {
 			log_error("Unknown lockargs meta value: %s", argv[i]);
 			return -1;
@@ -546,11 +549,22 @@ int lockd_lockargs_get_user_flags(const char *str, uint32_t *flags)
 			*flags |= LOCKARGS_CAW;
 		else if (!strcmp(argv[i], "nocaw"))
 			*flags |= LOCKARGS_NOCAW;
+		else if (!strcmp(argv[i], "nowatchdog"))
+			*flags |= LOCKARGS_NOWATCHDOG;
+		else if (!strcmp(argv[i], "watchdog"))
+			*flags |= LOCKARGS_WATCHDOG;
 		else {
 			log_error("Unknown lockargs option value: %s", argv[i]);
 			return -1;
 		}
 	}
+
+	if (((*flags & LOCKARGS_NOWATCHDOG) && (*flags & LOCKARGS_WATCHDOG)) ||
+	    ((*flags & LOCKARGS_NOWATCHDOG) && !(*flags & LOCKARGS_NOTIMEOUT))) {
+		log_error("Invalid lockargs option combination: %s", str);
+		return -1;
+	}
+
 	log_debug("lockd_lockargs_get_user_flags %s = 0x%x", str, *flags);
 	return 0;
 }
@@ -573,21 +587,24 @@ struct lockspace *alloc_lockspace(void)
 	return ls;
 }
 
+__attribute__((nonnull(1)))
 static char **alloc_pvs_path(struct pvs *pvs, int num)
 {
 	if (!num)
 		return NULL;
 
 	pvs->path = calloc(num, sizeof(char *));
-	if (!pvs->path)
-		return NULL;
 
 	return pvs->path;
 }
 
+__attribute__((nonnull(1)))
 static void free_pvs_path(struct pvs *pvs)
 {
 	int i;
+
+	if (!pvs->path)
+		return;
 
 	for (i = 0; i < pvs->num; i++)
 		free((char *)pvs->path[i]);
@@ -596,6 +613,7 @@ static void free_pvs_path(struct pvs *pvs)
 	pvs->path = NULL;
 }
 
+__attribute__((nonnull(1, 2)))
 static char **alloc_and_copy_pvs_path(struct pvs *dst, struct pvs *src)
 {
 	int i;
@@ -993,7 +1011,7 @@ static const char *op_mode_str(int op, int mode)
 	switch (mode) {
 	case LD_LK_IV:
 		return "lock_iv";
-	case LD_LK_UN: 
+	case LD_LK_UN:
 		return "unlock";
 	case LD_LK_NL:
 		return "lock_nl";
@@ -1022,7 +1040,7 @@ int last_string_from_args(char *args_in, char *last)
         }
 
 	if (str) {
-		snprintf(last, MAX_ARGS, "%s", str + 1);
+		dm_strncpy(last, str + 1, MAX_ARGS+1);
 		return 0;
 	}
 	return -1;
@@ -1213,14 +1231,14 @@ static int lm_prepare_lockspace(struct lockspace *ls, struct action *act, int re
 	return rv;
 }
 
-static int lm_add_lockspace(struct lockspace *ls, struct action *act, int adopt_only, int adopt_ok, int nodelay)
+static int lm_add_lockspace(struct lockspace *ls, struct action *act, int adopt_only, int adopt_ok, int nodelay, int no_watchdog)
 {
 	int rv = -1;
 
 	if (ls->lm_type == LD_LM_DLM)
 		rv = lm_add_lockspace_dlm(ls, adopt_only, adopt_ok);
 	else if (ls->lm_type == LD_LM_SANLOCK)
-		rv = lm_add_lockspace_sanlock(ls, adopt_only, adopt_ok, nodelay);
+		rv = lm_add_lockspace_sanlock(ls, adopt_only, adopt_ok, nodelay, no_watchdog);
 	else if (ls->lm_type == LD_LM_IDM)
 		rv = lm_add_lockspace_idm(ls, adopt_only, adopt_ok);
 
@@ -1365,7 +1383,7 @@ static void add_client_result(struct action *act)
 	}
 
 	pthread_mutex_lock(&client_mutex);
-	if ((act->flags & LD_AF_ADOPT_ONLY) && (act->client_id == INTERNAL_CLIENT_ID))
+	if ((act->flags & (LD_AF_ADOPT_ONLY | LD_AF_ADOPT)) && (act->client_id == INTERNAL_CLIENT_ID))
 		list_add_tail(&act->list, &adopt_results);
 	else
 		list_add_tail(&act->list, &client_results);
@@ -1440,7 +1458,7 @@ static int res_lock(struct lockspace *ls, struct resource *r, struct action *act
 		goto add_lk;
 
 	if (r->type == LD_RT_LV && act->lv_args[0])
-		memcpy(r->lv_args, act->lv_args, MAX_ARGS);
+		dm_strncpy(r->lv_args, act->lv_args, sizeof(r->lv_args));
 
 	rv = lm_lock(ls, r, act->mode, act, &vb, retry, owner,
 		     act->flags & LD_AF_ADOPT_ONLY ? 1 : 0,
@@ -2181,6 +2199,16 @@ static void res_process(struct lockspace *ls, struct resource *r,
 	 * transient requests on existing transient locks
 	 */
 
+	/*
+	 * Suppress scan-build false positive (unix.Malloc use-after-free).
+	 * The analyzer cannot track that list_for_each_entry_safe
+	 * re-initializes act/safe via its for-initializer after
+	 * add_client_result() may free the previous entry.
+	 * Only affects static analysis (scan-build), not regular
+	 * compilation with gcc or clang.
+	 */
+	#ifndef __clang_analyzer__
+
 	list_for_each_entry_safe(act, safe, &r->actions, list) {
 		if (act->flags & LD_AF_PERSISTENT)
 			continue;
@@ -2366,9 +2394,9 @@ static void res_process(struct lockspace *ls, struct resource *r,
 	 *
 	 * Retry a lock request that fails due to a lock conflict (-EAGAIN):
 	 * if we have not exceeded max retries and lm sets lm_retry (sanlock
-	 * transient conflicts from shared lock implementation), or r type
-	 * is gl or vg (transient real conflicts we want to hide from command).
-	 * lv lock conflicts won't be transient so don't retry them.
+	 * transient conflicts from shared lock implementation).
+	 * Actual lock contention retries are handled by the lvm command
+	 * using global/lvmlockd_lock_retries or --lockopt retries=N.
 	 */
 
 	/*
@@ -2422,12 +2450,12 @@ static void res_process(struct lockspace *ls, struct resource *r,
 				act->owner = owner;
 				list_del(&act->list);
 				list_add(&act->list, &r->fence_wait_actions);
-				add_fence_action(ls, &owner);
+				add_fence_action(ls, &owner, (act->flags & LD_AF_FORCE) ? 1 : 0);
 				*retry_out = 1;
 
 			} else if ((rv == -EAGAIN) &&
-			    (act->retries <= act->max_retries) &&
-			    (lm_retry || (r->type != LD_RT_LV))) {
+			    (act->retries < DEFAULT_MAX_RETRIES) &&
+			    lm_retry) {
 				/* leave act on list */
 				log_debug("%s:%s res_lock EAGAIN retry", ls->name, r->name);
 				act->retries++;
@@ -2478,11 +2506,11 @@ static void res_process(struct lockspace *ls, struct resource *r,
 				act->owner = owner;
 				list_del(&act->list);
 				list_add(&act->list, &r->fence_wait_actions);
-				add_fence_action(ls, &owner);
+				add_fence_action(ls, &owner, (act->flags & LD_AF_FORCE) ? 1 : 0);
 				*retry_out = 1;
 			} else if ((rv == -EAGAIN) &&
-			    (act->retries <= act->max_retries) &&
-			    (lm_retry || (r->type != LD_RT_LV))) {
+			    (act->retries < DEFAULT_MAX_RETRIES) &&
+			    lm_retry) {
 				/* leave act on list */
 				log_debug("%s:%s res_lock EAGAIN retry", ls->name, r->name);
 				act->retries++;
@@ -2539,6 +2567,7 @@ static void res_process(struct lockspace *ls, struct resource *r,
 		list_add(&r->list, &ls->dispose);
 	}
 
+	#endif /* __clang_analyzer__ */
 	return;
 
 r_free:
@@ -2856,6 +2885,7 @@ static void *lockspace_thread_main(void *arg_in)
 	struct resource *r, *r2;
 	struct action *add_act, *act, *safe;
 	struct action *act_op_free = NULL;
+	struct start_result *sr, *sr_old;
 	struct list_head tmp_act;
 	struct list_head act_close;
 	struct list_head act_fence;
@@ -2869,6 +2899,7 @@ static void *lockspace_thread_main(void *arg_in)
 	int repair = 0;
 	int wait_flag = 0;
 	int nodelay = 0;
+	int no_watchdog = 0;
 	int nocreate;
 	int hosts_unknown = 0;
 	int retry;
@@ -2896,6 +2927,8 @@ static void *lockspace_thread_main(void *arg_in)
 				adopt_ok = 1;
 			if (add_act->flags & LD_AF_NODELAY)
 				nodelay = 1;
+			if (add_act->flags & LD_AF_NOWATCHDOG)
+				no_watchdog = 1;
 			if (add_act->flags & LD_AF_REPAIR)
 				repair = 1;
 		}
@@ -2907,8 +2940,8 @@ static void *lockspace_thread_main(void *arg_in)
 		adopt_ok = 1;
 	}
 
-	log_debug("S %s lm_add_lockspace %s act %d wait %d adopt_only %d adopt_ok %d repair %d no_timeout %d",
-		  ls->name, lm_str(ls->lm_type), add_act ? 1 : 0, wait_flag, adopt_only, adopt_ok, repair, ls->no_timeout);
+	log_debug("S %s lm_add_lockspace %s act %d wait %d adopt_only %d adopt_ok %d repair %d no_timeout %d no_watchdog %d",
+		  ls->name, lm_str(ls->lm_type), add_act ? 1 : 0, wait_flag, adopt_only, adopt_ok, repair, ls->no_timeout, no_watchdog || ls->no_watchdog);
 
 	/*
 	 * The prepare step does not wait for anything and is quick;
@@ -2927,7 +2960,7 @@ static void *lockspace_thread_main(void *arg_in)
 	 * The actual lockspace join can take a while.
 	 */
 	if (!error) {
-		error = lm_add_lockspace(ls, add_act, adopt_only, adopt_ok, nodelay);
+		error = lm_add_lockspace(ls, add_act, adopt_only, adopt_ok, nodelay, no_watchdog);
 
 		log_debug("S %s lm_add_lockspace done %d", ls->name, error);
 
@@ -2946,6 +2979,7 @@ static void *lockspace_thread_main(void *arg_in)
 	if (error) {
 		ls->thread_stop = 1;
 		ls->create_fail = 1;
+		ls->create_result = error;
 	} else {
 		ls->create_done = 1;
 	}
@@ -3200,7 +3234,7 @@ static void *lockspace_thread_main(void *arg_in)
 						rv = -ENOMEM;
 					} else {
 						dm_strncpy(r->name, act->lv_uuid, sizeof(r->name));
-						memcpy(r->lv_args, act->lv_args, MAX_ARGS);
+						dm_strncpy(r->lv_args, act->lv_args, sizeof(r->lv_args));
 						r->type = LD_RT_LV;
 						r->mode = LD_LK_UN;
 						lm_add_resource(ls, r);
@@ -3234,7 +3268,7 @@ static void *lockspace_thread_main(void *arg_in)
 						free_resource(r);
 					}
 				}
-				
+
 				/*
 				 * check all resources for transient locks the client
 				 * was holding that should be automatically unlocked
@@ -3313,6 +3347,7 @@ static void *lockspace_thread_main(void *arg_in)
 		}
 
 		if (retry) {
+			/* coverity[lock_evasion] thread_work set by own lockspace thread for retry loop */
 			ls->thread_work = 1;
 			usleep(LOCK_RETRY_MS * 1000);
 		}
@@ -3467,6 +3502,22 @@ out_act:
 	if (ls->lm_type == LD_LM_IDM && !strcmp(ls->name, gl_lsname_idm))
 		global_idm_lockspace_exists = 0;
 
+	list_for_each_entry(sr_old, &start_results, list) {
+		if (!strcmp(sr_old->vg_name, ls->vg_name)) {
+			list_del(&sr_old->list);
+			free(sr_old);
+			break;
+		}
+	}
+
+	if ((sr = malloc(sizeof(struct start_result)))) {
+		strncpy(sr->vg_name, ls->vg_name, MAX_NAME);
+		sr->vg_name[MAX_NAME] = '\0';
+		sr->result = ls->create_fail ? ls->create_result : 0;
+		sr->client_id = ls->start_client_id;
+		list_add_tail(&sr->list, &start_results);
+	}
+
 	/*
 	 * Avoid a name collision of the same lockspace is added again before
 	 * this thread is cleaned up.  We just set ls->name to a "junk" value
@@ -3594,10 +3645,14 @@ static int add_lockspace_thread(const char *ls_name,
 		return -EARGS;
 	}
 	ls->no_timeout = (ls->lock_args_flags & LOCKARGS_NOTIMEOUT) ? 1 : 0;
+	ls->no_watchdog = (ls->lock_args_flags & LOCKARGS_NOWATCHDOG) ? 1 : 0;
 	ls->fence_pr = (ls->lock_args_flags & LOCKARGS_PERSIST) ? 1 : 0;
 
 	if (act) {
 		ls->start_client_id = act->client_id;
+
+		if (act->flags & LD_AF_NOWATCHDOG)
+			ls->no_watchdog = 1;
 
 		/*
 		 * Copy PV list to lockspace structure, so this is
@@ -3949,6 +4004,28 @@ static int count_lockspace_starting(uint32_t client_id)
 }
 
 /*
+ * Check start_results for any failures.
+ * Returns -1 if any entry has a non-zero result, 0 otherwise.
+ * Does not consume entries.
+ */
+static int check_start_results_for_failures(void)
+{
+	struct start_result *sr;
+	int found = 0;
+
+	pthread_mutex_lock(&lockspaces_mutex);
+	list_for_each_entry(sr, &start_results, list) {
+		if (sr->result) {
+			found = 1;
+			break;
+		}
+	}
+	pthread_mutex_unlock(&lockspaces_mutex);
+
+	return found ? -1 : 0;
+}
+
+/*
  * Loop through all lockspaces, and:
  * - if do_stop is set, stop any that are not stopped
  * - if do_free is set, join any that are done stopping (and free ls)
@@ -4273,13 +4350,13 @@ static int work_init_lv(struct action *act)
 	ls = find_lockspace_name(ls_name);
 	if (ls) {
 		lm_type = ls->lm_type;
-		memcpy(vg_args, ls->vg_args, MAX_ARGS);
+		dm_strncpy(vg_args, ls->vg_args, sizeof(vg_args));
 	}
 	pthread_mutex_unlock(&lockspaces_mutex);
 
 	if (!ls) {
 		lm_type = act->lm_type;
-		memcpy(vg_args, act->vg_args, MAX_ARGS);
+		dm_strncpy(vg_args, act->vg_args, sizeof(vg_args));
 	}
 
 	if (act->lm_type != lm_type) {
@@ -4292,7 +4369,7 @@ static int work_init_lv(struct action *act)
 		/* ls is NULL if the lockspace is not started, which happens
 		   for vgchange --locktype sanlock. */
 		rv = lm_init_lv_sanlock(ls, ls_name, act->vg_name, act->lv_uuid, vg_args, lv_args, act->other_args);
-		memcpy(act->lv_args, lv_args, MAX_ARGS);
+		dm_strncpy(act->lv_args, lv_args, sizeof(act->lv_args));
 		return rv;
 
 	} else if (act->lm_type == LD_LM_DLM) {
@@ -4317,7 +4394,7 @@ static int work_vg_status(struct action *act)
 	pthread_mutex_lock(&lockspaces_mutex);
 	ls = find_lockspace_name(ls_name);
 	if (ls) {
-		memcpy(act->vg_args, ls->vg_args, MAX_ARGS);
+		dm_strncpy(act->vg_args, ls->vg_args, sizeof(act->vg_args));
 		act->lm_type = ls->lm_type;
 		lm_vg_status(ls, act);
 	} else {
@@ -4373,10 +4450,16 @@ static void work_fence(struct action *act, int *retry)
 			/* new act matches an in-progress fence act */
 			found_busy = 1;
 		} else if (ah->op == LD_OP_FENCE_RESULT) {
-			/* new act matches a completed fence act */
-			found_done = 1;
-			ah_result = ah->result;
-			ah_owner = ah->owner;
+			if (act->force_fence_retry && ah->result) {
+				log_debug("work_fence %s force retry fence for %u:%u prev result %d",
+					  vg_name, ah->owner.host_id, ah->owner.generation, ah->result);
+				list_del(&ah->list);
+				free_action(ah);
+			} else {
+				found_done = 1;
+				ah_result = ah->result;
+				ah_owner = ah->owner;
+			}
 		}
 		break;
 	}
@@ -4557,10 +4640,12 @@ static void *worker_thread_main(void *arg_in)
 
 		} else if (act->op == LD_OP_START_WAIT) {
 			act->result = count_lockspace_starting(0);
-			if (!act->result)
-				add_client_result(act);
-			else
+			if (act->result > 0) {
 				list_add(&act->list, &delayed_list);
+			} else {
+				act->result = check_start_results_for_failures();
+				add_client_result(act);
+			}
 
 		} else if (act->op == LD_OP_VG_STATUS) {
 			act->result = work_vg_status(act);
@@ -4581,6 +4666,22 @@ static void *worker_thread_main(void *arg_in)
 				add_client_result(act);
 			} else
 				list_add(&act->list, &delayed_list);
+
+		} else if (act->op == LD_OP_GET_START_RESULT) {
+			struct start_result *sr, *sr_safe;
+			act->result = -ENOENT;
+
+			pthread_mutex_lock(&lockspaces_mutex);
+			list_for_each_entry_safe(sr, sr_safe, &start_results, list) {
+				if (!strcmp(sr->vg_name, act->vg_name)) {
+					act->result = sr->result;
+					list_del(&sr->list);
+					free(sr);
+					break;
+				}
+			}
+			pthread_mutex_unlock(&lockspaces_mutex);
+			add_client_result(act);
 
 		} else if (act->op == LD_OP_FENCE) {
 			int retry = 0;
@@ -4611,6 +4712,7 @@ static void *worker_thread_main(void *arg_in)
 				log_debug("work delayed start_wait for client %u", act->client_id);
 				act->result = count_lockspace_starting(0);
 				if (!act->result) {
+					act->result = check_start_results_for_failures();
 					list_del(&act->list);
 					add_client_result(act);
 				}
@@ -4845,7 +4947,7 @@ static int client_send_result(struct client *cl, struct action *act)
 
 	if ((act->flags & LD_AF_WARN_GL_REMOVED) || gl_vg_removed)
 		strcat(result_flags, "WARN_GL_REMOVED,");
-	
+
 	if (act->flags & LD_AF_SH_EXISTS)
 		strcat(result_flags, "SH_EXISTS,");
 
@@ -5377,6 +5479,11 @@ static int str_to_op_rt(const char *req_name, int *op, int *rt)
 		*rt = LD_RT_VG;
 		return 0;
 	}
+	if (!strcmp(req_name, "get_start_result")) {
+		*op = LD_OP_GET_START_RESULT;
+		*rt = LD_RT_VG;
+		return 0;
+	}
 out:
 	return -1;
 }
@@ -5407,7 +5514,7 @@ static int str_to_lm(const char *str)
 		return LD_LM_DLM;
 	if (!strcmp(str, "idm"))
 		return LD_LM_IDM;
-	return -2; 
+	return -2;
 }
 
 static uint32_t str_to_opts(const char *str)
@@ -5434,6 +5541,8 @@ static uint32_t str_to_opts(const char *str)
 		flags |= LD_AF_ENABLE;
 	if (strstr(str, "nodelay"))
 		flags |= LD_AF_NODELAY;
+	if (strstr(str, "nowatchdog"))
+		flags |= LD_AF_NOWATCHDOG;
 	if (strstr(str, "repair"))
 		flags |= LD_AF_REPAIR;
 
@@ -5466,7 +5575,8 @@ static int setup_dump_socket(void)
 
 	memset(&dump_addr, 0, sizeof(dump_addr));
 	dump_addr.sun_family = AF_LOCAL;
-	strcpy(&dump_addr.sun_path[1], DUMP_SOCKET_NAME);
+	strncpy(&dump_addr.sun_path[1], DUMP_SOCKET_NAME,
+		sizeof(dump_addr.sun_path) - 2);
 	dump_addrlen = sizeof(sa_family_t) + strlen(dump_addr.sun_path+1) + 1;
 
 	return s;
@@ -5560,9 +5670,10 @@ static int print_lockspace(struct lockspace *ls, const char *prefix, int pos, in
 			"thread_work=%d "
 			"thread_stop=%d "
 			"thread_done=%d "
-			"kill_vg=%d "
-			"fence_pr=%d "
-			"no_timeout=%d "
+			"kill_vg=%u "
+			"fence_pr=%u "
+			"no_timeout=%u "
+			"no_watchdog=%u "
 			"sanlock_gl_enabled=%d\n",
 			prefix,
 			ls->name,
@@ -5577,9 +5688,10 @@ static int print_lockspace(struct lockspace *ls, const char *prefix, int pos, in
 			ls->thread_work ? 1 : 0,
 			ls->thread_stop ? 1 : 0,
 			ls->thread_done ? 1 : 0,
-			ls->kill_vg,
-			ls->fence_pr,
-			ls->no_timeout,
+			(unsigned)ls->kill_vg,
+			(unsigned)ls->fence_pr,
+			(unsigned)ls->no_timeout,
+			(unsigned)ls->no_watchdog,
 			ls->sanlock_gl_enabled ? 1 : 0);
 }
 
@@ -5945,19 +6057,19 @@ static void client_recv_action(struct client *cl)
 
 	str = daemon_request_str(req, "vg_lock_args", NULL);
 	if (str && strcmp(str, "none"))
-		strncpy(act->vg_args, str, MAX_ARGS);
+		dm_strncpy(act->vg_args, str, sizeof(act->vg_args));
 
 	str = daemon_request_str(req, "lv_lock_args", NULL);
 	if (str && strcmp(str, "none"))
-		strncpy(act->lv_args, str, MAX_ARGS);
+		dm_strncpy(act->lv_args, str, sizeof(act->lv_args));
 
 	str = daemon_request_str(req, "prev_lv_args", NULL);
 	if (str && strcmp(str, "none"))
-		strncpy(act->other_args, str, MAX_ARGS);
+		dm_strncpy(act->other_args, str, sizeof(act->other_args));
 
 	str = daemon_request_str(req, "set_lock_args", NULL);
 	if (str && strcmp(str, "none"))
-		strncpy(act->other_args, str, MAX_ARGS);
+		dm_strncpy(act->other_args, str, sizeof(act->other_args));
 
 	/* start_vg will include lvmlocal.conf local/host_id here */
 	val = daemon_request_int(req, "host_id", 0);
@@ -6009,8 +6121,6 @@ static void client_recv_action(struct client *cl)
 	}
 
 skip_pvs_path:
-	act->max_retries = daemon_request_int(req, "max_retries", DEFAULT_MAX_RETRIES);
-
 	dm_config_destroy(req.cft);
 	buffer_destroy(&req.buffer);
 
@@ -6061,6 +6171,7 @@ skip_pvs_path:
 		break;
 	case LD_OP_INIT:
 	case LD_OP_START_WAIT:
+	case LD_OP_GET_START_RESULT:
 	case LD_OP_VG_STATUS:
 	case LD_OP_STOP_ALL:
 	case LD_OP_RENAME_FINAL:
@@ -6571,7 +6682,7 @@ static void adopt_locks(void)
 	 *
 	 * If an ls in vg_lockd has no active lvs and does not have
 	 * a matching entry in ls_found, then skip it.
-	 * 
+	 *
 	 * An ls in ls_found should always have a matching ls in
 	 * vg_lockd.  If it doesn't, then maybe the vg has been
 	 * removed even though the lockspace for the vg is still
@@ -6599,7 +6710,7 @@ static void adopt_locks(void)
 		 	 */
 			log_debug("ls %s matches vg %s", ls1->name, ls2->vg_name);
 			memcpy(ls1->vg_uuid, ls2->vg_uuid, 64);
-			memcpy(ls1->vg_args, ls2->vg_args, MAX_ARGS);
+			dm_strncpy(ls1->vg_args, ls2->vg_args, sizeof(ls1->vg_args));
 			list_for_each_entry_safe(r, rsafe, &ls2->resources, list) {
 				list_del(&r->list);
 				list_add(&r->list, &ls1->resources);
@@ -6645,7 +6756,7 @@ static void adopt_locks(void)
 			/* The VG wasn't started in the previous lvmlockd. */
 			log_debug("No ls found for vg %s", ls->vg_name);
 		}
-		
+
 		list_del(&ls->list);
 		free_pvs_path(&ls->pvs);
 		free(ls);
@@ -6678,7 +6789,7 @@ static void adopt_locks(void)
 		act->client_id = INTERNAL_CLIENT_ID;
 		dm_strncpy(act->vg_name, ls->vg_name, sizeof(act->vg_name));
 		memcpy(act->vg_uuid, ls->vg_uuid, 64);
-		memcpy(act->vg_args, ls->vg_args, MAX_ARGS);
+		dm_strncpy(act->vg_args, ls->vg_args, sizeof(act->vg_args));
 		act->host_id = ls->host_id;
 
 		log_debug("adopt add %s vg lockspace %s", lm_str(act->lm_type), act->vg_name);
@@ -6856,7 +6967,7 @@ static void adopt_locks(void)
 		}
 
 		/*
-		 * lock adopt results 
+		 * lock adopt results
 		 */
 
 		if (act->result == -EADOPT_RETRY) {
@@ -6916,6 +7027,15 @@ static void adopt_locks(void)
 					   rt_str(act->rt), act->vg_name, act->result);
 			}
 
+			count_adopt_done++;
+			free_action(act);
+
+		} else if (act->result == -ENOLS && act->rt == LD_RT_GL) {
+			/*
+			 * No started lockspace has gl enabled, so there is
+			 * no orphan gl lock to adopt.
+			 */
+			log_debug("Did not adopt gl lock, no gl lockspace found");
 			count_adopt_done++;
 			free_action(act);
 
@@ -7043,6 +7163,7 @@ fail:
 
 	(void) unlink(adopt_file);
 	log_error("adopt_locks failed, reset host");
+	/* coverity[leaked_storage] vg_lockd cleaned up by list_for_each_entry_safe above */
 }
 
 static int get_peer_pid(int fd)
@@ -7193,8 +7314,7 @@ static int send_helper_request(struct action *act, char *ls_name, uint32_t new_m
 	}
 
 	if (act->op == LD_OP_FENCE) {
-		strncpy(msg.ls_name, ls_name, sizeof(msg.ls_name) - 1);
-		msg.ls_name[sizeof(msg.ls_name) - 1] = 0;
+		dm_strncpy(msg.ls_name, ls_name, sizeof(msg.ls_name));
 		msg.type = HELPER_COMMAND;
 		msg.act = LD_OP_FENCE;
 		msg.msg_id = new_msg_id;
@@ -7241,7 +7361,7 @@ static int send_helper_request(struct action *act, char *ls_name, uint32_t new_m
 
 /* lockspace threads call add_fence_action() */
 
-static int add_fence_action(struct lockspace *ls, struct owner *owner)
+static int add_fence_action(struct lockspace *ls, struct owner *owner, int force_fence_retry)
 {
 	struct action *act;
 
@@ -7259,13 +7379,15 @@ static int add_fence_action(struct lockspace *ls, struct owner *owner)
 	memcpy(act->vg_name, ls->vg_name, sizeof(act->vg_name));
 	memcpy(act->vg_uuid, ls->vg_uuid, sizeof(act->vg_uuid));
 	act->op = LD_OP_FENCE;
+	act->force_fence_retry = force_fence_retry ? 1 : 0;
 	act->ourkey = 0x1000000000000000 | ((ls->generation & 0xFFFFFF) << 16) | (ls->host_id & 0xFFFF);
 	act->remkey = 0x1000000000000000 | (((uint64_t)owner->generation & 0xFFFFFF) << 16) | (owner->host_id & 0xFFFF);
 	memcpy(&act->owner, owner, sizeof(struct owner));
 
-	log_debug("add_fence_action vg %s for host_id %u gen %u ourkey 0x%llx remkey 0x%llx",
+	log_debug("add_fence_action vg %s for host_id %u gen %u ourkey 0x%llx remkey 0x%llx retry %d",
 		  act->vg_name, act->owner.host_id, act->owner.generation,
-		  (unsigned long long)act->ourkey, (unsigned long long)act->remkey);
+		  (unsigned long long)act->ourkey, (unsigned long long)act->remkey,
+		  force_fence_retry);
 
 	add_work_action(act);
 	return 0;
@@ -7290,8 +7412,8 @@ static int setup_helper(void)
 	pw_fd = pfd[1];
 
 	if (pipe2(pfd, O_NONBLOCK | O_CLOEXEC)) {
-		close(cr_fd);
-		close(pw_fd);
+		(void) close(cr_fd);
+		(void) close(pw_fd);
 		return -errno;
 	}
 
@@ -7300,23 +7422,23 @@ static int setup_helper(void)
 
 	pid = fork();
 	if (pid < 0) {
-		close(cr_fd);
-		close(pw_fd);
-		close(pr_fd);
-		close(cw_fd);
+		(void) close(cr_fd);
+		(void) close(pw_fd);
+		(void) close(pr_fd);
+		(void) close(cw_fd);
 		return -errno;
 	}
 
 	if (pid) {
-		close(cr_fd);
-		close(cw_fd);
+		(void) close(cr_fd);
+		(void) close(cw_fd);
 		helper_send_fd = pw_fd;
 		helper_recv_fd = pr_fd;
 		helper_pid = pid;
 		return 0;
 	} else {
-		close(pr_fd);
-		close(pw_fd);
+		(void) close(pr_fd);
+		(void) close(pw_fd);
 		helper_main(cr_fd, cw_fd, daemon_debug);
 		exit(0);
 	}
@@ -7324,8 +7446,8 @@ static int setup_helper(void)
 
 static void close_helper(void)
 {
-	close(helper_send_fd);
-	close(helper_recv_fd);
+	(void) close(helper_send_fd);
+	(void) close(helper_recv_fd);
 	helper_send_fd = -1;
 	helper_recv_fd = -1;
 	rem_pollfd(helper_pi);
@@ -7464,6 +7586,8 @@ static void process_helper(int fd)
 		goto fail;
 	}
 
+	msg.ls_name[MAX_NAME] = '\0';
+
 	if ((msg.type == HELPER_COMMAND_RESULT) && (msg.act == LD_OP_FENCE))
 		process_fence_result(&msg);
 	else
@@ -7499,10 +7623,11 @@ static int main_loop(daemon_state *ds_arg)
 		return rv;
 	}
 
-	strcpy(gl_lsname_dlm, S_NAME_GL_DLM);
-	strcpy(gl_lsname_idm, S_NAME_GL_IDM);
+	dm_strncpy(gl_lsname_dlm, S_NAME_GL_DLM, sizeof(gl_lsname_dlm));
+	dm_strncpy(gl_lsname_idm, S_NAME_GL_IDM, sizeof(gl_lsname_idm));
 
 	INIT_LIST_HEAD(&lockspaces);
+	INIT_LIST_HEAD(&start_results);
 	pthread_mutex_init(&lockspaces_mutex, NULL);
 	pthread_mutex_init(&pollfd_mutex, NULL);
 	pthread_mutex_init(&log_mutex, NULL);
@@ -7615,6 +7740,7 @@ static int main_loop(daemon_state *ds_arg)
 					cl->poll_ignore = 0;
 					if (close(pollfd[i].fd))
 						log_error("close fd %d failed", pollfd[i].fd);
+					/* coverity[lock_evasion] pollfd owned by main_loop thread */
 					pollfd[i].fd = POLL_FD_UNUSED;
 					pollfd[i].events = 0;
 					pollfd[i].revents = 0;
@@ -7622,6 +7748,7 @@ static int main_loop(daemon_state *ds_arg)
 				} else if (is_recv) {
 					cl->recv = 1;
 					cl->poll_ignore = 1;
+					/* coverity[lock_evasion] pollfd owned by main_loop thread */
 					pollfd[i].fd = POLL_FD_IGNORE;
 					pollfd[i].events = 0;
 					pollfd[i].revents = 0;
@@ -7641,6 +7768,7 @@ static int main_loop(daemon_state *ds_arg)
 					  i, pollfd[i].fd);
 				if (close(pollfd[i].fd))
 					log_error("close fd %d failed", pollfd[i].fd);
+				/* coverity[lock_evasion] pollfd owned by main_loop thread */
 				pollfd[i].fd = POLL_FD_UNUSED;
 				pollfd[i].events = 0;
 				pollfd[i].revents = 0;

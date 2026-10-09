@@ -509,9 +509,9 @@ static int _move_pvs_used_by_lv_cb(struct logical_volume *lv, void *data)
 int move_pvs_used_by_lv(struct volume_group *vg_from,
 			struct volume_group *vg_to,
 			const char *lv_name,
-			struct dm_list *dev_list)
+			struct dm_list *dev_list_moved)
 {
-	struct vg_from_to data = { .from = vg_from, .to = vg_to, .dev_list = dev_list };
+	struct vg_from_to data = { .from = vg_from, .to = vg_to, .dev_list = dev_list_moved };
 	struct logical_volume *lv;
 
 	/* FIXME: handle tags */
@@ -552,9 +552,13 @@ int validate_new_vg_name(struct cmd_context *cmd, const char *vg_name)
 		return 0;
 	}
 
-	snprintf(vg_path, sizeof(vg_path), "%s%s", cmd->dev_dir, vg_name);
+	if (dm_snprintf(vg_path, sizeof(vg_path), "%s%s", cmd->dev_dir, vg_name) < 0) {
+		log_error("%s%s: new vg name is too long.", cmd->dev_dir, vg_name);
+		return 0;
+	}
+
 	if (path_exists(vg_path)) {
-		log_error("%s: already exists in filesystem", vg_path);
+		log_error("%s: already exists in filesystem.", vg_path);
 		return 0;
 	}
 
@@ -1022,7 +1026,7 @@ int lv_has_unknown_segments(const struct logical_volume *lv)
 	struct lv_segment *seg;
 	/* foreach segment */
 	dm_list_iterate_items(seg, &lv->segments)
-		if (seg_unknown(seg))
+		if (seg_is_unknown(seg))
 			return 1;
 	return 0;
 }
@@ -1676,6 +1680,9 @@ struct logical_volume *find_lv(const struct volume_group *vg,
 	struct logical_volume *lv = NULL;
 	struct lv_list *lvl;
 	const char *ptr;
+
+	if (!lv_name)
+		return NULL;
 
 	/* Use last component */
 	if ((ptr = strrchr(lv_name, '/')))
@@ -2448,6 +2455,14 @@ int vg_validate(struct volume_group *vg)
 			num_snapshots++;
 		else		/* count other non-snapshot invisible volumes */
 			hidden_lv_count++;
+
+		if (lv_is_cow(lvl->lv) &&
+		    lvl->lv->snapshot &&
+		    !validate_snapshot_chunk_size(lvl->lv->snapshot->chunk_size)) {
+			log_error(INTERNAL_ERROR "Snapshot %s has invalid chunk size %u.",
+				  lvl->lv->name, lvl->lv->snapshot->chunk_size);
+			r = 0;
+		}
 
 		/*
 		 *  FIXME: add check for unreferenced invisible LVs
@@ -4409,7 +4424,7 @@ void vg_write_commit_bad_mdas(struct cmd_context *cmd, struct volume_group *vg)
 {
 	char vgid[ID_LEN + 1] __attribute__((aligned(8)));
 	DM_LIST_INIT(bad_mda_list);
-	struct mda_list *mdal;
+	struct mda_list *mdal, *safe;
 	struct metadata_area *mda;
 	struct device *dev;
 
@@ -4489,8 +4504,12 @@ void vg_write_commit_bad_mdas(struct cmd_context *cmd, struct volume_group *vg)
 		if (!mda->ops->vg_commit(vg->fid, vg, mda)) {
 			log_warn("WARNING: Failed to commit VG %s metadata to bad mda%d at %llu on %s.",
 				 vg->name, mda->mda_num, (unsigned long long)mda->header_start, dev_name(dev));
-			continue;
 		}
+	}
+
+	dm_list_iterate_items_safe(mdal, safe, &bad_mda_list) {
+		dm_list_del(&mdal->list);
+		free(mdal);
 	}
 }
 
@@ -4538,6 +4557,22 @@ bool scan_text_mismatch(struct cmd_context *cmd, const char *vgname, const char 
 
 		mdac = mda->metadata_locn;
 		area = &mdac->area;
+
+		/*
+		 * Reopen device if it was closed, e.g. by label_scan_invalidate_lvs
+		 * closing a PV stacked on an LV after processing the LV's VG.
+		 */
+		if (dev->bcache_di < 0) {
+			if (!label_scan_open(dev)) {
+				if (dev_scan_io_failed(dev))
+					log_debug("Rescan for text mismatch - %s excluded after I/O error.",
+						  dev_name(dev));
+				else
+					log_debug("Rescan for text mismatch - cannot reopen %s.",
+						  dev_name(dev));
+				goto out;
+			}
+		}
 
 		/*
 		 * Invalidate mda_header in bcache so it will be reread from disk.
@@ -4815,7 +4850,7 @@ static struct volume_group *_vg_read(struct cmd_context *cmd,
 		}
 	}
 
-	if (found_old_metadata) {
+	if (found_old_metadata && (cmd->command_enum != vgck_update_metadata_CMD)) {
 		log_warn("WARNING: Inconsistent metadata found for VG %s.", vgname);
 		log_warn("See vgck --updatemetadata to correct inconsistency.");
 	}

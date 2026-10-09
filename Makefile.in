@@ -74,6 +74,9 @@ daemons.cflow: tools.cflow
 cflow: include.cflow
 endif
 
+lib.cppcheck tools.cppcheck daemons.cppcheck: include.cppcheck
+lib.gccanalyze tools.gccanalyze daemons.gccanalyze: include.gccanalyze
+
 CSCOPE_DIRS = daemons include lib libdaemon scripts tools libdm test
 ifneq ("@CSCOPE_CMD@", "")
 cscope.out:
@@ -83,7 +86,7 @@ endif
 DISTCLEAN_TARGETS += cscope.out
 CLEAN_DIRS += autom4te.cache
 
-check check_system check_cluster check_local check_lvmpolld check_lvmlockd_test check_lvmlockd_dlm check_lvmlockd_sanlock: test
+check check_system check_cluster check_local check_lvmpolld check_lvmlockd_test check_lvmlockd_dlm check_lvmlockd_sanlock check_scripts: test
 	$(MAKE) -C test $(@)
 
 conf.generate man.generate: tools
@@ -156,14 +159,15 @@ help:
 	@echo "  all			Default target."
 	@echo "  all_man		Build all man pages with generators."
 	@echo "  clean			Remove all compile files."
+	@echo "  cppcheck		Run cppcheck static analysis."
 	@echo "  device-mapper		Device mapper part of lvm2."
 	@echo "  dist			Generate distributable file."
 	@echo "  distclean		Remove all build files."
+	@echo "  gccanalyze		Run GCC -fanalyzer static analysis."
 	@echo "  generate		Generate man pages for sources."
 	@echo "  help			Display callable targets."
 	@echo "  install		Install all files."
 	@echo "  install_all_man	Install all man pages."
-	@echo "  install_cluster	Install cmirrord."
 	@echo "  install_device-mapper	Install device mapper files."
 	@echo "  install_initscripts	Install initialization scripts."
 	@echo "  install_lvm2		Install lvm2 files."

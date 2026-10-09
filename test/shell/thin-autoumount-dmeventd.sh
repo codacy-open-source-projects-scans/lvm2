@@ -38,7 +38,7 @@ _is_lv_opened()
 #
 # Main
 #
-which mkfs.ext4 || skip
+aux have_fs ext4 || skip
 export MKE2FS_CONFIG="$TESTDIR/lib/mke2fs.conf"
 
 aux have_thin 1 0 0 || skip
@@ -125,7 +125,7 @@ lvs -a $vg
 
 [[ $i -lt 12 ]] || die "$mntdir should have been unmounted by dmeventd!"
 
-_is_lv_opened "$vg/$lv2" || \
+_is_lv_opened "$vg/$lv2" ||
 	die "$mntusedir is not mounted here (sleep already expired??)"
 
 # Kill device holding process

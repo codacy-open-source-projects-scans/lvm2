@@ -16,7 +16,6 @@
 #include "lib/device/bcache.h"
 #include "lib/misc/lvm-signal.h"
 
-#include <errno.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,7 +30,7 @@
 #define SECTOR_SHIFT 9
 #define SECTOR_SIZE 512
 #define BLOCK_SIZE_SECTORS 8
-#define PAGE_SIZE_SECTORS ((PAGE_SIZE) >> SECTOR_SHIFT)
+#define PAGE_SIZE_SECTORS ((TEST_PAGE_SIZE) >> SECTOR_SHIFT)
 #define NR_BLOCKS 64
 
 struct fixture {
@@ -73,7 +72,6 @@ static void _print_buffer(const char *name, uint8_t *buffer, size_t count)
 	while (count) {
 		for (col = 0; count && col < 20; col++) {
 			fprintf(stderr, "%x, ", (unsigned) *buffer);
-			col++;
 			buffer++;
 			count--;
 		}
@@ -88,7 +86,7 @@ static void *_fix_init(void)
 	T_ASSERT(f);
 	f->e = create_async_io_engine();
 	T_ASSERT(f->e);
-	if (posix_memalign((void **) &f->data, PAGE_SIZE, SECTOR_SIZE * BLOCK_SIZE_SECTORS))
+	if (posix_memalign((void **) &f->data, TEST_PAGE_SIZE, SECTOR_SIZE * BLOCK_SIZE_SECTORS))
 		test_fail("posix_memalign failed");
 
 	snprintf(f->fname, sizeof(f->fname), "unit-test-XXXXXX");
@@ -98,7 +96,7 @@ static void *_fix_init(void)
 
 	_fill_buffer(f->data, 123, SECTOR_SIZE * BLOCK_SIZE_SECTORS);
 
-	T_ASSERT(write(f->fd, f->data, SECTOR_SIZE * BLOCK_SIZE_SECTORS) > 0);
+	T_ASSERT(write(f->fd, f->data, SECTOR_SIZE * BLOCK_SIZE_SECTORS) == SECTOR_SIZE * BLOCK_SIZE_SECTORS);
 	T_ASSERT(lseek(f->fd, 0, SEEK_SET) != -1);
 
 	return f;
@@ -257,6 +255,7 @@ static void _test_destroy_after_fork(void *fixture)
 	 * the shared aio_context.
 	 */
 	e->destroy(e);
+	/* coverity[leaked_storage] e freed by e->destroy */
 }
 
 /*
@@ -333,6 +332,7 @@ static void _test_wait_eintr(void *fixture)
 	sigint_clear();
 
 	e->destroy(e);
+	/* coverity[leaked_storage] freed by destroy */
 }
 
 //----------------------------------------------------------------

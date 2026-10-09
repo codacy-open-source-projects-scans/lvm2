@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,15 +13,15 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_CONFIG_H
-#define _LVM_CONFIG_H
+#ifndef LVM_CONFIG_H
+#define LVM_CONFIG_H
 
 #include "libdm/libdevmapper.h"
 #include "lib/device/device.h"
 
 /* 16 bits: 3 bits for major, 4 bits for minor, 9 bits for patchlevel */
 /* FIXME Max LVM version supported: 7.15.511. Extend bits when needed. */
-#define vsn(major, minor, patchlevel) (major << 13 | minor << 9 | patchlevel)
+#define vsn(major, minor, patchlevel) ((major) << 13 | (minor) << 9 | (patchlevel))
 
 struct cmd_context;
 
@@ -149,6 +149,7 @@ typedef enum {
 	CFG_DEF_TREE_CURRENT,		/* tree of nodes with values currently set in the config */
 	CFG_DEF_TREE_MISSING,		/* tree of nodes missing in current config using default values */
 	CFG_DEF_TREE_FULL,		/* CURRENT + MISSING, the tree actually used within execution */
+	CFG_DEF_TREE_FULL_DIFF,		/* like FULL, but comment out settings at default values */
 	CFG_DEF_TREE_DEFAULT,		/* tree of all possible config nodes with default values */
 	CFG_DEF_TREE_NEW,		/* tree of all new nodes that appeared in given version */
 	CFG_DEF_TREE_NEW_SINCE,		/* tree of all new nodes that appeared since given version */
@@ -238,9 +239,10 @@ struct dm_config_tree *remove_config_tree_by_source(struct cmd_context *cmd, con
 struct cft_check_handle *get_config_tree_check_handle(struct cmd_context *cmd, struct dm_config_tree *cft);
 config_source_t config_get_source_type(struct dm_config_tree *cft);
 
-typedef uint32_t (*checksum_fn_t) (uint32_t initial, const uint8_t *buf, uint32_t size);
+typedef uint32_t (*checksum_fn_t) (uint32_t initial, const uint8_t *buf, size_t size);
 
 struct dm_config_tree *config_open(config_source_t source, const char *filename, int keep_open);
+int config_set_source(struct dm_config_tree *cft, config_source_t type);
 int config_file_read_fd(struct dm_config_tree *cft, struct device *dev, dev_io_reason_t reason,
 			off_t offset, size_t size, off_t offset2, size_t size2,
 			checksum_fn_t checksum_fn, uint32_t checksum,
@@ -260,17 +262,18 @@ int config_file_check(struct dm_config_tree *cft, const char **filename, struct 
 
 typedef enum {
 	CONFIG_MERGE_TYPE_RAW,	/* always replace old config values with new config values when merging */
-	CONFIG_MERGE_TYPE_TAGS	/* apply some exceptions when merging tag configs:
+	CONFIG_MERGE_TYPE_TAGS,	/* apply some exceptions when merging tag configs:
 				     - skip tags section
 				     - do not replace, but merge values of these settings:
 					activation/volume_list
 					devices/filter
 					devices/types
 				 */
+	CONFIG_MERGE_TYPE_REMOVE /* remove matching nodes from the target tree */
 } config_merge_t;
 
 int merge_config_tree(struct cmd_context *cmd, struct dm_config_tree *cft,
-		      struct dm_config_tree *newdata, config_merge_t);
+		      struct dm_config_tree *newdata, config_merge_t merge_type);
 
 /*
  * The next two do not check config overrides and must only be used for the tags section.
@@ -310,8 +313,6 @@ int get_default_allocation_thin_pool_chunk_size_CFG(struct cmd_context *cmd, str
 #define get_default_unconfigured_allocation_thin_pool_chunk_size_CFG NULL
 int get_default_allocation_cache_pool_chunk_size_CFG(struct cmd_context *cmd, struct profile *profile);
 #define get_default_unconfigured_allocation_cache_pool_chunk_size_CFG NULL
-const char *get_default_allocation_cache_policy_CFG(struct cmd_context *cmd, struct profile *profile);
-#define get_default_unconfigured_allocation_cache_policy_CFG NULL
 uint64_t get_default_allocation_cache_pool_max_chunks_CFG(struct cmd_context *cmd, struct profile *profile);
 int get_default_allocation_vdo_use_metadata_hints_CFG(struct cmd_context *cmd, struct profile *profile);
 #define get_default_unconfigured_allocation_vdo_use_metadata_hints_CFG NULL

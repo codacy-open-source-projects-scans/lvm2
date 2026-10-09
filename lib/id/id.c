@@ -27,7 +27,7 @@ static const char _c[] =
 static int _built_inverse;
 static char _inverse_c[256];
 
-int lvid_create(union lvid *lvid, struct id *vgid)
+int lvid_create(union lvid *lvid, const struct id *vgid)
 {
 	memcpy(lvid->id, vgid, sizeof(*lvid->id));
 	return id_create(&lvid->id[1]);
@@ -72,16 +72,14 @@ static void _build_inverse(void)
 		_inverse_c[(int) *ptr] = (char) 0x1;
 }
 
-static int _id_valid(struct id *id, int e)
+static int _id_valid(const struct id *id, int e)
 {
 	int i;
 
 	_build_inverse();
 
 	for (i = 0; i < ID_LEN; i++)
-		/* Cast to unsigned char: int8_t uuid with corrupt byte >= 0x80
-		 * would be negative and index before _inverse_c[] array. */
-		if (!_inverse_c[(unsigned char)id->uuid[i]]) {
+		if (!_inverse_c[id->uuid[i]]) {
 			if (e)
 				log_error("UUID contains invalid character '%c'", id->uuid[i]);
 			return 0;
@@ -90,7 +88,7 @@ static int _id_valid(struct id *id, int e)
 	return 1;
 }
 
-int id_valid(struct id *id)
+int id_valid(const struct id *id)
 {
 	return _id_valid(id, 1);
 }
@@ -110,6 +108,8 @@ int id_write_format(const struct id *id, char *buffer, size_t size)
 	assert(ID_LEN == 32);
 
 	if (id->uuid[0] == '#') {
+		if (size > ID_LEN)
+			size = ID_LEN;
 		dm_strncpy(buffer, (char*)id->uuid, size);
 		return 1;
 	}

@@ -145,6 +145,24 @@ fail:
 	return NULL;
 }
 
+int config_set_source(struct dm_config_tree *cft, config_source_t type)
+{
+	struct config_source *cs;
+
+	if (dm_config_get_custom(cft))
+		return 1;
+
+	if (!(cs = dm_pool_zalloc(cft->mem, sizeof(struct config_source)))) {
+		log_error("Failed to allocate config source.");
+		return 0;
+	}
+
+	cs->type = type;
+	dm_config_set_custom(cft, cs);
+
+	return 1;
+}
+
 /*
  * Doesn't populate filename if the file is empty.
  */
@@ -434,14 +452,14 @@ static int _override_config_tree_from_metadata_profile(struct cmd_context *cmd,
 	if (cs->type == CONFIG_STRING) {
 		cft_previous = cft;
 		cft = cft->cascade;
+		cs = dm_config_get_custom(cft);
 	}
 
 	if (cs->type == CONFIG_PROFILE_COMMAND) {
 		cft_previous = cft;
 		cft = cft->cascade;
+		cs = dm_config_get_custom(cft);
 	}
-
-	cs = dm_config_get_custom(cft);
 
 	if (cs->type == CONFIG_PROFILE_METADATA) {
 		log_error(INTERNAL_ERROR "_override_config_tree_from_metadata_profile: "
@@ -512,7 +530,7 @@ int config_file_read_fd(struct dm_config_tree *cft, struct device *dev, dev_io_r
 	if (!(dev->flags & DEV_REGULAR) || size2)
 		use_plain_read = 0;
 
-	if (size + size2 < size) {
+	if (size2 > SIZE_MAX - 1 || size > SIZE_MAX - 1 - size2) {
 		log_error("Metadata buffer size overflow %zu + %zu on %s.",
 			  size, size2, dev_name(dev));
 		return 0;
@@ -720,8 +738,8 @@ static void _get_type_name(char *buf, size_t buf_size, unsigned type)
 static void _log_type_error(const char *path, unsigned actual, unsigned expected,
 			    int suppress_messages)
 {
-	static char actual_type_name[128];
-	static char expected_type_name[128];
+	char actual_type_name[128];
+	char expected_type_name[128];
 
 	_get_type_name(actual_type_name, sizeof(actual_type_name), actual);
 	_get_type_name(expected_type_name, sizeof(expected_type_name), expected);
@@ -1125,12 +1143,26 @@ static int _config_def_check_tree(struct cft_check_handle *handle,
 {
 	struct dm_config_node *cn;
 	const cfg_def_item_t *def;
-	int valid, r = 1;
+	int valid, r = 1, id;
 	size_t len;
 
 	def = cfg_def_get_item_p(root->id);
-	if (def->flags & CFG_SECTION_NO_CHECK)
+	if (def->flags & CFG_SECTION_NO_CHECK) {
+		/*
+		 * Contents of a NO_CHECK section (e.g. cache policy_settings)
+		 * are not registered, so no per-item diff is computed for them.
+		 * Any setting present here is user-supplied and differs from
+		 * the empty default, so mark this section and its registered
+		 * ancestors with CFG_DIFF. Otherwise FULL_DIFF output would
+		 * comment out the enclosing braces while leaving the settings
+		 * active, which is invalid.
+		 */
+		if (root->child) {
+			for (id = root->id; id && !(handle->status[id] & CFG_DIFF); id = _cfg_def_items[id].parent)
+				handle->status[id] |= CFG_DIFF;
+		}
 		return 1;
+	}
 
 	for (cn = root->child; cn; cn = cn->sib) {
 		if ((valid = _config_def_check_node(handle, vp, pvp, rp, prp,
@@ -1199,6 +1231,8 @@ int config_def_check(struct cft_check_handle *handle)
 			}
 			if (!dm_hash_insert(handle->cmd->cft_def_hash, vp, (void*)def)) {
 				log_error("Failed to insert configuration to hash.");
+				dm_hash_destroy(handle->cmd->cft_def_hash);
+				handle->cmd->cft_def_hash = NULL;
 				r = 0;
 				goto out;
 			}
@@ -1380,7 +1414,7 @@ int64_t find_config_tree_int64(struct cmd_context *cmd, int id, struct profile *
 	const cfg_def_item_t *item = cfg_def_get_item_p(id);
 	char path[CFG_PATH_MAX_LEN];
 	int profile_applied;
-	int i64;
+	int64_t i64;
 
 	profile_applied = _apply_local_profile(cmd, profile);
 	_cfg_def_make_path(path, sizeof(path), item->id, item, 0);
@@ -1565,10 +1599,13 @@ const struct dm_config_node *find_config_tree_array(struct cmd_context *cmd, int
 	return cn;
 }
 
-/* Insert cn2 after cn1 */
 static void _insert_config_node(struct dm_config_node **cn1,
+				struct dm_config_node *parent,
 				struct dm_config_node *cn2)
 {
+	if (parent)
+		cn2->parent = parent;
+
 	if (!*cn1) {
 		*cn1 = cn2;
 		cn2->sib = NULL;
@@ -1598,12 +1635,25 @@ static void _merge_section(struct dm_config_node *cn1, struct dm_config_node *cn
 		}
 
 		/* Subsection? */
-		if (!cn->v)
-			/* Ignore - we don't have any of these yet */
+		if (!cn->v) {
+			if (!(oldn = dm_config_find_node(cn1->child, cn->key))) {
+				if (merge_type != CONFIG_MERGE_TYPE_REMOVE)
+					_insert_config_node(&cn1->child, cn1, cn);
+			} else {
+				_merge_section(oldn, cn, merge_type);
+				if (merge_type == CONFIG_MERGE_TYPE_REMOVE && !oldn->child)
+					dm_config_remove_node(cn1, oldn);
+			}
 			continue;
+		}
 		/* Not already present? */
 		if (!(oldn = dm_config_find_node(cn1->child, cn->key))) {
-			_insert_config_node(&cn1->child, cn);
+			if (merge_type != CONFIG_MERGE_TYPE_REMOVE)
+				_insert_config_node(&cn1->child, cn1, cn);
+			continue;
+		}
+		if (merge_type == CONFIG_MERGE_TYPE_REMOVE) {
+			dm_config_remove_node(cn1, oldn);
 			continue;
 		}
 		if (merge_type == CONFIG_MERGE_TYPE_TAGS) {
@@ -1665,8 +1715,14 @@ int merge_config_tree(struct cmd_context *cmd, struct dm_config_tree *cft,
 					continue;
 			}
 		}
+		if (merge_type == CONFIG_MERGE_TYPE_REMOVE) {
+			if ((oldn = dm_config_find_node(root, cn->key)))
+				_merge_section(oldn, cn, merge_type);
+			continue;
+		}
 		if (!(oldn = dm_config_find_node(root, cn->key))) {
-			_insert_config_node(&cft->root, cn);
+			/* NULL parent: top-level sections have no parent node */
+			_insert_config_node(&cft->root, NULL, cn);
 			if (merge_type == CONFIG_MERGE_TYPE_TAGS) {
 				/* Remove any "tags" nodes */
 				for (cn2 = cn->child; cn2; cn2 = cn2->sib) {
@@ -1815,7 +1871,8 @@ static int _out_prefix_fn(const struct dm_config_node *cn, const char *line, voi
 		if (cfg_def->flags & CFG_DEFAULT_COMMENTED)
 			fprintf(out->fp, "%s# This configuration %s has an automatic default value.\n", line, node_type_name);
 
-		if ((out->tree_spec->type == CFG_DEF_TREE_FULL) &&
+		if ((out->tree_spec->type == CFG_DEF_TREE_FULL ||
+		     out->tree_spec->type == CFG_DEF_TREE_FULL_DIFF) &&
 		    (out->tree_spec->check_status[cn->id] & CFG_USED))
 			fprintf(out->fp, "%s# Value defined in existing configuration has been used for this setting.\n", line);
 	}
@@ -1845,29 +1902,49 @@ static int _should_print_cfg_with_undef_def_val(struct out_baton *out, const cfg
 	return out->tree_spec->check_status && (out->tree_spec->check_status[cn->id] & CFG_USED);
 }
 
+static int _cfg_node_make_path(char *buf, size_t buf_size, const struct dm_config_node *cn)
+{
+	int count = 0;
+	int n;
+
+	if (cn->parent) {
+		count = _cfg_node_make_path(buf, buf_size, cn->parent);
+		if (count < 0)
+			return -1;
+	}
+
+	if ((n = dm_snprintf(buf + count, buf_size - count, "%s%s",
+			     count ? "/" : "", cn->key)) < 0)
+		return -1;
+
+	return count + n;
+}
+
 static int _out_line_list(const struct dm_config_node *cn, const char *line, struct out_baton *out)
 {
 	char config_path[CFG_PATH_MAX_LEN];
 	char summary[MAX_COMMENT_LINE+1];
-	char version[9];
-	const struct cfg_def_item *cfg_def;
+	char version[9] = { 0 };
+	const struct cfg_def_item *cfg_def = NULL;
 	int pos = 0;
 	const char *val = NULL;
 
-	cfg_def = cfg_def_get_item_p(cn->id);
-
-	if (cfg_def->type & CFG_TYPE_SECTION)
+	if (!cn->v)
 		return 1;
 
-	if (!_cfg_def_make_path(config_path, CFG_PATH_MAX_LEN, cfg_def->id, cfg_def, 1))
-		return_0;
-
-	if (out->tree_spec->withversions && !_get_config_node_version(cfg_def->since_version, version))
+	if (_cfg_node_make_path(config_path, CFG_PATH_MAX_LEN, cn) < 0)
 		return_0;
 
 	summary[0] = '\0';
-	if (out->tree_spec->withsummary && cfg_def->comment)
-		_copy_one_line(cfg_def->comment, summary, &pos, strlen(cfg_def->comment));
+	if (cn->id > 0) {
+		cfg_def = cfg_def_get_item_p(cn->id);
+
+		if (out->tree_spec->withversions && !_get_config_node_version(cfg_def->since_version, version))
+			return_0;
+
+		if (out->tree_spec->withsummary && cfg_def->comment)
+			_copy_one_line(cfg_def->comment, summary, &pos, strlen(cfg_def->comment));
+	}
 
 	if (out->tree_spec->type != CFG_DEF_TREE_LIST) {
 		if (!(val = strrchr(line, '=')))
@@ -1887,14 +1964,15 @@ static int _out_line_list(const struct dm_config_node *cn, const char *line, str
 
 static int _out_line_tree(const struct dm_config_node *cn, const char *line, struct out_baton *out)
 {
-	const struct cfg_def_item *cfg_def;
+	const struct cfg_def_item *cfg_def = NULL;
 	int space_prefix_len = 0;
 	const char *p;
 	size_t len;
 
-	cfg_def = cfg_def_get_item_p(cn->id);
+	if (cn->id > 0)
+		cfg_def = cfg_def_get_item_p(cn->id);
 
-	if (out->tree_spec->valuesonly && !(cfg_def->type & CFG_TYPE_SECTION)) {
+	if (cfg_def && out->tree_spec->valuesonly && !(cfg_def->type & CFG_TYPE_SECTION)) {
 		if ((space_prefix_len = strspn(line, "\t "))) {
 			len = strlen(line);
 			p = line + space_prefix_len;
@@ -1910,29 +1988,55 @@ static int _out_line_tree(const struct dm_config_node *cn, const char *line, str
 			}
 
 			line = dm_pool_end_object(out->mem);
-		} else
-			line = strchr(line, '=') + 1;
+		} else if (!(line = strchr(line, '=')))
+			return_0;
+		else
+			line++;
 	}
 
-	if ((out->tree_spec->type != CFG_DEF_TREE_CURRENT) &&
-	    (out->tree_spec->type != CFG_DEF_TREE_DIFF) &&
-	    (out->tree_spec->type != CFG_DEF_TREE_FULL) &&
-	    !out->tree_spec->valuesonly &&
-	    (cfg_def->flags & (CFG_DEFAULT_UNDEFINED | CFG_DEFAULT_COMMENTED))) {
-		/* print with # at the front to comment out the line */
-		if (_should_print_cfg_with_undef_def_val(out, cfg_def, cn)) {
-			space_prefix_len = strspn(line, "\t ");
-			fprintf(out->fp, "%.*s%s%s\n", space_prefix_len, line, "# ",
-				line + space_prefix_len);
+	/* Determine if this value should be commented out */
+	if (cfg_def && !out->tree_spec->valuesonly) {
+		int should_comment = 0;
+
+		/*
+		 * For FULL_DIFF tree: a setting or section left at its default
+		 * (no CFG_DIFF) follows its CFG_DEFAULT_COMMENTED flag, exactly
+		 * as in default config output - a flagged default is commented
+		 * out, an unflagged one stays uncommented. A setting or section
+		 * carrying a diff (CFG_DIFF propagated up from a non-default
+		 * value it contains) always stays uncommented.
+		 */
+		if ((out->tree_spec->type == CFG_DEF_TREE_FULL_DIFF) &&
+		    out->tree_spec->check_status &&
+		    !(out->tree_spec->check_status[cn->id] & CFG_DIFF) &&
+		    (cfg_def->flags & (CFG_DEFAULT_UNDEFINED | CFG_DEFAULT_COMMENTED))) {
+			should_comment = 1;
 		}
-		return 1;
+		/* For DEFAULT/MISSING/etc trees: comment if CFG_DEFAULT_COMMENTED flag set */
+		else if ((out->tree_spec->type != CFG_DEF_TREE_CURRENT) &&
+			 (out->tree_spec->type != CFG_DEF_TREE_DIFF) &&
+			 (out->tree_spec->type != CFG_DEF_TREE_FULL) &&
+			 (out->tree_spec->type != CFG_DEF_TREE_FULL_DIFF) &&
+			 (cfg_def->flags & (CFG_DEFAULT_UNDEFINED | CFG_DEFAULT_COMMENTED))) {
+			should_comment = 1;
+		}
+
+		if (should_comment) {
+			/* print with # at the front to comment out the line */
+			if (_should_print_cfg_with_undef_def_val(out, cfg_def, cn)) {
+				space_prefix_len = strspn(line, "\t ");
+				fprintf(out->fp, "%.*s%s%s\n", space_prefix_len, line, "# ",
+					line + space_prefix_len);
+			}
+			return 1;
+		}
 	}
 
 	/* print the line as it is */
-	if (_should_print_cfg_with_undef_def_val(out, cfg_def, cn))
+	if (!cfg_def || _should_print_cfg_with_undef_def_val(out, cfg_def, cn))
 		fprintf(out->fp, "%s\n", line);
 
-	if (out->tree_spec->valuesonly && !(cfg_def->type & CFG_TYPE_SECTION) && space_prefix_len)
+	if (cfg_def && out->tree_spec->valuesonly && !(cfg_def->type & CFG_TYPE_SECTION) && space_prefix_len)
 		dm_pool_free(out->mem, (char *) line);
 
 	return 1;
@@ -1944,7 +2048,7 @@ static int _out_line_fn(const struct dm_config_node *cn, const char *line, void 
 	struct out_baton *out = baton;
 
 	if ((out->tree_spec->type == CFG_DEF_TREE_DIFF) &&
-	    (!(out->tree_spec->check_status[cn->id] & CFG_DIFF)))
+	    (cn->id <= 0 || !(out->tree_spec->check_status[cn->id] & CFG_DIFF)))
 		return 1;
 
 	if (out->tree_spec->listmode)
@@ -2092,7 +2196,7 @@ static struct dm_config_node *_add_def_node(struct dm_config_tree *cft,
 		if (!parent->child)
 			parent->child = cn;
 	} else
-		cn->parent = cn;
+		cn->parent = NULL;
 
 	if (relay)
 		relay->sib = cn;
@@ -2117,6 +2221,8 @@ static int _should_skip_def_node(const struct config_def_tree_spec *spec, int se
 
 	switch (spec->type) {
 		case CFG_DEF_TREE_FULL:
+			/* fall through */
+		case CFG_DEF_TREE_FULL_DIFF:
 			/* fall through */
 		case CFG_DEF_TREE_MISSING:
 			if (!spec->check_status) {
@@ -2227,7 +2333,7 @@ struct dm_config_tree *config_def_create_tree(struct config_def_tree_spec *spec)
 
 	cft->root = root;
 
-	if (spec->type == CFG_DEF_TREE_FULL) {
+	if (spec->type == CFG_DEF_TREE_FULL || spec->type == CFG_DEF_TREE_FULL_DIFF) {
 		if (!(tmp_cft = dm_config_create())) {
 			log_error("Failed to create temporary config tree while creating full tree.");
 			goto bad;
@@ -2371,7 +2477,7 @@ struct profile *add_profile(struct cmd_context *cmd, const char *profile_name, c
 }
 
 int load_profile(struct cmd_context *cmd, struct profile *profile) {
-	static char profile_path[PATH_MAX];
+	char profile_path[PATH_MAX];
 
 	if (critical_section()) {
 		log_error(INTERNAL_ERROR "Trying to load profile %s "
@@ -2585,7 +2691,7 @@ uint64_t get_default_allocation_cache_pool_max_chunks_CFG(struct cmd_context *cm
 	 *       newer targets may scale better.
 	 */
 	uint64_t default_max_chunks = DEFAULT_CACHE_POOL_MAX_CHUNKS;
-	uint64_t max_chunks = find_config_tree_int(cmd, allocation_cache_pool_max_chunks_CFG, profile);
+	uint64_t max_chunks = find_config_tree_int64(cmd, allocation_cache_pool_max_chunks_CFG, profile);
 
 	if (!max_chunks)
 		max_chunks = default_max_chunks;

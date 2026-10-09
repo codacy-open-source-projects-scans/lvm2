@@ -20,8 +20,8 @@
 
 #define DM_DEFAULT_NAME_MANGLING_MODE_ENV_VAR_NAME "DM_DEFAULT_NAME_MANGLING_MODE"
 
-#define DEV_NAME(dmt) (dmt->mangled_dev_name ? : dmt->dev_name)
-#define DEV_UUID(dmt) (dmt->mangled_uuid ? : dmt->uuid)
+#define DEV_NAME(dmt) ((dmt)->mangled_dev_name ? : (dmt)->dev_name)
+#define DEV_UUID(dmt) ((dmt)->mangled_uuid ? : (dmt)->uuid)
 
 int mangle_string(const char *str, const char *str_name, size_t len,
 		  char *buf, size_t buf_len, dm_string_mangling_t mode);
@@ -47,6 +47,7 @@ int set_dev_node_read_ahead(const char *dev_name, uint32_t major, uint32_t minor
 			    uint32_t read_ahead, uint32_t read_ahead_flags);
 void update_devs(void);
 void selinux_release(void);
+void dm_thread_state_exit(void);
 
 void inc_suspended(void);
 void dec_suspended(void);

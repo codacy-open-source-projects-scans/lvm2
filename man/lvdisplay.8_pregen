@@ -643,7 +643,7 @@ messages sent to the log file and/or syslog (if configured).
 .O_devices
 Restricts the devices that are visible and accessible to the command.
 Devices not listed will appear to be missing. This option can be
-repeated, or accepts a comma separated list of devices. This overrides
+repeated, or accepts a comma-separated list of devices. This overrides
 the devices file.
 .
 .TP
@@ -679,7 +679,7 @@ Display help text.
 .O_history
 Include historical LVs in the output.
 (This has no effect unless LVs were removed while
-\fBlvm.conf\fP(5) \fBmetadata/record_lvs_history\fP was enabled.
+\fBlvm.conf\fP(5) \fBmetadata/record_lvs_history\fP was enabled.)
 .
 .TP
 .O_ignorelockingfailure
@@ -784,7 +784,7 @@ the report/output_format setting in \fBlvm.conf\fP(5).
 If there is more than one report per command, each report is prefixed
 with the report name for identification. \fBjson\fP produces report
 output in JSON format. \fBjson_std\fP produces report output in
-JSON format which is more compliant with JSON standard.
+JSON format which is more compliant with the JSON standard.
 See \fBlvmreport\fP(7) for more information.
 .
 .TP

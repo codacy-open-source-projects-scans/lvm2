@@ -286,6 +286,7 @@ static int _clear_hints(struct cmd_context *cmd)
 {
 	FILE *fp;
 	time_t t;
+	int r = 1;
 
 	if (!(fp = fopen(_hints_file, "w"))) {
 		log_debug("clear_hints open errno %d", errno);
@@ -298,13 +299,17 @@ static int _clear_hints(struct cmd_context *cmd)
 
 	fprintf(fp, "# Created empty by %s pid %d %s", cmd->name, getpid(), ctime(&t));
 
-	if (fflush(fp))
+	if (fflush(fp)) {
 		log_debug("clear_hints flush errno %d %s", errno, _hints_file);
+		r = 0;
+	}
 
-	if (fclose(fp))
+	if (fclose(fp)) {
 		log_debug("clear_hints close errno %d %s", errno, _hints_file);
+		r = 0;
+	}
 
-	return 1;
+	return r;
 }
 
 static int _lock_hints(struct cmd_context *cmd, int mode, int nonblock)
@@ -510,13 +515,13 @@ int validate_hints(struct cmd_context *cmd, struct dm_list *hints)
 		if (!hint->chosen)
 			continue;
 
-		/* 
+		/*
 		 * label_scan was unable to read the dev so we don't know its pvid.
 		 * Since we are unable to verify the hint is correct, it's possible
 		 * that the PVID is actually found on a different device, so don't
 		 * depend on hints. (This would also fail the following pvid check.)
 		 */
-		if (dev->flags & DEV_SCAN_NOT_READ) {
+		if (dev_scan_io_failed(dev)) {
 			log_debug("Uncertain hint for unread device %u:%u %s.",
 				  major(hint->devt), minor(hint->devt), dev_name(dev));
 			ret = 0;
@@ -738,7 +743,7 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 		keylen = sizeof("hints_version:") - 1;
 		if (!strncmp(_hint_line, "hints_version:", keylen)) {
 			if (sscanf(_hint_line + keylen, "%d.%d", &hv_major, &hv_minor) != 2) {
-				log_debug("ignore hints with unknown version %d.%d", hv_major, hv_minor);
+				log_debug("ignore hints with unknown version \"%s\".", _hint_line + keylen);
 				*needs_refresh = 1;
 				break;
 			}
@@ -795,7 +800,7 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 			const char *df_hint = _hint_line + keylen;
 			const char *df_config = find_config_tree_str(cmd, devices_devicesfile_CFG, NULL);
 			/* when a devices file is not used, hints should have devices_file:. */
-			if (!cmd->enable_devices_file || !df_hint || !df_config) {
+			if (!cmd->enable_devices_file || !df_config) {
 				if (df_hint[0] != '.') {
 					log_debug("ignore hints with different devices_file: not enabled vs %s", df_hint);
 					*needs_refresh = 1;
@@ -855,7 +860,7 @@ static int _read_hint_file(struct cmd_context *cmd, struct dm_list *hints, int *
 		}
 		memcpy(alloc_hint, &hint, sizeof(hint));
 
-		log_debug("add hint %s %s %d:%d %s", hint.name, hint.pvid, major, minor, vgname);
+		log_debug("add hint %s %s %d:%d %s", hint.name, hint.pvid, major, minor, vgname ?: "-");
 		dm_list_add(hints, &alloc_hint->list);
 		found++;
 	}
@@ -1027,7 +1032,7 @@ int write_hint_file(struct cmd_context *cmd, int newhints)
 	fprintf(fp, "filter:%s\n", filter_str ?: "-");
 	free(filter_str);
 
-	fprintf(fp, "scan_lvs:%d\n", cmd->scan_lvs);
+	fprintf(fp, "scan_lvs:%u\n", (unsigned)cmd->scan_lvs);
 
 	/*
 	 * Only associate hints with the default/system devices file.
@@ -1042,7 +1047,7 @@ int write_hint_file(struct cmd_context *cmd, int newhints)
 	else
 		fprintf(fp, "devices_file:.\n");
 
-	/* 
+	/*
 	 * iterate through all devs and write a line for each
 	 * dev flagged DEV_SCAN_FOUND_LABEL
 	 */
@@ -1115,8 +1120,10 @@ int write_hint_file(struct cmd_context *cmd, int newhints)
 	dev_iter_destroy(iter);
 
  out_flush:
-	if (fflush(fp))
-		stack;
+	if (fflush(fp)) {
+		log_sys_debug("fflush", _hints_file);
+		ret = 0;
+	}
 
 	log_debug("Wrote hint file with devs_hash %u count %u", hash, count);
 
@@ -1128,8 +1135,10 @@ int write_hint_file(struct cmd_context *cmd, int newhints)
 		_unlink_newhints();
 
  out_close:
-	if (fclose(fp))
+	if (fclose(fp)) {
 		log_debug("write_hint_file close errno %d", errno);
+		ret = 0;
+	}
 
  out_unlock:
 	/* get_hints() took ex lock before returning with newhints set */
@@ -1271,12 +1280,8 @@ void get_single_vgname_cmd_arg(struct cmd_context *cmd,
 			       struct dm_list *hints, char **vgname)
 {
 	struct hint *hint;
-	char namebuf[NAME_LEN];
 	char *name = NULL;
-	char *arg, *st, *p;
-	int i = 0;
-	
-	memset(namebuf, 0, sizeof(namebuf));
+	char *arg, *st;
 
 	if (cmd->position_argc != 1)
 		return;
@@ -1310,10 +1315,7 @@ void get_single_vgname_cmd_arg(struct cmd_context *cmd,
 	}
 
 	/* take vgname from vgname/lvname */
-	for (p = arg; p < st; p++)
-		namebuf[i++] = *p;
-
-	if (!(name = strdup(namebuf)))
+	if (!(name = strndup(arg, min((int)(st - arg), NAME_LEN - 1))))
 		return;
 
 check:
@@ -1467,7 +1469,7 @@ int get_hints(struct cmd_context *cmd, struct dm_list *hints_out, int *newhints,
 		*newhints = NEWHINTS_REFRESH;
 		return 0;
 	}
-	
+
 	/*
 	 * A command that changes global state clears the content
 	 * of the hints file so it will be recreated, and we must

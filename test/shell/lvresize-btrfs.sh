@@ -21,6 +21,17 @@ which mkfs.btrfs || skip
 which btrfs	 || skip
 grep btrfs /proc/filesystems || skip
 
+# Detect stale multi-device btrfs registrations leaked in kernel (not freed on umount)
+# These cause spurious "cannot read chunk root" / "device missing" from btrfsck
+stale_btrfs_count=0
+for fsid in $(ls /sys/fs/btrfs/ 2>/dev/null | grep -E '^[0-9a-f-]{36}$' || true); do
+	findmnt -t btrfs -n -o UUID | grep -q "$fsid" && continue
+	nd=$(cat "/sys/fs/btrfs/$fsid/num_devices" 2>/dev/null)
+	test "${nd:-0}" -gt 1 && stale_btrfs_count=$((stale_btrfs_count + 1))
+done
+test "$stale_btrfs_count" -eq 0 ||
+	skip "Found $stale_btrfs_count stale multi-device btrfs registration(s) in kernel (reboot to clear)"
+
 dev_vg_lv1="$DM_DEV_DIR/$vg/$lv1"
 dev_vg_lv2="$DM_DEV_DIR/$vg/$lv2"
 dev_vg_lv3="$DM_DEV_DIR/$vg/$lv3"
@@ -56,7 +67,7 @@ btrfs_path_major_minor()
 {
 	local STAT
 
-	STAT=$(stat --format "echo \$((0x%t)):\$((0x%T))" "$(readlink -e "$1")") || \
+	STAT=$(stat --format "echo \$((0x%t)):\$((0x%T))" "$(readlink -e "$1")") ||
 		die "Cannot get major:minor for \"$1\"."
 	eval "$STAT"
 }
@@ -70,7 +81,9 @@ btrfs_devid() {
 
 	# It could be a multi-devices btrfs, filter the output.
 	# Device in `btrfs filesystem show $devpath` could be /dev/mapper/* so call `readlink -e`
-	for devinfo in $(LC_ALL=C btrfs filesystem show "$devpath"); do
+	local btrfs_info
+	btrfs_info=( $(LC_ALL=C btrfs filesystem show "$devpath") )
+	for devinfo in "${btrfs_info[@]}"; do
 		case "$devinfo" in
 		*devid*)
 			path_major_minor=$(btrfs_path_major_minor "${devinfo#* path }")
@@ -96,7 +109,7 @@ btrfs_device_size() {
 	local dev=$1 mnt=$2
 	local devid
 
-	devid=$(btrfs_devid $dev)
+	devid=$(btrfs_devid "$dev")
 	btrfs device usage -b "$mnt" | grep -A1 "ID: $devid"$ | grep 'Device size:' \
 		| awk '{print $NF}'
 }

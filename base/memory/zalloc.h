@@ -1,5 +1,5 @@
 // Copyright (C) 2018 Red Hat, Inc. All rights reserved.
-// 
+//
 // This file is part of LVM2.
 //
 // This copyrighted material is made available to anyone wishing to use,
@@ -17,7 +17,8 @@
 
 //----------------------------------------------------------------
 
-static inline void *zalloc(size_t len)
+static inline __attribute__((__malloc__, __warn_unused_result__))
+	void *zalloc(size_t len)
 {
 	return calloc(1, len);
 }

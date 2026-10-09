@@ -167,10 +167,9 @@ struct load_segment {
 	struct dm_tree_node *merge;	/* Snapshot */
 
 	struct dm_tree_node *log;	/* Mirror */
-	unsigned clustered;		/* Mirror */
 	unsigned mirror_area_count;	/* Mirror */
 	uint64_t flags;			/* Mirror + Raid + Cache */
-	char *uuid;			/* Clustered mirror log */
+	char *uuid;			/* Mirror log */
 
 	const char *policy_name;	/* Cache */
 	unsigned policy_argc;		/* Cache */
@@ -282,6 +281,18 @@ struct load_properties {
 	 * causing lvm and the kernel to have differing params.
 	 */
 	unsigned skip_reload_params_compare;
+
+	/*
+	 * Force table reload even if the table is identical.
+	 * Set when a child device table has been loaded,
+	 * because the kernel recalculates device limits only
+	 * during DM_TABLE_LOAD, not during suspend/resume.
+	 */
+	unsigned force_reload;
+
+	/* Node is being replaced with a stub (error/zero) for teardown.
+	 * Its table load should not propagate force_reload to parents. */
+	unsigned suppress_parent_reload;
 
 	/*
 	 * Call node_send_messages(), set to 2 if there are messages
@@ -624,7 +635,7 @@ static struct dm_tree_node *_find_dm_tree_node_by_uuid(struct dm_tree *dtree,
 			break;
 		};
 	}
-	
+
 	default_uuid_prefix = dm_uuid_prefix();
 	default_uuid_prefix_len = strlen(default_uuid_prefix);
 
@@ -1798,7 +1809,7 @@ static int _dm_tree_deactivate_children(struct dm_tree_node *dnode,
 {
 	int r = 1;
 	void *handle = NULL;
-	struct dm_tree_node *child = dnode;
+	struct dm_tree_node *child;
 	struct dm_info info;
 	const struct dm_info *dinfo;
 	const char *name;
@@ -1919,7 +1930,7 @@ int dm_tree_suspend_children(struct dm_tree_node *dnode,
 {
 	int r = 1;
 	void *handle = NULL;
-	struct dm_tree_node *child = dnode;
+	struct dm_tree_node *child;
 	struct dm_info info, newinfo;
 	const struct dm_info *dinfo;
 	const char *name;
@@ -2130,7 +2141,7 @@ int dm_tree_activate_children(struct dm_tree_node *dnode,
 	int r = 1;
 	int resolvable_name_conflict, awaiting_peer_rename = 0;
 	void *handle = NULL;
-	struct dm_tree_node *child = dnode;
+	struct dm_tree_node *child;
 	const char *name;
 	const char *uuid;
 	int priority, next_priority;
@@ -2377,7 +2388,6 @@ static int _mirror_emit_segment_line(struct dm_task *dmt, struct load_segment *s
 {
 	int block_on_error = 0;
 	int handle_errors = 0;
-	int dm_log_userspace = 0;
 	unsigned log_parm_count;
 	int pos = 0;
 	char logbuf[DM_FORMAT_DEV_BUFSIZE];
@@ -2404,23 +2414,6 @@ static int _mirror_emit_segment_line(struct dm_task *dmt, struct load_segment *s
 			block_on_error = 1;
 	}
 
-	if (seg->clustered) {
-		/* Cluster mirrors require a UUID */
-		if (!seg->uuid)
-			return_0;
-
-		/*
-		 * Cluster mirrors used to have their own log
-		 * types.  Now they are accessed through the
-		 * userspace log type.
-		 *
-		 * The dm-log-userspace module was added to the
-		 * 2.6.31 kernel.
-		 */
-		if (KERNEL_VERSION(kmaj, kmin, krel) >= KERNEL_VERSION(2, 6, 31))
-			dm_log_userspace = 1;
-	}
-
 	/* Region size */
 	log_parm_count = 1;
 
@@ -2435,16 +2428,6 @@ static int _mirror_emit_segment_line(struct dm_task *dmt, struct load_segment *s
 	if (seg->flags & DM_CORELOG)
 		log_parm_count--;
 
-	if (seg->clustered) {
-		log_parm_count++; /* For UUID */
-
-		if (!dm_log_userspace)
-			EMIT_PARAMS(pos, "clustered-");
-		else
-			/* For clustered-* type field inserted later */
-			log_parm_count++;
-	}
-
 	if (!seg->log)
 		logtype = "core";
 	else {
@@ -2454,19 +2437,12 @@ static int _mirror_emit_segment_line(struct dm_task *dmt, struct load_segment *s
 			return_0;
 	}
 
-	if (dm_log_userspace)
-		EMIT_PARAMS(pos, "userspace %u %s clustered-%s",
-			    log_parm_count, seg->uuid, logtype);
-	else
-		EMIT_PARAMS(pos, "%s %u", logtype, log_parm_count);
+	EMIT_PARAMS(pos, "%s %u", logtype, log_parm_count);
 
 	if (seg->log)
 		EMIT_PARAMS(pos, " %s", logbuf);
 
 	EMIT_PARAMS(pos, " %u", seg->region_size);
-
-	if (seg->clustered && !dm_log_userspace)
-		EMIT_PARAMS(pos, " %s", seg->uuid);
 
 	if ((seg->flags & DM_NOSYNC))
 		EMIT_PARAMS(pos, " nosync");
@@ -3026,6 +3002,27 @@ static int _vdo_emit_segment_line(struct dm_task *dmt, uint32_t major, uint32_t 
 		    seg->vdo_params.logical_threads,
 		    seg->vdo_params.physical_threads);
 
+	/* Add format parameters for kernel direct formatting */
+	if (seg->vdo_params.use_kernel_format) {
+		/* Convert slab size from MB to 4KiB blocks */
+		EMIT_PARAMS(pos, " slabSize " FMTu64,
+			    seg->vdo_params.slab_size_mb * UINT64_C(256)); // 1MiB -> 256 * 4KiB blocks
+
+		/* Index memory size: round up to GiB if > 768MB, otherwise as fraction */
+		if (seg->vdo_params.index_memory_size_mb > 768)
+			EMIT_PARAMS(pos, " indexMemory %u",
+				    (seg->vdo_params.index_memory_size_mb + 1023) / 1024);
+		else if (seg->vdo_params.index_memory_size_mb > 512)
+			EMIT_PARAMS(pos, " indexMemory 0.75");
+		else if (seg->vdo_params.index_memory_size_mb > 256)
+			EMIT_PARAMS(pos, " indexMemory 0.50");
+		else
+			EMIT_PARAMS(pos, " indexMemory 0.25");
+
+		/* Sparse index setting */
+		EMIT_PARAMS(pos, " indexSparse %s", seg->vdo_params.use_sparse_index ? "on" : "off");
+	}
+
 	return 1;
 }
 
@@ -3258,6 +3255,7 @@ static int _emit_segment(struct dm_task *dmt, uint32_t major, uint32_t minor,
 static int _load_node(struct dm_tree_node *dnode)
 {
 	int r = 0;
+	unsigned kmaj = 0, kmin = 0, krel = 0;
 	struct dm_task *dmt;
 	struct load_segment *seg;
 	uint64_t seg_start = 0, existing_table_size;
@@ -3288,11 +3286,14 @@ static int _load_node(struct dm_tree_node *dnode)
 				   seg, &seg_start))
 			goto_out;
 
-	if (!dm_task_suppress_identical_reload(dmt))
-		log_warn("WARNING: Failed to suppress reload of identical tables.");
-
-	if (dnode->props.skip_reload_params_compare)
-		dmt->skip_reload_params_compare = 1;
+	if (!dnode->props.force_reload) {
+		if (!dm_task_suppress_identical_reload(dmt))
+			log_warn("WARNING: Failed to suppress reload of identical tables.");
+		if (dnode->props.skip_reload_params_compare)
+			dmt->skip_reload_params_compare = 1;
+	} else
+		log_debug_activation("Forcing %s table reload to update device limits.",
+				     _node_name(dnode));
 
 	if ((r = dm_task_run(dmt))) {
 		r = dm_task_get_info(dmt, &dnode->info);
@@ -3329,6 +3330,14 @@ static int _load_node(struct dm_tree_node *dnode)
 				dnode->props.size_changed = 0;
 			}
 		}
+	} else if (dnode->props.force_reload &&
+		   get_uname_version(&kmaj, &kmin, &krel) && kmaj < 3) {
+		/* Pre-3.x kernels lack snapshot COW handover (c1f0c183f6ac,
+		 * v2.6.33) so reload calls read_metadata and fails */
+		log_debug_activation("Forced reload of %s identical table failed, continuing.",
+				     _node_name(dnode));
+		dnode->props.force_reload = 0;
+		r = 1;
 	}
 
 	dnode->props.segment_count = 0;
@@ -3386,6 +3395,7 @@ int dm_tree_preload_children(struct dm_tree_node *dnode,
 	void *handle = NULL;
 	struct dm_tree_node *child;
 	int update_devs_flag = 0;
+	int had_inactive_table;
 
 	/* Preload children first */
 	while ((child = dm_tree_next_child(&handle, dnode, 0))) {
@@ -3431,6 +3441,9 @@ int dm_tree_preload_children(struct dm_tree_node *dnode,
 		if (child->props.delay_resume_if_extended)
 			dnode->props.delay_resume_if_extended = 1;
 
+		/* Remember if child already had an inactive table before _load_node */
+		had_inactive_table = child->info.inactive_table;
+
 		if (!child->info.inactive_table &&
 		    child->props.segment_count &&
 		    !_load_node(child)) {
@@ -3443,6 +3456,23 @@ int dm_tree_preload_children(struct dm_tree_node *dnode,
 				stack;
 			r = 0;
 			continue;
+		}
+
+		/*
+		 * Propagate force_reload only when _load_node() just set
+		 * inactive_table in THIS traversal.
+		 * A stale inactive_table (e.g. delay_resume_if_new device
+		 * loaded in the PRELOAD tree but seen again in the ACTIVATE
+		 * tree) must not trigger a parent reload - that reload was
+		 * already done during PRELOAD.
+		 */
+		if (child->info.inactive_table && !had_inactive_table &&
+		    !child->props.suppress_parent_reload) {
+			dnode->props.force_reload = 1;
+			if (child->props.delay_resume_if_new)
+				dnode->props.delay_resume_if_new = 1;
+			log_debug_activation("Child %s table loaded, forcing reload of parent.",
+					     _node_name(child));
 		}
 
 		/* No resume for a device without parents or with unchanged or smaller size */
@@ -3513,7 +3543,7 @@ int dm_tree_children_use_uuid(struct dm_tree_node *dnode,
 				 size_t uuid_prefix_len)
 {
 	void *handle = NULL;
-	struct dm_tree_node *child = dnode;
+	struct dm_tree_node *child;
 	const char *uuid;
 
 	while ((child = dm_tree_next_child(&handle, dnode, 0))) {
@@ -3582,7 +3612,7 @@ int dm_tree_node_add_snapshot_origin_target(struct dm_tree_node *dnode,
 		dnode->props.reactivate_siblings = 1;
 
 	/*
-	 * Don't resume the origin immediately in case it is a non-trivial 
+	 * Don't resume the origin immediately in case it is a non-trivial
 	 * target that must not be active more than once concurrently!
 	 */
 	origin_node->props.delay_resume_if_new = 1;
@@ -3691,6 +3721,8 @@ int dm_tree_node_add_error_target(struct dm_tree_node *node,
 	if (!_add_segment(node, SEG_ERROR, size))
 		return_0;
 
+	node->props.suppress_parent_reload = 1;
+
 	return 1;
 }
 
@@ -3699,6 +3731,8 @@ int dm_tree_node_add_zero_target(struct dm_tree_node *node,
 {
 	if (!_add_segment(node, SEG_ZERO, size))
 		return_0;
+
+	node->props.suppress_parent_reload = 1;
 
 	return 1;
 }
@@ -3750,7 +3784,6 @@ int dm_tree_node_add_crypt_target(struct dm_tree_node *node,
 
 int dm_tree_node_add_mirror_target_log(struct dm_tree_node *node,
 				       uint32_t region_size,
-				       unsigned clustered,
 				       const char *log_uuid,
 				       unsigned area_count,
 				       uint32_t flags)
@@ -3776,9 +3809,6 @@ int dm_tree_node_add_mirror_target_log(struct dm_tree_node *node,
 				return 0;
 			}
 
-			if (clustered)
-				log_node->props.immediate_dev_node = 1;
-
 			/* The kernel validates the size of disk logs. */
 			/* FIXME Propagate to any devices below */
 			log_node->props.delay_resume_if_new = 0;
@@ -3790,7 +3820,6 @@ int dm_tree_node_add_mirror_target_log(struct dm_tree_node *node,
 
 	seg->log = log_node;
 	seg->region_size = region_size;
-	seg->clustered = clustered;
 	seg->mirror_area_count = area_count;
 	seg->flags = flags;
 
@@ -4152,8 +4181,6 @@ int dm_tree_node_add_integrity_target(struct dm_tree_node *node,
 
 	seg->integrity_settings = *settings;
 	seg->integrity_recalculate = recalculate;
-
-	node->props.skip_reload_params_compare = 1;
 
 	return 1;
 }
@@ -4583,19 +4610,20 @@ int dm_tree_node_add_null_area(struct dm_tree_node *node, uint64_t offset)
 }
 
 void dm_tree_node_set_callback(struct dm_tree_node *dnode,
-			       dm_node_callback_fn cb, void *data)
+			       dm_node_callback_fn cb, void *cb_data)
 {
 	dnode->callback = cb;
-	dnode->callback_data = data;
+	dnode->callback_data = cb_data;
 }
 
-int dm_tree_node_add_vdo_target(struct dm_tree_node *node,
-				uint64_t size,
-				uint32_t vdo_version,
-				const char *vdo_pool_name,
-				const char *data_uuid,
-				uint64_t data_size,
-				const struct dm_vdo_target_params *vtp)
+DM_EXPORT_NEW_SYMBOL(int, dm_tree_node_add_vdo_target, 1_02_216)
+	(struct dm_tree_node *node,
+	 uint64_t size,
+	 uint32_t vdo_version,
+	 const char *vdo_pool_name,
+	 const char *data_uuid,
+	 uint64_t data_size,
+	 const struct dm_vdo_target_params *vtp)
 {
 	struct load_segment *seg;
 
@@ -4678,5 +4706,43 @@ int dm_tree_node_add_cache_target_base(struct dm_tree_node *node,
 	return dm_tree_node_add_cache_target(node, size, feature_flags & mask,
 					     metadata_uuid, data_uuid, origin_uuid,
 					     policy_name, policy_settings, data_block_size);
+}
+
+/*
+ * Retain ABI compatibility after adding use_kernel_format field
+ * to dm_vdo_target_params in version 1.02.216.
+ *
+ * Old binaries compiled against 1.02.213 have struct dm_vdo_target_params
+ * without the use_kernel_format field at the end. The wrapper copies only
+ * the old fields and leaves use_kernel_format=0 (old apps use userspace
+ * vdoformat).
+ *
+ * dm_vdo_validate_target_params does not need versioning as it never
+ * accesses the use_kernel_format field.
+ */
+
+DM_EXPORT_SYMBOL(dm_tree_node_add_vdo_target, 1_02_213)
+int dm_tree_node_add_vdo_target_v1_02_213(struct dm_tree_node *node,
+					  uint64_t size,
+					  uint32_t vdo_version,
+					  const char *vdo_pool_name,
+					  const char *data_uuid,
+					  uint64_t data_size,
+					  const struct dm_vdo_target_params *vtp);
+int dm_tree_node_add_vdo_target_v1_02_213(struct dm_tree_node *node,
+					  uint64_t size,
+					  uint32_t vdo_version,
+					  const char *vdo_pool_name,
+					  const char *data_uuid,
+					  uint64_t data_size,
+					  const struct dm_vdo_target_params *vtp)
+{
+	struct dm_vdo_target_params vtp_compat = { 0 };
+
+	/* Old callers pass struct without use_kernel_format at the end */
+	memcpy(&vtp_compat, vtp, offsetof(struct dm_vdo_target_params, use_kernel_format));
+
+	return dm_tree_node_add_vdo_target(node, size, vdo_version, vdo_pool_name,
+					   data_uuid, data_size, &vtp_compat);
 }
 #endif

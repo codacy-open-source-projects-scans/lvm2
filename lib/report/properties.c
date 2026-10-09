@@ -36,6 +36,9 @@
 #define SET_LV_NUM_PROPERTY_FN(NAME, SETFN) \
 	SET_NUM_PROPERTY_FN(NAME, SETFN, logical_volume, lv)
 
+#define GET_LV_SNUM_PROPERTY_FN(NAME, VALUE) \
+	GET_SNUM_PROPERTY_FN(NAME, VALUE, logical_volume, lv)
+
 #define GET_VG_STR_PROPERTY_FN(NAME, VALUE) \
 	GET_STR_PROPERTY_FN(NAME, VALUE, volume_group, vg)
 #define GET_PV_STR_PROPERTY_FN(NAME, VALUE) \
@@ -71,23 +74,29 @@ static char *_raidsyncaction(const struct logical_volume *lv)
 	char *action;
 
 	if (!lv_raid_sync_action(lv, &action))
-		return 0;
+		return NULL;
 
 	return action;
 }
 
 static uint32_t _raidwritebehind(const struct logical_volume *lv)
 {
+	if (!lv_is_raid(lv))
+		return 0;
 	return first_seg(lv)->writebehind;
 }
 
 static uint32_t _raidminrecoveryrate(const struct logical_volume *lv)
 {
+	if (!lv_is_raid(lv))
+		return 0;
 	return first_seg(lv)->min_recovery_rate;
 }
 
 static uint32_t _raidmaxrecoveryrate(const struct logical_volume *lv)
 {
+	if (!lv_is_raid(lv))
+		return 0;
 	return first_seg(lv)->max_recovery_rate;
 }
 
@@ -95,7 +104,7 @@ static const char *_raidintegritymode(const struct logical_volume *lv)
 {
 	struct dm_integrity_settings *settings = NULL;
 
-	if (lv_raid_has_integrity((struct logical_volume *)lv))
+	if (lv_raid_has_integrity(lv))
 		lv_get_raid_integrity_settings((struct logical_volume *)lv, &settings);
 	else if (lv_is_integrity(lv))
 		settings = &first_seg(lv)->integrity_settings;
@@ -114,7 +123,7 @@ static uint32_t _raidintegrityblocksize(const struct logical_volume *lv)
 {
 	struct dm_integrity_settings *settings = NULL;
 
-	if (lv_raid_has_integrity((struct logical_volume *)lv))
+	if (lv_raid_has_integrity(lv))
 		lv_get_raid_integrity_settings((struct logical_volume *)lv, &settings);
 	else if (lv_is_integrity(lv))
 		settings = &first_seg(lv)->integrity_settings;
@@ -423,17 +432,17 @@ GET_LV_STR_PROPERTY_FN(lv_parent, lv_parent_dup(lv->vg->vgmem, lv))
 #define _lv_parent_set prop_not_implemented_set
 GET_LV_STR_PROPERTY_FN(lv_attr, lv_attr_dup(lv->vg->vgmem, lv))
 #define _lv_attr_set prop_not_implemented_set
-GET_LV_NUM_PROPERTY_FN(lv_major, lv->major)
+GET_LV_SNUM_PROPERTY_FN(lv_major, lv->major)
 #define _lv_major_set prop_not_implemented_set
-GET_LV_NUM_PROPERTY_FN(lv_minor, lv->minor)
+GET_LV_SNUM_PROPERTY_FN(lv_minor, lv->minor)
 #define _lv_when_full_get prop_not_implemented_get
 #define _lv_when_full_set prop_not_implemented_set
 #define _lv_minor_set prop_not_implemented_set
 GET_LV_NUM_PROPERTY_FN(lv_read_ahead, lv->read_ahead * SECTOR_SIZE)
 #define _lv_read_ahead_set prop_not_implemented_set
-GET_LV_NUM_PROPERTY_FN(lv_kernel_major, lv_kernel_major(lv))
+GET_LV_SNUM_PROPERTY_FN(lv_kernel_major, lv_kernel_major(lv))
 #define _lv_kernel_major_set prop_not_implemented_set
-GET_LV_NUM_PROPERTY_FN(lv_kernel_minor, lv_kernel_minor(lv))
+GET_LV_SNUM_PROPERTY_FN(lv_kernel_minor, lv_kernel_minor(lv))
 #define _lv_kernel_minor_set prop_not_implemented_set
 GET_LV_NUM_PROPERTY_FN(lv_kernel_read_ahead, lv_kernel_read_ahead(lv) * SECTOR_SIZE)
 #define _lv_kernel_read_ahead_set prop_not_implemented_set

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2003-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2003-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,16 +13,18 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_CMDLIB_H
-#define _LVM_CMDLIB_H
+#ifndef LVM2CMD_H
+#define LVM2CMD_H
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#ifndef _LVM_LOG_H
+#ifndef LVM2_LOG_FN_T_DEFINED
+#define LVM2_LOG_FN_T_DEFINED
+
 typedef void (*lvm2_log_fn_t) (int level, const char *file, int line,
-                               int dm_errno, const char *message);
+                               int dm_errno_or_class, const char *message);
 
 #endif
 
@@ -32,7 +34,7 @@ typedef void (*lvm2_log_fn_t) (int level, const char *file, int line,
 #define LVM2_LOG_FATAL		2
 #define LVM2_LOG_ERROR		3
 #define LVM2_LOG_PRINT		4
-#define LVM2_LOG_VERBOSE 	5
+#define LVM2_LOG_VERBOSE	5
 #define LVM2_LOG_VERY_VERBOSE	6
 #define LVM2_LOG_DEBUG		7
 
@@ -55,7 +57,7 @@ void lvm2_log_fn(lvm2_log_fn_t log_fn);
 /*
  * Initialise library.
  * Returns a handle so repeated use of lvm2_run is more efficient.
- */ 
+ */
 void *lvm2_init(void);
 
 /*
@@ -71,14 +73,14 @@ void *lvm2_init_threaded(void);
 void lvm2_disable_dmeventd_monitoring(void *handle);
 
 /*
- * Set log level (as above) if using built-in logging function. 
+ * Set log level (as above) if using built-in logging function.
  * Default is LVM2_LOG_PRINT.  Use LVM2_LOG_SUPPRESS to suppress output.
  */
 void lvm2_log_level(void *handle, int level);
 
 /*
- * Run an LVM2 command. 
- * Use NULL handle if the call is a one-off and you don't want to bother 
+ * Run an LVM2 command.
+ * Use NULL handle if the call is a one-off and you don't want to bother
  * calling lvm2_init/lvm2_exit.
  */
 int lvm2_run(void *handle, const char *cmdline);

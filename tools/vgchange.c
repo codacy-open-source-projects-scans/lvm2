@@ -23,6 +23,7 @@ struct vgchange_params {
 	unsigned int lock_start_sanlock : 1;
 	unsigned int vg_complete_to_activate : 1;
 	char *root_dm_uuid; /* dm uuid of LV under root fs */
+	struct dm_list lock_start_vgs;
 };
 
 /*
@@ -273,6 +274,31 @@ int vgchange_activate(struct cmd_context *cmd, struct volume_group *vg,
 		}
 	}
 
+	if (!do_activate) {
+		dm_list_iterate_items(lvl, &vg->lvs) {
+			if (!lv_is_pvmove(lvl->lv) || !lv_is_active(lvl->lv))
+				continue;
+			if (arg_count(cmd, force_ARG) == PROMPT) {
+				log_error("pvmove in progress on %s, "
+					  "use -f to interrupt or "
+					  "'pvmove --abort' to cancel.",
+					  display_lvname(lvl->lv));
+				return 0;
+			}
+			if (arg_count(cmd, force_ARG) < DONT_PROMPT_OVERRIDE &&
+			    !arg_is_set(cmd, yes_ARG) &&
+			    yes_no_prompt("Interrupt pvmove on %s? "
+					  "Resume with 'pvmove <PV>'. [y/n]: ",
+					  display_lvname(lvl->lv)) == 'n') {
+				log_error("Aborted.");
+				return 0;
+			}
+			log_warn("WARNING: Interrupting pvmove on %s, "
+				 "resume with 'pvmove <PV>'.",
+				 display_lvname(lvl->lv));
+		}
+	}
+
 	/* FIXME Move into library where clvmd can use it */
 	if (do_activate)
 		check_current_backup(vg);
@@ -295,6 +321,30 @@ int vgchange_activate(struct cmd_context *cmd, struct volume_group *vg,
 	if (!_activate_lvs_in_vg(cmd, vg, activate)) {
 		stack;
 		r = 0;
+	}
+
+	/*
+	 * Deactivate pvmove LVs after all visible LVs are down.
+	 * The pvmove LV is invisible so _activate_lvs_in_vg skips it,
+	 * but its DM device must be removed to fully deactivate the VG.
+	 * Metadata is left unchanged so pvmove can resume on next activation.
+	 *
+	 * The cluster lock on the pvmove LV is intentionally retained
+	 * so that lv_active_change() can query it on re-activation to
+	 * determine whether pvmove should resume on this node.
+	 */
+	if (!do_activate) {
+		dm_list_iterate_items(lvl, &vg->lvs) {
+			if (!lv_is_pvmove(lvl->lv) || !lv_is_active(lvl->lv))
+				continue;
+			log_verbose("Deactivating pvmove LV %s.",
+				    display_lvname(lvl->lv));
+			if (!deactivate_lv(cmd, lvl->lv)) {
+				log_error("Failed to deactivate pvmove LV %s.",
+					  display_lvname(lvl->lv));
+				r = 0;
+			}
+		}
 	}
 
 	if (!do_activate && pr_op && !strcmp(pr_op, "stop")) {
@@ -717,8 +767,14 @@ do_start:
 
 	r = lockd_start_vg(cmd, vg, &exists);
 
-	if (r || exists)
+	if (r && !exists) {
+		struct dm_str_list *sl;
 		vp->lock_start_count++;
+		if ((sl = dm_pool_alloc(cmd->mem, sizeof(*sl)))) {
+			sl->str = dm_pool_strdup(cmd->mem, vg->name);
+			dm_list_add(&vp->lock_start_vgs, &sl->list);
+		}
+	}
 	if (!strcmp(vg->lock_type, "sanlock"))
 		vp->lock_start_sanlock = 1;
 
@@ -1532,6 +1588,8 @@ int vgchange_lock_start_stop_cmd(struct cmd_context *cmd, int argc, char **argv)
 	struct vgchange_params vp = { 0 };
 	int ret;
 
+	dm_list_init(&vp.lock_start_vgs);
+
 	if (!lvmlockd_use()) {
 		log_error("Using lock start and lock stop requires lvmlockd.");
 		return 0;
@@ -1584,7 +1642,14 @@ int vgchange_lock_start_stop_cmd(struct cmd_context *cmd, int argc, char **argv)
 				log_print_unless_silent("Starting locking.  Waiting for sanlock may take a few seconds to 3 min...");
 			else
 				log_print_unless_silent("Starting locking.  Waiting until locks are ready...");
-			lockd_start_wait(cmd);
+			if (!lockd_start_wait(cmd)) {
+				struct dm_str_list *sl;
+				int result;
+				dm_list_iterate_items(sl, &vp.lock_start_vgs) {
+					lockd_get_start_result(cmd, sl->str, &result);
+				}
+				ret = ECMD_FAILED;
+			}
 		}
 	}
 
@@ -1735,7 +1800,7 @@ static int _vgchange_persist_single(struct cmd_context *cmd, const char *vg_name
 		    vg_is_shared(vg) &&
 		    lockd_vg_is_started(cmd, vg, NULL) &&
 		    lockd_vg_is_busy(cmd, vg) &&
-		    !vg_is_registered(cmd, vg, NULL, NULL)) {
+		    !vg_is_registered(cmd, vg, NULL, NULL, 0)) {
 			log_error("VG lockspace should be stopped on all hosts (vgchange --lockstop) before starting PR.");
 			return ECMD_FAILED;
 		}
@@ -1912,7 +1977,11 @@ static int _vgchange_setpersist_single(struct cmd_context *cmd, const char *vg_n
 
 	if (!vg_is_shared(vg) && !start_done) {
 		int yes = 0;
-		if (!persist_is_started_by_other_hosts(cmd, vg, &yes) || yes) {
+		if (!persist_is_started_by_other_hosts(cmd, vg, &yes)) {
+			log_error("Failed to check if other hosts have PR started.");
+			return ECMD_FAILED;
+		}
+		if (yes) {
 			log_error("Cannot change settings while other hosts have PR started.");
 			return ECMD_FAILED;
 		}

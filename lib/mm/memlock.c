@@ -53,6 +53,12 @@ int critical_section(void)
 {
 	return 0;
 }
+
+int prioritized_section(void)
+{
+	return 0;
+}
+
 void memlock_init(struct cmd_context *cmd)
 {
 	return;
@@ -170,7 +176,9 @@ static void _allocate_memory(void)
 #define MAX_AREAS 32
 	void *stack_mem;
 	struct rlimit limit;
-	int i, area = 0, missing = _size_malloc_tmp;
+	int i, area = 0;
+	size_t alloc_size = _size_malloc_tmp;
+	ssize_t missing = _size_malloc_tmp;
 	size_t hblks;
 	char *areas[MAX_AREAS];
 
@@ -181,8 +189,8 @@ static void _allocate_memory(void)
 			_size_stack = limit.rlim_cur;
 		if ((stack_mem = alloca(_size_stack)))
 			_touch_memory(stack_mem, _size_stack);
-	}
-	/* FIXME else warn user setting got ignored */
+	} else
+		log_warn("WARNING: Failed to get stack size limit, ignoring reserved_stack setting.");
 
 #ifdef HAVE_MALLINFO2
 	/* Prefer mallinfo2 call when available with newer glibc */
@@ -204,8 +212,8 @@ static void _allocate_memory(void)
 		struct MALLINFO inf = MALLINFO();
 		hblks = inf.hblks;
 
-		if ((areas[area] = malloc(_size_malloc_tmp)))
-			_touch_memory(areas[area], _size_malloc_tmp);
+		if ((areas[area] = malloc(alloc_size)))
+			_touch_memory(areas[area], alloc_size);
 
 		inf = MALLINFO();
 
@@ -214,16 +222,16 @@ static void _allocate_memory(void)
 			   not to; we try with twice as many areas, each half
 			   the size, to circumvent the faulty logic in glibc */
 			free(areas[area]);
-			_size_malloc_tmp /= 2;
+			alloc_size /= 2;
 		} else {
 			++ area;
-			missing -= _size_malloc_tmp;
+			missing -= alloc_size;
 		}
 
 		if (area == MAX_AREAS && missing > 0) {
 			/* Too bad. Warn the user and proceed, as things are
 			 * most likely going to work out anyway. */
-			log_warn("WARNING: Failed to reserve memory, %d bytes missing.", missing);
+			log_warn("WARNING: Failed to reserve memory, %zd bytes missing.", missing);
 			break;
 		}
 	}
@@ -335,6 +343,11 @@ static int _memlock_maps(struct cmd_context *cmd, lvmlock_t lock, size_t *mstats
 	ssize_t n;
 	int ret = 1;
 
+#ifdef ENABLE_SANITIZER
+	log_debug_mem("Skipping %slocking of memory maps (sanitizer build).",
+		      (lock == LVM_MLOCK) ? "" : "un") ;
+	return 1;
+#endif
 	if (cmd->running_on_valgrind) {
 		log_debug_mem("Skipping %slocking of memory maps (running in VALGRIND).",
 			      (lock == LVM_MLOCK) ? "" : "un") ;
@@ -707,8 +720,10 @@ void memlock_inc_daemon(struct cmd_context *cmd)
 
 void memlock_dec_daemon(struct cmd_context *cmd)
 {
-	if (!_memlock_count_daemon)
-		log_debug_mem(INTERNAL_ERROR "_memlock_count_daemon has dropped below 0.");
+	if (!_memlock_count_daemon) {
+		log_debug_mem(INTERNAL_ERROR "_memlock_count_daemon is already 0.");
+		return;
+	}
 	--_memlock_count_daemon;
 	log_debug_mem("memlock_count_daemon dec to %d", _memlock_count_daemon);
 	_unlock_mem_if_possible(cmd);
@@ -716,10 +731,14 @@ void memlock_dec_daemon(struct cmd_context *cmd)
 
 void memlock_init(struct cmd_context *cmd)
 {
+#ifdef ENABLE_SANITIZER
+	_size_stack = _size_malloc_tmp = 0;
+#else
 	/* When threaded, caller already limited stack size so just use the default. */
 	_size_stack = 1024ULL * (cmd->threaded ? DEFAULT_RESERVED_STACK :
 				 find_config_tree_int(cmd, activation_reserved_stack_CFG, NULL));
 	_size_malloc_tmp = find_config_tree_int(cmd, activation_reserved_memory_CFG, NULL) * 1024ULL;
+#endif
 	_default_priority = find_config_tree_int(cmd, activation_process_priority_CFG, NULL);
 }
 

@@ -28,6 +28,10 @@ static void _insert_area(struct dm_list *head, struct pv_area *a, unsigned reduc
 	struct pv_area *pva;
 	uint32_t count = reduced ? a->unreserved : a->count;
 
+	/* FIXME: when reduced=1, count is a->unreserved but comparison
+	 * uses pva->count (total size) - mixing two different scales.
+	 * This may break the "largest first" sort for partially-reserved
+	 * areas. Needs a test to verify intended behavior. */
 	dm_list_iterate_items(pva, head)
 		if (count > pva->count)
 			break;
@@ -66,6 +70,9 @@ static int _create_alloc_areas_for_pv(struct dm_pool *mem, struct pv_map *pvm,
 {
 	struct pv_segment *peg;
 	uint32_t pe, end, area_len;
+
+	if (!count)
+		return 1;
 
 	/* Only select extents from start to end inclusive */
 	end = start + count - 1;
@@ -135,7 +142,8 @@ static int _create_maps(struct dm_pool *mem, struct dm_list *pvs, struct dm_list
 	dm_list_iterate_items(pvl, pvs) {
 		if (!(pvl->pv->status & ALLOCATABLE_PV) ||
 		    (pvl->pv->status & PV_ALLOCATION_PROHIBITED)) {
-		    	pvl->pv->status &= ~PV_ALLOCATION_PROHIBITED;
+			/* Clear per-pass flag before skipping; next allocation attempt starts fresh. */
+			pvl->pv->status &= ~PV_ALLOCATION_PROHIBITED;
 			continue;
 		}
 		if (is_missing_pv(pvl->pv))
@@ -216,7 +224,7 @@ void reinsert_changed_pv_area(struct pv_area *pva)
 	_insert_area(&pva->map->areas, pva, 1);
 }
 
-uint32_t pv_maps_size(struct dm_list *pvms)
+uint32_t pv_maps_size(const struct dm_list *pvms)
 {
 	struct pv_map *pvm;
 	uint32_t pe_count = 0;

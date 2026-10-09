@@ -1,5 +1,5 @@
 // Copyright (C) 2018 - 2020 Red Hat, Inc. All rights reserved.
-// 
+//
 // This file is part of LVM2.
 //
 // This copyrighted material is made available to anyone wishing to use,
@@ -17,8 +17,15 @@
 
 //----------------------------------------------------------------
 
+#ifdef __GNUC__
+#define container_of(v, t, head) \
+    __extension__ ({                              \
+    __typeof__(((t *)0)->head) *_v = (v);         \
+    (t *)((char *)_v - offsetof(t, head)); })
+#else
 #define container_of(v, t, head) \
     ((t *)((char *)(v) - offsetof(t, head)))
+#endif
 
 //----------------------------------------------------------------
 

@@ -39,7 +39,7 @@ int lvconvert_mirror_finish(struct cmd_context *cmd,
 	return 1;
 }
 
-/* Swap lvid and LV names */
+/* Swap LV identifiers, names and properties */
 int swap_lv_identifiers(struct cmd_context *cmd,
 			struct logical_volume *a, struct logical_volume *b)
 {
@@ -95,7 +95,7 @@ int thin_merge_finish(struct cmd_context *cmd,
 		      struct logical_volume *lv)
 {
 	if (!swap_lv_identifiers(cmd, merge_lv, lv)) {
-		log_error("Failed to swap %s with merging %s.",
+		log_error("Failed to swap identifiers for merging %s into %s.",
 			  display_lvname(lv), display_lvname(merge_lv));
 		return 0;
 	}

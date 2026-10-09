@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_FILE_H
-#define _LVM_FILE_H
+#ifndef LVM_FILE_H
+#define LVM_FILE_H
 
 #include <stddef.h>
 #include <stdio.h>
@@ -41,9 +41,19 @@ int create_temp_name(const char *dir, char *buffer, size_t len, int *fd,
 int lvm_rename(const char *old, const char *new);
 
 /*
+ * Remove old backup files from dir matching prefix.
+ * Keep at least keep_min files.
+ * If keep_days > 0, only remove files older than keep_days.
+ */
+void backup_dir_cleanup(const char *dir, const char *prefix,
+			unsigned int keep_min, unsigned int keep_days);
+
+/*
  * Return 1 if path exists else return 0
  */
+__attribute__((nonnull(1)))
 int path_exists(const char *path);
+__attribute__((nonnull(1)))
 int dir_exists(const char *path);
 int dir_create_recursive(const char *path, int mode);
 
@@ -75,9 +85,11 @@ int lvm_fclose(FILE *fp, const char *filename);
  */
 void lvm_stat_ctim(struct timespec *ctim, const struct stat *buf);
 
-/* Inspired by <sys/time.h>  timercmp() macro for timeval */
+/* Defined on BSDs in <sys/time.h>, inspired by timercmp() for timeval */
+#ifndef timespeccmp
 #define timespeccmp(tsp, usp, cmp)\
 	(((tsp)->tv_sec == (usp)->tv_sec) ?\
 		((tsp)->tv_nsec cmp (usp)->tv_nsec) :\
 		((tsp)->tv_sec cmp (usp)->tv_sec))
+#endif
 #endif

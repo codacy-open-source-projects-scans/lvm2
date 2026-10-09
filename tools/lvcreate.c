@@ -348,7 +348,7 @@ static int _update_extents_params(struct volume_group *vg,
 			return 0;
 		}
 
-		/* For mirrors and raid with percentages based on physical extents, convert the total number of PEs 
+		/* For mirrors and raid with percentages based on physical extents, convert the total number of PEs
 		 * into the number of logical extents per image (minimum 1) */
 		/* FIXME Handle all the supported raid layouts here based on already-known segtype. */
 		if ((lcp->percent != PERCENT_ORIGIN) && lp->mirrors) {
@@ -876,7 +876,7 @@ static int _lvcreate_params(struct cmd_context *cmd,
 	if (!(lp->segtype = get_segtype_from_string(cmd, segtype_str)))
 		return_0;
 
-	if (seg_unknown(lp)) {
+	if (seg_is_unknown(lp)) {
 		log_error("Unable to create LV with unknown segment type %s.", segtype_str);
 		return 0;
 	}
@@ -1270,8 +1270,7 @@ static int _lvcreate_params(struct cmd_context *cmd,
 
 	if (lp->snapshot && (lp->extents || lcp->size)) {
 		lp->chunk_size = arg_uint_value(cmd, chunksize_ARG, 8);
-		if (lp->chunk_size < 8 || lp->chunk_size > 1024 ||
-		    !is_power_of_2(lp->chunk_size)) {
+		if (!validate_snapshot_chunk_size(lp->chunk_size)) {
 			log_error("Chunk size must be a power of 2 in the "
 				  "range 4K to 512K.");
 			return 0;
@@ -1815,6 +1814,16 @@ static int _lvcreate_single(struct cmd_context *cmd, const char *vg_name,
 
 	if (!lockd_lvcreate_prepare(cmd, vg, lp))
 		goto_out;
+
+	if (lp->create_pool && segtype_is_thin(lp->segtype)) {
+		/* No pool name yet; prompt only for explicit --chunksize. */
+		warn_thin_pool_chunk_size_not_pow2(vg->cmd, NULL, lp->chunk_size);
+		if (arg_is_set(vg->cmd, chunksize_ARG) &&
+		    !confirm_thin_pool_chunk_size_not_pow2_cmdline(vg->cmd,
+								   lp->chunk_size,
+								   "create"))
+			goto_out;
+	}
 
 	if (!(lv = lv_create_single(vg, lp)))
 		goto_out;

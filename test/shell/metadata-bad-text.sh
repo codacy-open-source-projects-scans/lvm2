@@ -253,12 +253,12 @@ aux clear_devs "$dev1" "$dev2" "$dev3"
 
 vgcreate $SHARED $vg "$dev1" "$dev2" "$dev3"
 
-PVID1=$(pvs "$dev1" --noheading -o uuid | tr -d - | awk '{print $1}')
-echo $PVID1
-PVID2=$(pvs "$dev2" --noheading -o uuid | tr -d - | awk '{print $1}')
-echo $PVID2
-PVID3=$(pvs "$dev3" --noheading -o uuid | tr -d - | awk '{print $1}')
-echo $PVID3
+PVID1=$(pvs "$dev1" --noheadings -o uuid | tr -d - | awk '{print $1}')
+echo "$PVID1"
+PVID2=$(pvs "$dev2" --noheadings -o uuid | tr -d - | awk '{print $1}')
+echo "$PVID2"
+PVID3=$(pvs "$dev3" --noheadings -o uuid | tr -d - | awk '{print $1}')
+echo "$PVID3"
 
 pvs
 

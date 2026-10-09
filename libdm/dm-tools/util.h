@@ -12,17 +12,37 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_UTIL_H
-#define _LVM_UTIL_H
+#ifndef DM_TOOLS_UTIL_H
+#define DM_TOOLS_UTIL_H
 
 #include "libdm/libdevmapper.h"
 
-/* Use wrapper for checked results */
-static inline __attribute__((warn_unused_result))
-	int _dm_strncpy(char *dest, const char *src, size_t n)
-{
-	return dm_strncpy(dest, src, n);
-}
+/*
+ * GCC -fanalyzer has limitations in certain code patterns.
+ */
+#if defined(__GNUC__) && (__GNUC__ >= 13) && !defined(__clang__)
+# define GCC_SUPPRESS_FD_WARNINGS \
+	_Pragma("GCC diagnostic push") \
+	_Pragma("GCC diagnostic ignored \"-Wanalyzer-fd-leak\"") \
+	_Pragma("GCC diagnostic ignored \"-Wanalyzer-fd-use-without-check\"")
+
+# define GCC_SUPPRESS_LEAK_WARNING \
+	_Pragma("GCC diagnostic push") \
+	_Pragma("GCC diagnostic ignored \"-Wanalyzer-malloc-leak\"")
+
+# define GCC_SUPPRESS_BUFFER_WARNING \
+	_Pragma("GCC diagnostic push") \
+	_Pragma("GCC diagnostic ignored \"-Wanalyzer-use-after-free\"") \
+	_Pragma("GCC diagnostic ignored \"-Wanalyzer-out-of-bounds\"")
+
+# define GCC_UNSUPPRESS_WARNINGS \
+	_Pragma("GCC diagnostic pop")
+#else
+# define GCC_SUPPRESS_FD_WARNINGS
+# define GCC_SUPPRESS_LEAK_WARNING
+# define GCC_SUPPRESS_BUFFER_WARNING
+# define GCC_UNSUPPRESS_WARNINGS
+#endif
 
 #define min(a, b) ({ __typeof__(a) _a = (a); \
 		     __typeof__(b) _b = (b); \
@@ -36,11 +56,75 @@ static inline __attribute__((warn_unused_result))
 
 #define is_power_of_2(n) ((n) && !((n) & ((n) - 1)))
 
-#if defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 4 && __GNUC_MINOR__ >= 6)
-#define uninitialized_var(x) x
+/* Use wrapper for checked results */
+static inline __attribute__((warn_unused_result))
+	int _dm_strncpy(char *dest, const char *src, size_t n)
+{
+	return dm_strncpy(dest, src, n);
+}
+
+/*
+ * GCC 3.4 adds a __builtin_clz, which uses the count leading zeros (clz)
+ * instruction on arches that have one. Provide a fallback using shifts
+ * and comparisons for older compilers.
+ */
+#ifdef HAVE___BUILTIN_CLZ
+#define clz(x) ((x) ? __builtin_clz((x)) : 32)
+#else /* ifdef HAVE___BUILTIN_CLZ */
+static inline unsigned _dm_clz(unsigned x)
+{
+	unsigned n;
+
+	/* branchless: if (!x) return 32; if (x >> 31) return 0; */
+	if ((int)x <= 0) return (~x >> 26) & 32;
+
+	n = 1;
+
+	if ((x >> 16) == 0) {
+		n = n + 16;
+		x = x << 16;
+	}
+
+	if ((x >> 24) == 0) {
+		n = n + 8;
+		x = x << 8;
+	}
+
+	if ((x >> 28) == 0) {
+		n = n + 4;
+		x = x << 4;
+	}
+
+	if ((x >> 30) == 0) {
+		n = n + 2;
+		x = x << 2;
+	}
+	n = n - (x >> 31);
+	return n;
+}
+#define clz(x) _dm_clz((x))
+#endif /* ifdef HAVE___BUILTIN_CLZ */
+
+#ifdef HAVE___BUILTIN_CLZLL
+#define clzll(x) ((x) ? __builtin_clzll((x)) : 64)
+#else /* ifdef HAVE___BUILTIN_CLZLL */
+static inline unsigned _dm_clzll(unsigned long long x)
+{
+	if (x <= 0xffffffff)
+		return 32 + clz((unsigned) (x & 0xffffffff));
+
+	return clz((unsigned)(x >> 32));
+}
+#define clzll(x) _dm_clzll((x))
+#endif /* ifdef HAVE___BUILTIN_CLZLL */
+
+#ifndef HAVE_FFS
+#ifdef HAVE___BUILTIN_FFS
+#define ffs(x) __builtin_ffs((x))
 #else
-#define uninitialized_var(x) x = x
-#endif
+#error ffs() not implemented!
+#endif /* ifdef HAVE___BUILTIN_FFS */
+#endif /* ifndef HAVE_FFS */
 
 #define KERNEL_VERSION(major, minor, release) (((major) << 16) + ((minor) << 8) + (release))
 
@@ -82,46 +166,5 @@ static inline __attribute__((warn_unused_result))
 #define FMTx64 "%" PRIx64
 
 #define FMTVGID "%." DM_TO_STRING(ID_LEN) "s"
-
-/*
- * GCC 3.4 adds a __builtin_clz, which uses the count leading zeros (clz)
- * instruction on arches that have one. Provide a fallback using shifts
- * and comparisons for older compilers.
- */
-#ifdef HAVE___BUILTIN_CLZ
-#define clz(x) __builtin_clz((x))
-#else /* ifdef HAVE___BUILTIN_CLZ */
-static unsigned _dm_clz(unsigned x)
-{
-	int n;
-
-	if ((int)x <= 0) return (~x >> 26) & 32;
-
-	n = 1;
-
-	if ((x >> 16) == 0) {
-		n = n + 16;
-		x = x << 16;
-	}
-
-	if ((x >> 24) == 0) {
-		n = n + 8;
-		x = x << 8;
-	}
-
-	if ((x >> 28) == 0) {
-		n = n + 4;
-		x = x << 4;
-	}
-
-	if ((x >> 30) == 0) {
-		n = n + 2;
-		x = x << 2;
-	}
-	n = n - (x >> 31);
-	return n;
-}
-#define clz(x) _dm_clz((x))
-#endif /* ifdef HAVE___BUILTIN_CLZ */
 
 #endif

@@ -510,7 +510,7 @@ lvconvert --type cache --cachepool LV LV_linear_striped_raid_thinpool_thinpoolda
 OO: --cache, OO_LVCONVERT_CACHE, OO_LVCONVERT_POOL, OO_LVCONVERT
 OP: PV ...
 ID: lvconvert_to_cache_with_cachepool
-DESC: Attach a cache pool to an LV, converts the LV to type cache.
+DESC: Attach a cache pool to an LV, converting the LV to type cache.
 RULE: all not lv_is_locked lv_is_merging_origin lv_is_merging_cow lv_is_cow
 RULE: --poolmetadata not --readahead --stripesize --stripes_long
 
@@ -530,7 +530,7 @@ AUTOTYPE: cache
 lvconvert --type writecache --cachevol LV LV_linear_striped_raid_thinpool
 OO: OO_LVCONVERT, --cachesettings String
 ID: lvconvert_to_writecache
-DESC: Attach a writecache to an LV, converts the LV to type writecache.
+DESC: Attach a writecache to an LV, converting the LV to type writecache.
 RULE: all and lv_is_visible
 
 ---
@@ -538,14 +538,14 @@ RULE: all and lv_is_visible
 lvconvert --type cache --cachevol LV LV_linear_striped_raid_thinpool
 OO: --cache, OO_LVCONVERT_CACHE, OO_LVCONVERT, --poolmetadatasize SizeMB, --chunksize SizeKB
 ID: lvconvert_to_cache_with_cachevol
-DESC: Attach a cache to an LV, converts the LV to type cache.
+DESC: Attach a cache to an LV, converting the LV to type cache.
 RULE: all and lv_is_visible
 
 # alternate form of lvconvert --type cache
 lvconvert --cache --cachevol LV LV_linear_striped_raid_thinpool
 OO: OO_LVCONVERT_CACHE, OO_LVCONVERT, --poolmetadatasize SizeMB, --chunksize SizeKB
 ID: lvconvert_to_cache_with_cachevol
-DESC: Attach a cache to an LV, converts the LV to type cache.
+DESC: Attach a cache to an LV, converting the LV to type cache.
 RULE: all and lv_is_visible
 FLAGS: SECONDARY_SYNTAX
 
@@ -583,7 +583,7 @@ RULE: --poolmetadata not --readahead --stripesize --stripes_long
 # This is an alternate form of the primary command:
 # lvconvert --type thin-pool LV
 #
-# 2. When the LV is is already a pool and a meta LV is specified,
+# 2. When the LV is already a pool and a meta LV is specified,
 # the meta LV is swapped.  Swapping a meta LV is a very specialized
 # operation that users should never use.
 # This is an alternate form of the primary command:
@@ -628,7 +628,7 @@ RULE: all not lv_is_raid_with_integrity
 # This is an alternate form of the primary command:
 # lvconvert --type cache-pool LV
 #
-# 2. When the LV is is already a pool and a meta LV is specified,
+# 2. When the LV is already a pool and a meta LV is specified,
 # the meta LV is swapped.  Swapping a meta LV is a very specialized
 # operation that users should never use.
 # This is an alternate form of the primary command:
@@ -844,7 +844,7 @@ lvconvert LV_mirror_raid
 OO: OO_LVCONVERT
 ID: lvconvert_plain
 DESC: Poll LV to continue conversion (also see --startpoll)
-DESC: or waits till conversion/mirror syncing is finished
+DESC: or wait until conversion/mirror syncing is finished
 FLAGS: SECONDARY_SYNTAX
 
 ---
@@ -1465,6 +1465,16 @@ OO: OO_CONFIG
 OP: String ...
 ID: lvmconfig_general
 
+lvmconfig --edit String
+OO: --edit String, --file String, --withcomments, --withspaces
+ID: lvmconfig_edit
+DESC: Edit settings in lvm config file.
+
+lvmconfig --input String
+OO: --edit String, --output String, --withcomments, --withspaces
+ID: lvmconfig_input_output
+DESC: Read a config file and write to output file or stdout.
+
 ---
 
 lvmdevices
@@ -1945,8 +1955,12 @@ OO: --autobackup Bool,
 --force, --zero Bool, --labelsector Number, --metadatatype MetadataType,
 --metadatasize SizeMB, --pvmetadatacopies MetadataCopiesPV,
 --metadataignore Bool, --dataalignment SizeKB, --dataalignmentoffset SizeKB,
---reportformat ReportFmt, --restoremissing
+--reportformat ReportFmt
 ID: vgextend_general
+
+vgextend --restoremissing VG PV ...
+OO: --reportformat ReportFmt
+ID: vgextend_restoremissing
 
 ---
 
@@ -2086,6 +2100,16 @@ dumpconfig
 OO: OO_CONFIG
 OP: String ...
 ID: lvmconfig_general
+
+dumpconfig --edit String
+OO: --edit String, --file String, --withcomments, --withspaces
+ID: lvmconfig_edit
+DESC: Edit settings in lvm config file.
+
+dumpconfig --input String
+OO: --edit String, --output String, --withcomments, --withspaces
+ID: lvmconfig_input_output
+DESC: Read a config file and write to output file or stdout.
 
 devtypes
 OO: --aligned, --binary, --nameprefixes, --noheadings,

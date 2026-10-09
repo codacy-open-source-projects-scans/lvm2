@@ -175,7 +175,7 @@ static struct oo_line _oo_lines[MAX_OO_LINES];
 static void _add_optional_opt_line(struct cmd_context *cmdtool, struct command *cmd, int argc, char *argv[]);
 
 static unsigned _was_hyphen = 0;
-static void printf_hyphen(char c)
+static void _printf_hyphen(char c)
 {
 	/* When .hy 1 was printed, we do not want to emit empty space */
 	printf("%c%c\n", _was_hyphen ? '\n' : ' ', c);
@@ -312,10 +312,10 @@ unsigned command_id_to_enum(const char *str)
 	const char *name;
 
 	/* Skip 1st. element for bsearch() */
-	if ((name = bsearch(str, cmd_names[1].name, CMD_COUNT - 1,
+	if ((name = bsearch(str, &cmd_names[1].name[0], CMD_COUNT - 1,
 			    sizeof(cmd_names[0]),
 			    (int (*)(const void*, const void*))strcmp)))
-		return (name - cmd_names[0].name) / sizeof(cmd_names[0]);
+		return ((const struct cmd_name *)(const void *)name)->cmd_enum;
 
 	log_error("Cannot find command %s.", str);
 
@@ -324,6 +324,9 @@ unsigned command_id_to_enum(const char *str)
 
 const char *command_enum(unsigned command_enum)
 {
+	if (command_enum > CMD_COUNT)
+		return "unknown";
+
 	return cmd_names[command_enum].name;
 }
 
@@ -460,10 +463,10 @@ static unsigned _find_lvm_command_enum(const char *name)
 			return 0;
 	}
 #endif
-	if ((name = bsearch(name, command_names[0].name, LVM_COMMAND_COUNT,
+	if ((name = bsearch(name, &command_names[0].name[0], LVM_COMMAND_COUNT,
 			    sizeof(command_names[0]),
 			    (int (*)(const void*, const void*))strcmp)))
-		return (name - command_names[0].name) / sizeof(command_names[0]);
+		return (name - &command_names[0].name[0]) / sizeof(command_names[0]);
 
 	return LVM_COMMAND_COUNT;
 }
@@ -813,6 +816,7 @@ static void _include_optional_opt_args(struct cmd_context *cmdtool, struct comma
  * This function sets the opt_args.opt value for it.
  */
 
+__attribute__((nonnull(1, 2)))
 static void _add_opt_arg(struct command *cmd, char *str,
 			int *takes_arg, int *already, int required)
 {
@@ -868,7 +872,7 @@ skip:
 			return;
 		}
 		cmd->optional_opt_args[cmd->oo_count++].opt = opt;
-	} else if (required < 0) {
+	} else { /* required < 0 */
 		if (cmd->io_count >= CMD_IO_ARGS) {
 			log_error("Too many args, increase CMD_IO_ARGS.");
 			cmd->cmd_flags |= CMD_FLAG_PARSE_ERROR;
@@ -908,7 +912,7 @@ static void _update_prev_opt_arg(struct cmd_context *cmdtool, struct command *cm
 		cmd->required_opt_args[cmd->ro_count-1].def = def;
 	else if (!required)
 		cmd->optional_opt_args[cmd->oo_count-1].def = def;
-	else if (required < 0)
+	else /* required < 0 */
 		cmd->ignore_opt_args[cmd->io_count-1].def = def;
 }
 
@@ -948,7 +952,7 @@ static void _add_pos_arg(struct command *cmd, char *str, int required)
 
 /* Process something that follows a pos arg, which is not a new pos arg. */
 
-static void _update_prev_pos_arg(struct command *cmd, char *str, int required)
+static void _update_prev_pos_arg(struct command *cmd, const char *str, int required)
 {
 	struct arg_def *def;
 
@@ -1066,7 +1070,8 @@ static void _add_required_opt_line(struct cmd_context *cmdtool, struct command *
  * and flag CMD_FLAG_ANY_REQUIRED_OPT is set on the cmd indicating
  * this special case.
  */
-static void _include_required_opt_args(struct cmd_context *cmdtool, struct command *cmd, char *str)
+static void _include_required_opt_args(struct cmd_context *cmdtool, struct command *cmd,
+				       const char *str)
 {
 	char *oo_line;
 	char *line;
@@ -1096,7 +1101,7 @@ static void _add_required_line(struct cmd_context *cmdtool, struct command *cmd,
 	int i;
 	int takes_arg = 0;
 	int prev_was_opt = 0, prev_was_pos = 0;
-	int orig_ro_count = 0;
+	int orig_ro_count;
 
 	/* argv[0] is command name */
 
@@ -1195,7 +1200,6 @@ static void _add_rule(struct cmd_context *cmdtool, struct command *cmd,
 
 		else if (!strncmp(arg, "all", 3)) {
 			/* opt/lvt_bits/lvp_bits all remain 0 to mean all */
-			continue;
 		}
 
 		else if (!strncmp(arg, "--", 2)) {
@@ -1723,6 +1727,9 @@ static void _print_usage_description(struct command *cmd)
 	unsigned di = 0;
 	int bi = 0;
 
+	if (!desc)
+		return;
+
 	for (di = 0; desc[di]; di++) {
 		if (!strncmp(&desc[di], "DESC:", 5)) {
 			if (bi) {
@@ -1752,7 +1759,7 @@ static void _print_usage_description(struct command *cmd)
 	}
 }
 
-/* Function remappas existing command definitions val_enums for printing
+/* Function remaps existing command definitions val_enums for printing
  * within man pages or command's help lines */
 static int _update_relative_opt(const char *name, int opt_enum, int val_enum)
 {
@@ -1921,7 +1928,7 @@ void print_usage(struct command *cmd, int longhelp, int desc_first)
 			}
 		}
 
-		printf_hyphen(')');
+		_printf_hyphen(')');
 	} else  /* !any_req */
 		for (ro = 0; ro < cmd->ro_count; ro++) {
 			opt_enum = cmd->required_opt_args[ro].opt;

@@ -101,11 +101,19 @@ int lvmcache_init(struct cmd_context *cmd)
 	if (!(_vgname_hash = dm_hash_create(127)))
 		return 0;
 
-	if (!(_vgid_hash = dm_hash_create(126)))
+	if (!(_vgid_hash = dm_hash_create(126))) {
+		dm_hash_destroy(_vgname_hash);
+		_vgname_hash = NULL;
 		return 0;
+	}
 
-	if (!(_pvid_hash = dm_hash_create(125)))
+	if (!(_pvid_hash = dm_hash_create(125))) {
+		dm_hash_destroy(_vgid_hash);
+		dm_hash_destroy(_vgname_hash);
+		_vgid_hash = NULL;
+		_vgname_hash = NULL;
 		return 0;
+	}
 
 	return 1;
 }
@@ -293,7 +301,7 @@ static struct lvmcache_vginfo *_search_vginfos_list(const char *vgname, const ch
 			if (!memcmp(vgid, vginfo->vgid, ID_LEN))
 				return vginfo;
 		}
-	} else {
+	} else if (vgname) {
 		dm_list_iterate_items(vginfo, &_vginfos) {
 			if (!strcmp(vgname, vginfo->vgname))
 				return vginfo;
@@ -307,11 +315,9 @@ static struct lvmcache_vginfo *_vginfo_lookup(const char *vgname, const char *vg
 	char vgid[ID_LEN + 1] __attribute__((aligned(8))) = { 0 };
 	struct lvmcache_vginfo *vginfo;
 
-	/* In case vgid is not null terminated */
-	if (vgid_arg)
-		memcpy(vgid, vgid_arg, ID_LEN);
-
 	if (vgid_arg) {
+		/* In case vgid is not null terminated */
+		memcpy(vgid, vgid_arg, ID_LEN);
 		if ((vginfo = dm_hash_lookup(_vgid_hash, vgid))) {
 			if (vgname && strcmp(vginfo->vgname, vgname)) {
 				log_warn("WARNING: Lookup found duplicate VGID %s for VGs %s and %s.", vgid, vginfo->vgname, vgname);
@@ -440,14 +446,14 @@ struct lvmcache_info *lvmcache_info_from_pvid(const char *pvid_arg, struct devic
 	return info;
 }
 
-struct lvmcache_info *lvmcache_info_from_pv_id(const struct id *pv_id_arg, struct device *dev, int valid_only)
+struct lvmcache_info *lvmcache_info_from_pv_id(const struct id *pv_id, struct device *dev, int valid_only)
 {
 	/*
 	 * Since we know that lvmcache_info_from_pvid directly above
 	 * does not assume pvid_arg is null-terminated, we make an
 	 * exception here and cast a struct id to char *.
 	 */
-	return lvmcache_info_from_pvid((const char *)pv_id_arg, dev, valid_only);
+	return lvmcache_info_from_pvid((const char *)pv_id, dev, valid_only);
 }
 
 const struct format_type *lvmcache_fmt_from_info(struct lvmcache_info *info)
@@ -598,6 +604,7 @@ static int _all_multipath_components(struct cmd_context *cmd, struct lvmcache_in
 	dm_list_iterate_items(devl, altdevs) {
 		dev = devl->dev;
 		dev_is_mp = (cmd->dev_types->device_mapper_major == MAJOR(dev->dev)) && dev_has_mpath_uuid(cmd, dev, NULL);
+		wwid_buf[0] = '\0';
 
 		if (dev_is_mp) {
 			if ((wwid = dev_mpath_component_wwid(cmd, dev)))
@@ -665,17 +672,17 @@ static int _all_md_components(struct cmd_context *cmd, struct lvmcache_info *inf
 	struct device *dev_md = NULL;
 	struct device *dev;
 	int real_dup = 0;
- 
+
 	*dev_md_out = NULL;
 
 	/* There will often be no info struct because of the extra_md_checks function. */
- 
+
 	if (info && (cmd->dev_types->md_major == MAJOR(info->dev->dev)))
 		dev_md = info->dev;
- 
+
 	dm_list_iterate_items(devl, altdevs) {
 		dev = devl->dev;
- 
+
 		if (cmd->dev_types->md_major == MAJOR(dev->dev)) {
 			if (dev_md) {
 				/* md devs themselves are dups */
@@ -693,13 +700,13 @@ static int _all_md_components(struct cmd_context *cmd, struct lvmcache_info *inf
 			}
 		}
 	}
- 
+
 	if (real_dup)
 		return 0;
- 
+
 	if (dev_md)
 		log_debug("Found md device %s for PVID %s.", dev_name(dev_md), pvid);
- 
+
 	*dev_md_out = dev_md;
 	return 1;
 }
@@ -759,6 +766,7 @@ static void _choose_duplicates(struct cmd_context *cmd,
 	struct device_list *devl, *devl_safe, *devl_add, *devl_del;
 	struct lvmcache_info *info;
 	struct device *dev1, *dev2;
+	struct dm_list *dl;
 	struct device *dev_mpath, *dev_md;
 	struct device *dev_drop;
 	struct physical_volume *pvs;
@@ -990,22 +998,23 @@ next:
 		 * One of the altdev entries for the PVID should be added to
 		 * lvmcache.
 		 */
-		if (dm_list_size(&altdevs) == 1) {
-			devl = dm_list_item(dm_list_first(&altdevs), struct device_list);
+		if (!(dl = dm_list_first(&altdevs)))
+			goto next;
+
+		devl = dm_list_item(dl, struct device_list);
+
+		/* Exactly one element in the list */
+		if (dl == dm_list_last(&altdevs)) {
 			dm_list_del(&devl->list);
 			dm_list_add(add_cache_devs, &devl->list);
 
 			log_debug_cache("PV %s with duplicates unselected using %s.",
 					pvid, dev_name(devl->dev));
 			goto next;
-		} else if (dm_list_empty(&altdevs)) {
-			goto next;
-		} else {
-			devl = dm_list_item(dm_list_first(&altdevs), struct device_list);
-			dev1 = devl->dev;
-
-			log_debug_cache("PV %s with duplicates unselected comparing alternatives", pvid);
 		}
+
+		dev1 = devl->dev;
+		log_debug_cache("PV %s with duplicates unselected comparing alternatives", pvid);
 	} else {
 		log_debug_cache("PV %s with duplicates comparing alternatives for %s",
 				pvid, dev_name(info->dev));
@@ -1273,7 +1282,7 @@ next:
 static int _label_rescan_vg(struct cmd_context *cmd, const char *vgname, const char *vgid, int rw)
 {
 	struct dm_list devs;
-	struct device_list *devl, *devl2;
+	struct device_list *devl;
 	struct lvmcache_vginfo *vginfo;
 	struct lvmcache_info *info;
 
@@ -1285,6 +1294,7 @@ static int _label_rescan_vg(struct cmd_context *cmd, const char *vgname, const c
 	dm_list_iterate_items(info, &vginfo->infos) {
 		if (!(devl = malloc(sizeof(*devl)))) {
 			log_error("device_list element allocation failed");
+			_destroy_device_list(&devs);
 			return 0;
 		}
 		devl->dev = info->dev;
@@ -1304,10 +1314,7 @@ static int _label_rescan_vg(struct cmd_context *cmd, const char *vgname, const c
 	else
 		label_scan_devs(cmd, cmd->filter, &devs);
 
-	dm_list_iterate_items_safe(devl, devl2, &devs) {
-		dm_list_del(&devl->list);
-		free(devl);
-	}
+	_destroy_device_list(&devs);
 
 	if (!(vginfo = lvmcache_vginfo_from_vgname(vgname, vgid))) {
 		log_warn("VG info not found after rescan of %s", vgname);
@@ -1455,7 +1462,7 @@ void lvmcache_extra_md_component_checks(struct cmd_context *cmd)
 			 * looks like an md device, then it seems very likely
 			 * to be an md component, so do a full check on it even
 			 * if the user has set "start".
-			 * 
+			 *
 			 * In "auto" mode, do a full check if either the size
 			 * or the name indicates a possible md component.
 			 */
@@ -1796,6 +1803,11 @@ static int _lvmcache_update_vgname(struct cmd_context *cmd,
 	if (!vgname || (info && info->vginfo && !strcmp(info->vginfo->vgname, vgname)))
 		return 1;
 
+	if (!vgid) {
+		log_error(INTERNAL_ERROR "vgid is NULL in _lvmcache_update_vgname.");
+		return 0;
+	}
+
 	if (!id_write_format((const struct id *)vgid, vgid_dashed, sizeof(vgid_dashed)))
 		stack;
 
@@ -1980,9 +1992,10 @@ set_lock_type:
 		goto set_system_id;
 
 	free(info->vginfo->lock_type);
+	info->vginfo->lock_type = NULL; /* for gcc -fanalyzer */
 
 	if (!(info->vginfo->lock_type = strdup(lock_type))) {
-		log_error("cache lock_type alloc failed for %s", lock_type);
+		log_error("cache lock_type alloc failed for %s.", lock_type);
 		return 0;
 	}
 
@@ -1998,9 +2011,10 @@ set_system_id:
 		goto out;
 
 	free(info->vginfo->system_id);
+	info->vginfo->system_id = NULL; /* for gcc -fanalyzer */
 
 	if (!(info->vginfo->system_id = strdup(system_id))) {
-		log_error("cache system_id alloc failed for %s", system_id);
+		log_error("cache system_id alloc failed for %s.", system_id);
 		return 0;
 	}
 
@@ -2307,7 +2321,7 @@ void lvmcache_update_vg_from_read(struct volume_group *vg, int *incorrect_pv_cla
 		}
 
 		log_debug_cache("lvmcache_update_vg %s for %s", vg->name, dev_name(info->dev));
-		
+
 		/*
 		 * FIXME: use a different function that just attaches info's that
 		 * had no metadata onto the correct vginfo.
@@ -2422,12 +2436,10 @@ static struct lvmcache_info * _create_info(struct labeller *labeller, struct dev
 }
 
 struct lvmcache_info *lvmcache_add(struct cmd_context *cmd, struct labeller *labeller,
-				   const char *pvid_arg, struct device *dev, uint64_t label_sector,
-				   const char *vgname, const char *vgid_arg, uint32_t vgstatus,
+				   const char *pvid, struct device *dev, uint64_t label_sector,
+				   const char *vgname, const char *vgid, uint32_t vgstatus,
 				   int *is_duplicate)
 {
-	const char *pvid = pvid_arg;
-	const char *vgid = vgid_arg;
 	struct lvmcache_vgsummary vgsummary = { 0 };
 	struct lvmcache_info *info;
 	struct lvmcache_info *info_lookup;
@@ -2505,13 +2517,16 @@ struct lvmcache_info *lvmcache_add(struct cmd_context *cmd, struct labeller *lab
 		}
 
 		if (info->label->labeller != labeller) {
+			struct label *new_label;
+
 			log_verbose("Changing labeller on dev %s from %s to %s",
 				    dev_name(info->dev),
 				    info->label->labeller->fmt->name,
 				    labeller->fmt->name);
-			label_destroy(info->label);
-			if (!(info->label = label_create(labeller)))
+			if (!(new_label = label_create(labeller)))
 				return_NULL;
+			label_destroy(info->label);
+			info->label = new_label;
 			info->label->info = info;
 		}
 	}
@@ -2532,6 +2547,10 @@ struct lvmcache_info *lvmcache_add(struct cmd_context *cmd, struct labeller *lab
 
 	if (!dm_hash_insert(_pvid_hash, pvid, info)) {
 		log_error("Adding pvid to hash failed %s", pvid);
+		if (created) {
+			label_destroy(info->label);
+			free(info);
+		}
 		return NULL;
 	}
 
@@ -2644,7 +2663,7 @@ int lvmcache_populate_pv_fields(struct lvmcache_info *info,
 				struct physical_volume *pv)
 {
 	struct data_area_list *da;
-	
+
 	if (!info->label) {
 		log_error("No cached label for orphan PV %s", pv_dev_name(pv));
 		return 0;
@@ -2863,11 +2882,11 @@ int lvmcache_has_dev_info(struct device *dev)
  * The lifetime of the label returned is tied to the lifetime of the
  * lvmcache_info which is the same as lvmcache itself.
  */
-struct label *lvmcache_get_label(struct lvmcache_info *info) {
+struct label *lvmcache_get_label(const struct lvmcache_info *info) {
 	return info->label;
 }
 
-uint64_t lvmcache_device_size(struct lvmcache_info *info) {
+uint64_t lvmcache_device_size(const struct lvmcache_info *info) {
 	return info->device_size;
 }
 
@@ -2875,7 +2894,7 @@ void lvmcache_set_device_size(struct lvmcache_info *info, uint64_t size) {
 	info->device_size = size;
 }
 
-struct device *lvmcache_device(struct lvmcache_info *info) {
+struct device *lvmcache_device(const struct lvmcache_info *info) {
 	return info->dev;
 }
 void lvmcache_set_ext_version(struct lvmcache_info *info, uint32_t version)
@@ -2883,7 +2902,7 @@ void lvmcache_set_ext_version(struct lvmcache_info *info, uint32_t version)
 	info->ext_version = version;
 }
 
-uint32_t lvmcache_ext_version(struct lvmcache_info *info) {
+uint32_t lvmcache_ext_version(const struct lvmcache_info *info) {
 	return info->ext_version;
 }
 
@@ -2891,7 +2910,7 @@ void lvmcache_set_ext_flags(struct lvmcache_info *info, uint32_t flags) {
 	info->ext_flags = flags;
 }
 
-uint32_t lvmcache_ext_flags(struct lvmcache_info *info) {
+uint32_t lvmcache_ext_flags(const struct lvmcache_info *info) {
 	return info->ext_flags;
 }
 
@@ -3238,6 +3257,8 @@ int lvmcache_verify_info_in_vg(struct volume_group *vg, struct lvmcache_info *in
 
 const char *dev_filtered_reason(struct device *dev)
 {
+	if (dev->filtered_flags & DEV_FILTERED_FWRAID)
+		return "device is a firmware RAID component";
 	if (dev->filtered_flags & DEV_FILTERED_REGEX)
 		return "device is rejected by filter config";
 	if (dev->filtered_flags & DEV_FILTERED_INTERNAL)

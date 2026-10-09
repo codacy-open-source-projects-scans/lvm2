@@ -13,7 +13,7 @@
 
 . lib/inittest --skip-with-lvmpolld
 
-which mkfs.ext4 || skip
+aux have_fs ext4 || skip
 aux have_integrity 1 5 0 || skip
 # Avoid 4K ramdisk devices on older kernels
 aux kernel_at_least  5 10 || export LVM_TEST_PREFER_BRD=0
@@ -44,7 +44,7 @@ _prepare_vg() {
 }
 
 _add_new_data_to_mnt() {
-	mkfs.ext4 "$DM_DEV_DIR/$vg/$lv1"
+	mkfs.ext4 -b 4096 "$DM_DEV_DIR/$vg/$lv1"
 
         mount "$DM_DEV_DIR/$vg/$lv1" $mnt
 
@@ -113,6 +113,14 @@ _wait_for_repair() {
 		# All devices gone, repair completed
 		return 0
 	done
+	# Print diagnostics before die() drops the debug logs.
+	{
+		echo "## dmeventd repair did not complete for: $*"
+		echo "## lvs state:"
+		cat out 2>/dev/null || true
+		echo "## dmeventd log tail:"
+		tail -n 200 debug.log_DMEVENTD_out 2>/dev/null || true
+	} >&2
 	die "dmeventd repair timeout - expected devices removed: $*."
 }
 

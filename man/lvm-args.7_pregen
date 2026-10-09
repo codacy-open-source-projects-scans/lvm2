@@ -154,7 +154,7 @@ Used by: \fBpvmove\fP
 .TP
 \fB--atversion\fP \fIString\fP
 Specify an LVM version in x.y.z format where x is the major version,
-the y is the minor version and z is the patchlevel (e.g. 2.2.106).
+y is the minor version and z is the patchlevel (e.g. 2.2.106).
 When configuration is displayed, the configuration settings recognized
 at this LVM version will be considered only. This can be used
 to display a configuration that a certain LVM version understands and
@@ -176,7 +176,7 @@ Used by: \fBvgimportdevices\fP
 .
 .TP
 \fB--autoactivation\fP \fIString\fP
-Specify if autoactivation is being used from an event.
+Specify whether autoactivation is being used from an event.
 This allows the command to apply settings that are specific
 to event activation, such as device scanning optimizations
 using pvs_online files created by event-based pvscans.
@@ -491,7 +491,7 @@ Used by: \fBlvmdevices\fP
 \fB--devices\fP \fIPV\fP
 Restricts the devices that are visible and accessible to the command.
 Devices not listed will appear to be missing. This option can be
-repeated, or accepts a comma separated list of devices. This overrides
+repeated, or accepts a comma-separated list of devices. This overrides
 the devices file.
 .br
 Used by: \fBconfig\fP, \fBdevtypes\fP, \fBdumpconfig\fP, \fBformats\fP, \fBfullreport\fP, \fBhelp\fP, \fBlastlog\fP, \fBlvchange\fP, \fBlvconvert\fP, \fBlvcreate\fP, \fBlvdisplay\fP, \fBlvextend\fP, \fBlvmchange\fP, \fBlvmconfig\fP, \fBlvmdevices\fP, \fBlvmdiskscan\fP, \fBlvmsadc\fP, \fBlvmsar\fP, \fBlvpoll\fP, \fBlvreduce\fP, \fBlvremove\fP, \fBlvrename\fP, \fBlvresize\fP, \fBlvs\fP, \fBlvscan\fP, \fBpvchange\fP, \fBpvck\fP, \fBpvcreate\fP, \fBpvdata\fP, \fBpvdisplay\fP, \fBpvmove\fP, \fBpvremove\fP, \fBpvresize\fP, \fBpvs\fP, \fBpvscan\fP, \fBsegtypes\fP, \fBsystemid\fP, \fBtags\fP, \fBversion\fP, \fBvgcfgbackup\fP, \fBvgcfgrestore\fP, \fBvgchange\fP, \fBvgck\fP, \fBvgconvert\fP, \fBvgcreate\fP, \fBvgdisplay\fP, \fBvgexport\fP, \fBvgextend\fP, \fBvgimport\fP, \fBvgimportclone\fP, \fBvgimportdevices\fP, \fBvgmerge\fP, \fBvgmknodes\fP, \fBvgreduce\fP, \fBvgremove\fP, \fBvgrename\fP, \fBvgs\fP, \fBvgscan\fP, \fBvgsplit\fP
@@ -542,6 +542,15 @@ searching standard locations in case of damaged headers,
 \fBmetadata_area\fP to save an entire text metadata area to a file.
 .br
 Used by: \fBpvck\fP
+.
+.TP
+\fB--edit\fP \fIString\fP
+Edit or remove a setting in an LVM config file.
+The setting is specified as Section/Field=Value.
+To remove a setting, use Section/Field=-.
+Repeat this option to edit multiple settings.
+.br
+Used by: \fBdumpconfig\fP, \fBlvmconfig\fP
 .
 .TP
 \fB--errorwhenfull\fP \fBy\fP|\fBn\fP
@@ -672,7 +681,7 @@ Used by: \fBconfig\fP, \fBdevtypes\fP, \fBdumpconfig\fP, \fBformats\fP, \fBfullr
 \fB-H\fP|\fB--history\fP
 Include historical LVs in the output.
 (This has no effect unless LVs were removed while
-\fBlvm.conf\fP(5) \fBmetadata/record_lvs_history\fP was enabled.
+\fBlvm.conf\fP(5) \fBmetadata/record_lvs_history\fP was enabled.)
 .br
 Used by: \fBlvdisplay\fP, \fBlvs\fP
 .
@@ -715,7 +724,7 @@ Used by: \fBlvchange\fP, \fBlvcreate\fP, \fBvgchange\fP
 .TP
 \fB--ignoreunsupported\fP
 Exclude unsupported configuration settings from the output. These settings are
-either used for debugging and development purposes only or their support is not
+either used for debugging and development purposes only, or their support is not
 yet complete and they are not meant to be used in production. The \fBcurrent\fP
 and \fBdiff\fP types include unsupported settings in their output by default,
 all the other types ignore unsupported settings.
@@ -734,6 +743,12 @@ Used by: \fBvgimportclone\fP
 Add devices to the devices file.
 .br
 Used by: \fBvgimportclone\fP
+.
+.TP
+\fB--input\fP \fIString\fP
+Read configuration from the specified input file.
+.br
+Used by: \fBdumpconfig\fP, \fBlvmconfig\fP
 .
 .TP
 \fB--integritysettings\fP \fIString\fP
@@ -818,9 +833,7 @@ See \fBlvmlockd\fP(8) for more information.
 Used by: \fBvgchange\fP
 .
 .TP
-\fB--locktype\fP \%\fBsanlock\fP|\:\
-\fBdlm\fP|\:\
-\fBnone\fP
+\fB--locktype\fP #LOCKTYPE_ARG#
 .br
 Used by: \fBvgchange\fP, \fBvgcreate\fP
 .
@@ -1079,7 +1092,7 @@ Used by: \fBconfig\fP, \fBdevtypes\fP, \fBdumpconfig\fP, \fBformats\fP, \fBfullr
 .
 .TP
 \fB--norestorefile\fP
-In conjunction with --uuid, this allows a uuid to be specified
+In conjunction with --uuid, this allows a UUID to be specified
 without also requiring that a backup of the metadata be provided.
 .br
 Used by: \fBpvcreate\fP
@@ -1160,6 +1173,15 @@ to a thin LV. The LV being converted becomes a read-only external origin
 with this name.
 .br
 Used by: \fBlvconvert\fP
+.
+.TP
+\fB--output\fP \fIString\fP
+Write lvm configuration to the specified output file.
+Used with --input to read configuration from one file,
+optionally apply edits, and write the configuration to
+another file.
+.br
+Used by: \fBdumpconfig\fP, \fBlvmconfig\fP
 .
 .TP
 \fB-P\fP|\fB--partial\fP
@@ -1400,7 +1422,7 @@ the report/output_format setting in \fBlvm.conf\fP(5).
 If there is more than one report per command, each report is prefixed
 with the report name for identification. \fBjson\fP produces report
 output in JSON format. \fBjson_std\fP produces report output in
-JSON format which is more compliant with JSON standard.
+JSON format which is more compliant with the JSON standard.
 See \fBlvmreport\fP(7) for more information.
 .br
 Used by: \fBdevtypes\fP, \fBfullreport\fP, \fBlastlog\fP, \fBlvchange\fP, \fBlvcreate\fP, \fBlvdisplay\fP, \fBlvextend\fP, \fBlvreduce\fP, \fBlvremove\fP, \fBlvrename\fP, \fBlvresize\fP, \fBlvs\fP, \fBlvscan\fP, \fBpvchange\fP, \fBpvcreate\fP, \fBpvdisplay\fP, \fBpvmove\fP, \fBpvremove\fP, \fBpvresize\fP, \fBpvs\fP, \fBpvscan\fP, \fBvgcfgbackup\fP, \fBvgchange\fP, \fBvgck\fP, \fBvgconvert\fP, \fBvgcreate\fP, \fBvgdisplay\fP, \fBvgexport\fP, \fBvgextend\fP, \fBvgimport\fP, \fBvgimportdevices\fP, \fBvgmknodes\fP, \fBvgreduce\fP, \fBvgremove\fP, \fBvgrename\fP, \fBvgs\fP, \fBvgscan\fP
@@ -1529,7 +1551,12 @@ In this case, a lock owned by a failed host can only be acquired
 using the persist feature.
 nopersist: do not use the persist feature.
 timeout: do not use the notimeout feature.
-The default behavior with no settings configured is: nopersist and timeout.
+nowatchdog: do not connect to wdmd/watchdog when starting the VG lockspace.
+Requires notimeout. Without timeout-based recovery, the watchdog is not needed.
+watchdog: when starting a VG lockspace, sanlock/wdmd connect the lockspace to /dev/watchdog.
+If VG lockspace renewals fail (e.g. due to a storage outage, or a sanlock daemon failure),
+then the watchdog resets the host if locks are held in the VG.
+The default behavior with no settings configured is: nopersist, timeout, watchdog.
 .br
 Used by: \fBvgchange\fP, \fBvgcreate\fP
 .
@@ -1587,7 +1614,7 @@ Used by: \fBconfig\fP, \fBdumpconfig\fP, \fBlvmconfig\fP
 .TP
 \fB--sinceversion\fP \fIString\fP
 Specify an LVM version in x.y.z format where x is the major version,
-the y is the minor version and z is the patchlevel (e.g. 2.2.106).
+y is the minor version and z is the patchlevel (e.g. 2.2.106).
 This option is currently applicable only with --typeconfig new
 to display all configuration settings introduced since given version.
 .br
@@ -1802,7 +1829,7 @@ Used by: \fBlvconvert\fP, \fBlvcreate\fP, \fBlvextend\fP, \fBlvresize\fP
 \fBprofilable-command\fP|\:\
 \fBprofilable-metadata\fP
 \fBcurrent\fP prints the config settings that would be applied
-to an lvm command (assuming the command does not override them
+to an LVM command (assuming the command does not override them
 on the command line.) This includes:
 settings that have been modified in lvm config files,
 settings that get their default values from config files,
@@ -1817,7 +1844,7 @@ and these settings are not printed as comments.
 from their default values in config files (the difference between
 current and default.)
 \fBfull\fP prints every setting uncommented and set to the
-current value, i.e. how it would be used by an lvm command.
+current value, i.e. how it would be used by an LVM command.
 This includes settings modified in config files, settings that usually
 get defaults internally, and settings that get defaults from config files.
 \fBlist\fP prints all config names without values.
@@ -1838,7 +1865,7 @@ Used by: \fBconfig\fP, \fBdumpconfig\fP, \fBlvmconfig\fP
 .
 .TP
 \fB--udevoutput\fP
-Command output is modified to be imported from a udev rule.
+Command output is modified to be imported by a udev rule.
 .br
 Used by: \fBpvscan\fP
 .

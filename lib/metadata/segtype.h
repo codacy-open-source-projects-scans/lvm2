@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _SEGTYPES_H
-#define _SEGTYPES_H
+#ifndef SEGTYPES_H
+#define SEGTYPES_H
 
 #include "lib/metadata/metadata-exported.h"
 
@@ -154,10 +154,11 @@ struct dev_manager;
 /* FIXME: once raid10_{far,offset} supported */
 #define segtype_is_raid10_far(segtype)		0 /* FIXME ((segtype)->flags & SEG_RAID10_FAR ? 1 : 0 */
 #define segtype_is_raid10_offset(segtype)	0 /* FIXME ((segtype)->flags & SEG_RAID10_OFFSET ? 1 : 0 */
-#define segtype_is_any_raid10(segtype)	(segtype_is_raid10(segtype) || segtype_is_raid10_near(segtype) || segtype_is_raid10_far(segtype) || segtype_is_raid10_offset(segtype))
+/* segtype_is_raid10() is equivalent to segtype_is_raid10_near() as SEG_RAID10 == SEG_RAID10_NEAR */
+#define segtype_is_any_raid10(segtype)	(segtype_is_raid10_near(segtype) || segtype_is_raid10_far(segtype) || segtype_is_raid10_offset(segtype))
 #define segtype_is_raid_with_meta(segtype)	(segtype_is_raid(segtype) && !segtype_is_raid0(segtype))
 #define segtype_is_striped_raid(segtype)        (segtype_is_raid(segtype) && !segtype_is_raid1(segtype))
-#define segtype_is_reshapable_raid(segtype)     ((segtype_is_striped_raid(segtype) && !segtype_is_any_raid0(segtype)) || segtype_is_raid10_near(segtype) || segtype_is_raid10_offset(segtype))
+#define segtype_is_reshapable_raid(segtype)     (segtype_is_striped_raid(segtype) && !segtype_is_any_raid0(segtype))
 #define segtype_is_snapshot(segtype)	((segtype)->flags & SEG_SNAPSHOT ? 1 : 0)
 #define segtype_is_striped(segtype)	((segtype)->flags & SEG_AREAS_STRIPED ? 1 : 0)
 #define segtype_is_thin(segtype)	((segtype)->flags & (SEG_THIN_POOL|SEG_THIN_VOLUME) ? 1 : 0)
@@ -223,7 +224,7 @@ struct dev_manager;
 #define seg_is_virtual(seg)	segtype_is_virtual((seg)->segtype)
 #define seg_is_error(seg)	segtype_is_error((seg)->segtype)
 #define seg_is_zero(seg)	segtype_is_zero((seg)->segtype)
-#define seg_unknown(seg)	segtype_is_unknown((seg)->segtype)
+#define seg_is_unknown(seg)	segtype_is_unknown((seg)->segtype)
 #define seg_can_split(seg)	segtype_can_split((seg)->segtype)
 #define seg_cannot_be_zeroed(seg)	segtype_cannot_be_zeroed((seg)->segtype)
 #define seg_monitored(seg)	segtype_monitored((seg)->segtype)
@@ -290,6 +291,8 @@ struct segment_type *get_segtype_from_string(struct cmd_context *cmd,
 struct segment_type *get_segtype_from_flag(struct cmd_context *cmd,
 					   uint64_t flag);
 
+uint32_t segtype_stripe_size_min(const struct segment_type *segtype);
+
 struct segtype_library;
 int lvm_register_segtype(struct segtype_library *seglib,
 			 struct segment_type *segtype);
@@ -326,6 +329,7 @@ struct segment_type *init_unknown_segtype(struct cmd_context *cmd,
  * certain the new behavior exists is to check for version 1.9.0.
  */
 #define RAID_FEATURE_NEW_DEVICES_ACCEPT_REBUILD	(1U << 6) /* version 1.9.0 */
+#define RAID_FEATURE_FIXED_HEALTH_CHARS		(1U << 7) /* version 1.9.2 stale health chars fixed */
 
 bool raid_is_available(const struct logical_volume *lv);
 #ifdef RAID_INTERNAL
@@ -355,6 +359,7 @@ int init_vdo_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 
 #define VDO_FEATURE_ONLINE_RENAME		(1U << 0) /* version 6.2.3 */
 #define VDO_FEATURE_VERSION4			(1U << 1) /* version 8.2.0 */
+#define VDO_FEATURE_KERNEL_FORMAT		(1U << 2) /* version 9.2.0 */
 
 int init_writecache_segtypes(struct cmd_context *cmd, struct segtype_library *seglib);
 
@@ -369,8 +374,6 @@ int init_integrity_segtypes(struct cmd_context *cmd, struct segtype_library *seg
 #ifdef SNAPSHOT_INTERNAL
 struct segment_type *init_snapshot_segtype(struct cmd_context *cmd);
 #endif
-
-#define MIRROR_LOG_CLUSTERED			(1U << 0)
 
 #ifdef MIRRORED_INTERNAL
 struct segment_type *init_mirrored_segtype(struct cmd_context *cmd);

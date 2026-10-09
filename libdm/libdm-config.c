@@ -41,6 +41,8 @@ enum {
 	TOK_EOF
 };
 
+#define MAX_SECTION_DEPTH 128
+
 struct parser {
 	const char *fb, *fe;		/* file limits */
 
@@ -54,6 +56,7 @@ struct parser {
 	const char *key;        /* last obtained key */
 	unsigned ignored_creation_time;
 	unsigned section_indent;
+	unsigned depth;
 	const char *stop_after_section;
 };
 
@@ -385,10 +388,13 @@ static int _write_config(const struct dm_config_node *n, int only_one,
 		if (!_line_start(out))
 			return_0;
 		if (strchr(n->key, '#') || strchr(n->key, '"') || strchr(n->key, '!')) {
+			size_t elen;
 			escaped_key = alloca(dm_escaped_len(n->key) + 2);
 			*escaped_key = '"';
 			dm_escape_double_quotes(escaped_key + 1, n->key);
-			strcat(escaped_key, "\"");
+			elen = strlen(escaped_key);
+			escaped_key[elen] = '"';
+			escaped_key[elen + 1] = '\0';
 		}
 		line_append("%s%s", space, escaped_key ? escaped_key : n->key);
 		escaped_key = NULL;
@@ -521,11 +527,18 @@ static char *_dup_string_tok(struct parser *p)
 static struct dm_config_node *_file(struct parser *p)
 {
 	struct dm_config_node root = { 0 };
+	struct dm_config_node *cn;
+
 	root.key = "<root>";
 
 	while (p->t != TOK_EOF)
 		if (!_section(p, &root))
 			return_NULL;
+
+	/* Clear dangling parent pointers to stack variable */
+	for (cn = root.child; cn; cn = cn->sib)
+		cn->parent = NULL;
+
 	return root.child;
 }
 
@@ -645,13 +658,23 @@ static struct dm_config_node *_section(struct parser *p, struct dm_config_node *
 		return_NULL;
 
 	if (p->t == TOK_SECTION_B) {
+		if (p->depth >= MAX_SECTION_DEPTH) {
+			log_error("Parse error at byte %" PRIptrdiff_t " (line %d): "
+				  "maximum section nesting depth exceeded.",
+				  p->tb - p->fb + 1, p->line);
+			return NULL;
+		}
 		if (p->stop_after_section)
 			++p->section_indent;
 		match(TOK_SECTION_B);
+		p->depth++;
 		while (p->t != TOK_SECTION_E) {
-			if (!(_section(p, root)))
+			if (!(_section(p, root))) {
+				p->depth--;
 				return_NULL;
+			}
 		}
+		p->depth--;
 		match(TOK_SECTION_E);
 		if (p->stop_after_section && (--p->section_indent == 1)) {
 			if (!strcmp(str, p->stop_after_section)) {
@@ -1027,10 +1050,10 @@ static char *_dup_tok(struct parser *p)
 
 /*
  * node_lookup_fn is either:
- *   _find_config_node to perform a lookup starting from a given config_node 
+ *   _find_config_node to perform a lookup starting from a given config_node
  *   in a config_tree;
  * or
- *   _find_first_config_node to find the first config_node in a set of 
+ *   _find_first_config_node to find the first config_node in a set of
  *   cascaded trees.
  */
 typedef const struct dm_config_node *node_lookup_fn(const void *start, const char *path);
@@ -1403,57 +1426,79 @@ __attribute__((nonnull(1, 2)))
 static struct dm_config_value *_clone_config_value(struct dm_pool *mem,
 						   const struct dm_config_value *v)
 {
-	struct dm_config_value *new_cv;
+	struct dm_config_value *head = NULL, *new_cv, *tail = NULL;
 
-	if (v->type == DM_CFG_STRING) {
-		if (!(new_cv = _create_str_value(mem, v->v.str, strlen(v->v.str)))) {
-			log_error("Failed to clone string config value.");
-			return NULL;
+	while (v) {
+		if (v->type == DM_CFG_STRING) {
+			if (!(new_cv = _create_str_value(mem, v->v.str, strlen(v->v.str)))) {
+				log_error("Failed to clone string config value.");
+				return NULL;
+			}
+		} else {
+			if (!(new_cv = _create_value(mem))) {
+				log_error("Failed to clone config value.");
+				return NULL;
+			}
+			new_cv->v = v->v;
 		}
-	} else {
-		if (!(new_cv = _create_value(mem))) {
-			log_error("Failed to clone config value.");
-			return NULL;
-		}
-		new_cv->v = v->v;
+
+		new_cv->type = v->type;
+		new_cv->format_flags = v->format_flags;
+
+		if (!head)
+			head = new_cv;
+		else
+			tail->next = new_cv;
+		tail = new_cv;
+
+		v = v->next;
 	}
 
-	new_cv->type = v->type;
-	new_cv->format_flags = v->format_flags;
-
-	if (v->next && !(new_cv->next = _clone_config_value(mem, v->next)))
-		return_NULL;
-
-	return new_cv;
+	return head;
 }
 
 struct dm_config_node *dm_config_clone_node_with_mem(struct dm_pool *mem, const struct dm_config_node *cn, int siblings)
 {
-	struct dm_config_node *new_cn;
+	struct dm_config_node *head = NULL, *new_cn, *tail = NULL;
 
 	if (!cn) {
 		log_error("Cannot clone NULL config node.");
 		return NULL;
 	}
 
-	if (!(new_cn = _create_node(mem, cn->key, cn->key ? strlen(cn->key) : 0))) {
-		log_error("Failed to clone config node.");
-		return NULL;
-	}
+	do {
+		if (!(new_cn = _create_node(mem, cn->key, cn->key ? strlen(cn->key) : 0))) {
+			log_error("Failed to clone config node.");
+			return NULL;
+		}
 
-	new_cn->id = cn->id;
+		new_cn->id = cn->id;
 
-	if ((cn->v && !(new_cn->v = _clone_config_value(mem, cn->v))) ||
-	    (cn->child && !(new_cn->child = dm_config_clone_node_with_mem(mem, cn->child, 1))) ||
-	    (siblings && cn->sib && !(new_cn->sib = dm_config_clone_node_with_mem(mem, cn->sib, siblings))))
-		return_NULL; /* 'new_cn' released with mem pool */
+		if ((cn->v && !(new_cn->v = _clone_config_value(mem, cn->v))) ||
+		    (cn->child && !(new_cn->child = dm_config_clone_node_with_mem(mem, cn->child, 1))))
+			return_NULL; /* 'new_cn' released with mem pool */
 
-	return new_cn;
+		if (new_cn->child) {
+			struct dm_config_node *c;
+			for (c = new_cn->child; c; c = c->sib)
+				c->parent = new_cn;
+		}
+
+		if (!head)
+			head = new_cn;
+		else
+			tail->sib = new_cn;
+		tail = new_cn;
+
+		cn = cn->sib;
+	} while (siblings && cn);
+
+	return head;
 }
 
-struct dm_config_node *dm_config_clone_node(struct dm_config_tree *cft, const struct dm_config_node *cn, int sib)
+struct dm_config_node *dm_config_clone_node(struct dm_config_tree *cft, const struct dm_config_node *cn, int siblings)
 {
-	return dm_config_clone_node_with_mem(cft->mem, cn, sib);
+	return dm_config_clone_node_with_mem(cft->mem, cn, siblings);
 }
 
 struct dm_config_node *dm_config_create_node(struct dm_config_tree *cft, const char *key)
@@ -1504,8 +1549,10 @@ static int _override_path(const char *path, struct dm_config_node *node, void *b
 	dummy.child = cft->root;
 	if (!(target = _find_or_make_node(cft->mem, &dummy, path, 0)))
 		return_0;
-	if (!(target->v = _clone_config_value(cft->mem, node->v)))
-		return_0;
+	if (node->v) {
+		if (!(target->v = _clone_config_value(cft->mem, node->v)))
+			return_0;
+	}
 	cft->root = dummy.child;
 	/* Clear dangling parent pointers to stack variable */
 	for (cn = cft->root; cn; cn = cn->sib)

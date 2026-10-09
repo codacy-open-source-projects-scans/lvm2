@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2003-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2003-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_CMDLINE_H
-#define _LVM_CMDLINE_H
+#ifndef LVM2_CMDLINE_H
+#define LVM2_CMDLINE_H
 
 struct cmd_context;
 
@@ -33,8 +33,8 @@ void *cmdlib_lvm2_init(unsigned static_compile, unsigned threaded);
 void lvm_fin(struct cmd_context *cmd);
 
 struct cmd_context *init_lvm(unsigned set_connections, unsigned set_filters, unsigned threaded);
-int lvm_register_commands(struct cmd_context *cmdtool, const char *name);
-int lvm_split(char *str, int *argc, char **argv, int max);
+int lvm_register_commands(struct cmd_context *cmd, const char *run_name);
+int lvm_split(char *str, int *argc, char **argv, unsigned max);
 int lvm_run_command(struct cmd_context *cmd, int argc, char **argv);
 int lvm_return_code(int ret);
 int lvm_shell(struct cmd_context *cmd, struct cmdline_context *cmdline);

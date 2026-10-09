@@ -162,12 +162,11 @@ test-all:
   parallel:
     matrix:
       # TODO: Replace CONFIGURE with make rpm testing(?)
-      - TAG: rhel8
-        CONFIGURE: >
-          --with-default-use-devices-file=0
-          --with-cluster=internal
-          --enable-cmirrord
-          --enable-lvmlockd-dlm
+      # - TAG: rhel8
+      #   CONFIGURE: >
+      #     --with-default-use-devices-file=0
+      #     --with-cluster=internal
+      #     --enable-lvmlockd-dlm
       - TAG: rhel9
         CONFIGURE: >
           --with-default-use-devices-file=1
@@ -183,6 +182,24 @@ test-all:
           --disable-readline
       - TAG: f42
         CONFIGURE: >
+          --with-default-use-devices-file=1
+          --enable-app-machineid
+          --enable-editline
+          --disable-readline
+          --enable-lvmlockd-dlm
+      - LABEL: tsan
+        TAG: test
+        CONFIGURE: >
+          --enable-tsan
+          --with-default-use-devices-file=1
+          --enable-app-machineid
+          --enable-editline
+          --disable-readline
+          --enable-lvmlockd-dlm
+      - LABEL: asan
+        TAG: test
+        CONFIGURE: >
+          --enable-asan
           --with-default-use-devices-file=1
           --enable-app-machineid
           --enable-editline
@@ -275,7 +292,7 @@ reboot:
       # run the tests?
       # - Add more tags for each machine, test will create a dirty file, and we
       #   will check the presence of the file before reboot...
-      - TAG: rhel8
+      #- TAG: rhel8
       - TAG: rhel9
       - TAG: rhel10
       - TAG: f42

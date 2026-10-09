@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2007 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -16,15 +16,15 @@
 /*
  * This file must be included first by every library source file.
  */
-#ifndef _DM_LIB_H
-#define _DM_LIB_H
+#ifndef DM_LIB_H
+#define DM_LIB_H
 
 /*
  * Symbol export control macros
  *
  *   DM_EXPORT_NEW_SYMBOL(rettype, func, ver)
  *   DM_EXPORT_SYMBOL(func,ver)
- *   DM_EXPORT_SYMBOL_BASE(func,ver)
+ *   DM_EXPORT_SYMBOL_BASE(func)
  *
  * For functions that have multiple implementations these macros control
  * symbol export and versioning.
@@ -37,8 +37,9 @@
  * macro DM_EXPORT_SYMBOL to export the function and bind it to the
  * specified version string.
  *
- * Since versioning is only available when compiling with GCC the entire
- * compatibility version should be enclosed in '#if defined(GNU_SYMVER)',
+ * Since versioning is only available with compilers supporting GNU symbol
+ * versioning (GCC and Clang) the entire compatibility version should be
+ * enclosed in '#if defined(GNU_SYMVER)',
  * for example:
  *
  *   DM_EXPORT_NEW_SYMBOL(int, dm_foo, 1_02_107)(int bar)
@@ -76,16 +77,16 @@
 	__attribute__((__symver__( #func "@Base" )))
 #  endif
 # endif
-#ifndef DM_EXPORT_NEW_SYMBOL
-#define DM_EXPORT_NEW_SYMBOL(rettype, func, ver) \
+# ifndef DM_EXPORT_NEW_SYMBOL
+#  define DM_EXPORT_NEW_SYMBOL(rettype, func, ver) \
 	__typeof__(func) func ##_v ##ver; \
 	__asm__(".symver " #func "_v" #ver ", " #func "@@DM_" #ver ); \
 	rettype func ##_v ##ver
-#define DM_EXPORT_SYMBOL(func, ver) \
+#  define DM_EXPORT_SYMBOL(func, ver) \
 	__asm__(".symver " #func "_v" #ver ", " #func "@DM_" #ver );
-#define DM_EXPORT_SYMBOL_BASE(func) \
+#  define DM_EXPORT_SYMBOL_BASE(func) \
 	__asm__(".symver " #func "_base, " #func "@Base" );
-#endif
+# endif
 #else
 #define DM_EXPORT_NEW_SYMBOL(rettype, func, ver) rettype func
 #define DM_EXPORT_SYMBOL(func, ver)

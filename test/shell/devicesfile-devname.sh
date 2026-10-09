@@ -53,14 +53,14 @@ grep "$dev3" "$DF"
 vgcreate $vg1 "$dev1" "$dev2"
 
 # PVID with dashes for matching pvs -o+uuid output
-OPVID1=`pvs "$dev1" --noheading -o uuid | awk '{print $1}'`
-OPVID2=`pvs "$dev2" --noheading -o uuid | awk '{print $1}'`
-OPVID3=`pvs "$dev3" --noheading -o uuid | awk '{print $1}'`
+OPVID1=$(pvs "$dev1" --noheadings -o uuid | awk '{print $1}')
+OPVID2=$(pvs "$dev2" --noheadings -o uuid | awk '{print $1}')
+OPVID3=$(pvs "$dev3" --noheadings -o uuid | awk '{print $1}')
 
 # PVID without dashes for matching devices file fields
-PVID1=`pvs "$dev1" --noheading -o uuid | tr -d - | awk '{print $1}'`
-PVID2=`pvs "$dev2" --noheading -o uuid | tr -d - | awk '{print $1}'`
-PVID3=`pvs "$dev3" --noheading -o uuid | tr -d - | awk '{print $1}'`
+PVID1=$(pvs "$dev1" --noheadings -o uuid | tr -d - | awk '{print $1}')
+PVID2=$(pvs "$dev2" --noheadings -o uuid | tr -d - | awk '{print $1}')
+PVID3=$(pvs "$dev3" --noheadings -o uuid | tr -d - | awk '{print $1}')
 
 lvmdevices --deldev "$dev3"
 
@@ -384,8 +384,8 @@ cat "$DF"
 
 # edit DF idname&devname, s/dev1/dev2/, creating two entries with same devname
 
-sed -e "s|DEVNAME=$dev1|DEVNAME=$dev2|" tmp1.devices > "$DF"
-sed -e "s|IDNAME=$dev1|IDNAME=$dev2|" tmp1.devices > "$DF"
+sed -e "s|DEVNAME=$dev1|DEVNAME=$dev2|" tmp1.devices > tmp2.devices
+sed -e "s|IDNAME=$dev1|IDNAME=$dev2|" tmp2.devices > "$DF"
 cat "$DF"
 # pvs reports correct info
 pvs -o+uuid | tee pvs.out
@@ -403,8 +403,8 @@ grep "DEVNAME=$dev2" out
 grep "IDNAME=$dev2" out
 cat "$DF"
 
-sed -e "s|DEVNAME=$dev1|DEVNAME=$dev2|" tmp1.devices > "$DF"
-sed -e "s|IDNAME=$dev1|IDNAME=$dev2|" tmp1.devices > "$DF"
+sed -e "s|DEVNAME=$dev1|DEVNAME=$dev2|" tmp1.devices > tmp2.devices
+sed -e "s|IDNAME=$dev1|IDNAME=$dev2|" tmp2.devices > "$DF"
 cat "$DF"
 # lvmdevices fixes the DF
 lvmdevices --update
@@ -560,11 +560,11 @@ vgcreate $vg1 "$dev1"
 vgcreate $vg2 "$dev2"
 
 # PVID with dashes for matching pvs -o+uuid output
-OPVID1=`pvs "$dev1" --noheading -o uuid | awk '{print $1}'`
-OPVID2=`pvs "$dev2" --noheading -o uuid | awk '{print $1}'`
+OPVID1=$(pvs "$dev1" --noheadings -o uuid | awk '{print $1}')
+OPVID2=$(pvs "$dev2" --noheadings -o uuid | awk '{print $1}')
 # PVID without dashes for matching devices file fields
-PVID1=`pvs "$dev1" --noheading -o uuid | tr -d - | awk '{print $1}'`
-PVID2=`pvs "$dev2" --noheading -o uuid | tr -d - | awk '{print $1}'`
+PVID1=$(pvs "$dev1" --noheadings -o uuid | tr -d - | awk '{print $1}')
+PVID2=$(pvs "$dev2" --noheadings -o uuid | tr -d - | awk '{print $1}')
 
 NODEV=${dev1}12345
 
@@ -607,7 +607,7 @@ sed -e "s|DEVNAME=$dev1|DEVNAME=.|" "$ORIG" > tmp1.devices
 sed -e "s|IDNAME=$dev1|IDNAME=.|" tmp1.devices > "$DF"
 pvs
 lvmdevices
-pvcreate -ff --yes --uuid "$PVID1" --norestorefile $dev1
+pvcreate -ff --yes --uuid "$PVID1" --norestorefile "$dev1"
 grep "$PVID1" "$DF" |tee out
 grep "DEVNAME=$dev1" out
 grep "IDNAME=$dev1" out
@@ -640,12 +640,12 @@ cat "$DF"
 cp "$DF" "$ORIG"
 
 # PVID with dashes for matching pvs -o+uuid output
-OPVID1=`pvs "$dev1" --noheading -o uuid | awk '{print $1}'`
-OPVID2=`pvs "$dev2" --noheading -o uuid | awk '{print $1}'`
+OPVID1=$(pvs "$dev1" --noheadings -o uuid | awk '{print $1}')
+OPVID2=$(pvs "$dev2" --noheadings -o uuid | awk '{print $1}')
 
 # PVID without dashes for matching devices file fields
-PVID1=`pvs "$dev1" --noheading -o uuid | tr -d - | awk '{print $1}'`
-PVID2=`pvs "$dev2" --noheading -o uuid | tr -d - | awk '{print $1}'`
+PVID1=$(pvs "$dev1" --noheadings -o uuid | tr -d - | awk '{print $1}')
+PVID2=$(pvs "$dev2" --noheadings -o uuid | tr -d - | awk '{print $1}')
 
 aux mdadm_create --metadata=1.0 --level 1 --raid-devices=2 "$dev3" "$dev4"
 mddev=$(< MD_DEV)

@@ -47,11 +47,6 @@ Utility to deactivate block devices
 .
 .SH C
 .PD 0
-.\" CONDITION_BEGIN cmirrord.8
-.TP 20
-.B cmirrord
-cluster mirror log daemon
-.\" CONDITION_END cmirrord.8
 .TP 20
 .B config
 Display and manipulate configuration information
@@ -94,7 +89,7 @@ List available metadata formats
 .\" CONDITION_BEGIN fsadm.8
 .TP 20
 .B fsadm
-Utility to resize or check filesystem on a device
+Utility to resize or check a filesystem on a device
 .\" CONDITION_END fsadm.8
 .TP 20
 .B fullreport
@@ -297,7 +292,7 @@ Change volume group attributes
 Check the consistency of volume group(s)
 .TP 20
 .B vgconvert
-Change volume group metadata format
+Removed: vgconvert has been removed along with the lvm1 format
 .TP 20
 .B vgcreate
 Create a volume group
@@ -318,7 +313,7 @@ Register exported volume group with system
 Import a VG from cloned PVs
 .TP 20
 .B vgimportdevices
-Add devices for a VG to the devices file.
+Add devices for a VG to the devices file
 .TP 20
 .B vgmerge
 Merge volume groups

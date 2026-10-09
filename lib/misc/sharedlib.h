@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2002-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2002-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2006 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,11 +13,12 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_SHAREDLIB_H
-#define _LVM_SHAREDLIB_H
+#ifndef LVM_SHAREDLIB_H
+#define LVM_SHAREDLIB_H
 
-#include "lib/config/config.h"
-#include <dlfcn.h>
+#include <stddef.h>
+
+struct cmd_context;
 
 void get_shared_library_path(struct cmd_context *cmd, const char *libname,
 			     char *path, size_t path_len);

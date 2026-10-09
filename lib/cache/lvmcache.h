@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2008 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_CACHE_H
-#define _LVM_CACHE_H
+#ifndef LVM_CACHE_H
+#define LVM_CACHE_H
 
 #include "lib/device/dev-cache.h"
 #include "lib/device/dev-type.h"
@@ -49,7 +49,7 @@ struct lvmcache_vgsummary {
 	const char *vgname;
 	char vgid[ID_LEN + 1];
 	uint64_t vgstatus;
-	char *creation_host;
+	const char *creation_host;
 	const char *system_id;
 	const char *lock_type;
 	uint32_t seqno;
@@ -72,6 +72,7 @@ int lvmcache_label_rescan_vg_rw(struct cmd_context *cmd, const char *vgname, con
 int lvmcache_label_reopen_vg_rw(struct cmd_context *cmd, const char *vgname, const char *vgid);
 
 /* Add/delete a device */
+__attribute__((nonnull(1, 2, 3, 4)))
 struct lvmcache_info *lvmcache_add(struct cmd_context *cmd, struct labeller *labeller, const char *pvid,
                                    struct device *dev, uint64_t label_sector,
                                    const char *vgname, const char *vgid,
@@ -94,7 +95,7 @@ int lvmcache_lookup_mda(struct lvmcache_vgsummary *vgsummary);
 struct lvmcache_vginfo *lvmcache_vginfo_from_vgname(const char *vgname,
 					   const char *vgid);
 struct lvmcache_vginfo *lvmcache_vginfo_from_vgid(const char *vgid);
-struct lvmcache_info *lvmcache_info_from_pvid(const char *pvid, struct device *dev, int valid_only);
+struct lvmcache_info *lvmcache_info_from_pvid(const char *pvid_arg, struct device *dev, int valid_only);
 struct lvmcache_info *lvmcache_info_from_pv_id(const struct id *pv_id, struct device *dev, int valid_only);
 const char *lvmcache_vgname_from_vgid(struct dm_pool *mem, const char *vgid);
 const char *lvmcache_vgid_from_vgname(struct cmd_context *cmd, const char *vgname);
@@ -128,12 +129,12 @@ int lvmcache_add_da(struct lvmcache_info *info, uint64_t start, uint64_t size);
 int lvmcache_add_ba(struct lvmcache_info *info, uint64_t start, uint64_t size);
 
 void lvmcache_set_ext_version(struct lvmcache_info *info, uint32_t version);
-uint32_t lvmcache_ext_version(struct lvmcache_info *info);
+uint32_t lvmcache_ext_version(const struct lvmcache_info *info);
 void lvmcache_set_ext_flags(struct lvmcache_info *info, uint32_t flags);
-uint32_t lvmcache_ext_flags(struct lvmcache_info *info);
+uint32_t lvmcache_ext_flags(const struct lvmcache_info *info);
 
 const struct format_type *lvmcache_fmt(struct lvmcache_info *info);
-struct label *lvmcache_get_label(struct lvmcache_info *info);
+struct label *lvmcache_get_label(const struct lvmcache_info *info);
 struct label *lvmcache_get_dev_label(struct device *dev);
 int lvmcache_has_dev_info(struct device *dev);
 
@@ -154,11 +155,11 @@ int lvmcache_foreach_ba(struct lvmcache_info *info,
 			void *baton);
 
 int lvmcache_foreach_pv(struct lvmcache_vginfo *vginfo,
-			int (*fun)(struct lvmcache_info *, void *), void * baton);
+			int (*fun)(struct lvmcache_info *, void *), void *baton);
 
-uint64_t lvmcache_device_size(struct lvmcache_info *info);
+uint64_t lvmcache_device_size(const struct lvmcache_info *info);
 void lvmcache_set_device_size(struct lvmcache_info *info, uint64_t size);
-struct device *lvmcache_device(struct lvmcache_info *info);
+struct device *lvmcache_device(const struct lvmcache_info *info);
 unsigned lvmcache_mda_count(struct lvmcache_info *info);
 uint64_t lvmcache_smallest_mda_size(struct lvmcache_info *info);
 

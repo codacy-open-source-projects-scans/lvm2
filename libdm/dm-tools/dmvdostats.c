@@ -21,6 +21,7 @@
 #include "libdm/misc/dm-logging.h"
 #include "libdm/libdevmapper.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -83,8 +84,9 @@ static uint64_t _parse_uint64(const char *str)
 	char *end;
 	uint64_t val;
 
+	errno = 0;
 	val = strtoull(str, &end, 10);
-	if (end == str || *end != '\0')
+	if (end == str || *end != '\0' || errno == ERANGE)
 		return 0;
 
 	return val;
@@ -325,7 +327,8 @@ static void _print_verbose(const char *name,
 			   const struct _verbose_derived *vd)
 {
 	unsigned i;
-	size_t max_len, na;
+	size_t max_len;
+	int na;
 	char buf[MAX_FMT_BUF];
 	const char *l;
 
@@ -617,6 +620,9 @@ int vdostats_report_device(struct dm_report *rh,
 	struct vdo_report_obj obj;
 	struct dm_vdo_stats_full *full;
 	int r;
+
+	if (!stats_str)
+		return 0;
 
 	full = dm_vdo_stats_parse(NULL, stats_str, DM_VDO_STATS_BASIC);
 	if (!full)

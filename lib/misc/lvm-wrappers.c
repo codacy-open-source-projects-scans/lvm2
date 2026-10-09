@@ -16,11 +16,15 @@
 
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 
 #ifdef UDEV_SYNC_SUPPORT
 #include <libudev.h>
 
-struct udev *_udev;
+#define UDEV_CONTROL_PATH "/run/udev/control"
+#define UDEV_LEGACY_QUEUE_PATH "/dev/.udev/queue.bin"
+
+static struct udev *_udev;
 
 int udev_init_library_context(void)
 {
@@ -30,14 +34,11 @@ int udev_init_library_context(void)
 	if (getenv("DM_DISABLE_UDEV"))
 		return 0;
 
+	if (!udev_is_running())
+		return 0;
+
 	if (!(_udev = udev_new())) {
 		log_error("Failed to create udev library context.");
-		return 0;
-	}
-
-	if (!udev_is_running()) {
-		udev_unref(_udev);
-		_udev = NULL;
 		return 0;
 	}
 
@@ -53,25 +54,10 @@ void udev_fin_library_context(void)
 
 int udev_is_running(void)
 {
-	struct udev_queue *udev_queue;
-	int r;
+	if ((access(UDEV_CONTROL_PATH, F_OK) >= 0) ||
+	    (access(UDEV_LEGACY_QUEUE_PATH, F_OK) >= 0))
+		return 1;
 
-	if (!_udev) {
-		log_debug_activation("Udev library context not set.");
-		goto bad;
-	}
-
-	if (!(udev_queue = udev_queue_new(_udev))) {
-		log_debug_activation("Could not get udev state.");
-		goto bad;
-	}
-
-	r = udev_queue_get_udev_is_active(udev_queue);
-	udev_queue_unref(udev_queue);
-
-	return r;
-
-bad:
 	log_debug_activation("Assuming udev is not running.");
 	return 0;
 }
@@ -111,12 +97,25 @@ int lvm_getpagesize(void)
 
 int read_urandom(void *buf, size_t len)
 {
+	struct stat st;
 	int fd;
 
-	/* FIXME: we should stat here, and handle other cases */
-	/* FIXME: use common _io() routine's open/read/close */
 	if ((fd = open("/dev/urandom", O_RDONLY)) < 0) {
-		log_sys_error("open", "read_urandom: /dev/urandom");
+		log_sys_error("open", "/dev/urandom");
+		return 0;
+	}
+
+	if (fstat(fd, &st)) {
+		log_sys_error("fstat", "/dev/urandom");
+		if (close(fd))
+			stack;
+		return 0;
+	}
+
+	if (!S_ISCHR(st.st_mode)) {
+		log_error("/dev/urandom is not a character device.");
+		if (close(fd))
+			stack;
 		return 0;
 	}
 
@@ -147,19 +146,13 @@ unsigned lvm_even_rand(unsigned *seed, unsigned max)
 {
 	unsigned r, ret;
 
+	if (!max)
+		return 0;
+
 	do {
 		r = (unsigned) rand_r(seed);
 		ret = r % max;
 	} while (r - ret > RAND_MAX - max);
 
 	return ret;
-}
-
-int cmirrord_is_running(void)
-{
-#ifdef CMIRRORD_PIDFILE
-	return dm_daemon_is_running(CMIRRORD_PIDFILE);
-#else
-	return 0;
-#endif
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2018 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -92,7 +92,7 @@ struct lv_activate_opts {
 	const struct logical_volume *component_lv;
 };
 
-void set_activation(int activation, int silent);
+void set_activation(int act, int silent);
 int activation(void);
 
 int driver_version(char *version, size_t size);
@@ -115,7 +115,7 @@ int dev_dm_uuid(struct cmd_context *cmd, struct device *dev,
                 char *uuid_buf, size_t uuid_buf_size);
 
 int raid4_is_supported(struct cmd_context *cmd, const struct segment_type *segtype);
-int lvm_dm_prefix_check(int major, int minor, const char *prefix);
+int lvm_dm_prefix_check(uint32_t major, uint32_t minor, const char *prefix);
 int list_segment_modules(struct dm_pool *mem, const struct lv_segment *seg,
 			 struct dm_list *modules);
 int list_lv_modules(struct dm_pool *mem, const struct logical_volume *lv,
@@ -124,7 +124,6 @@ int list_lv_modules(struct dm_pool *mem, const struct logical_volume *lv,
 void activation_release(void);
 void activation_exit(void);
 
-/* int lv_suspend(struct cmd_context *cmd, const char *lvid_s); */
 int lv_suspend_if_active(struct cmd_context *cmd, const char *lvid_s, unsigned origin_only, unsigned exclusive,
 			 const struct logical_volume *lv, const struct logical_volume *lv_pre);
 int lv_resume(struct cmd_context *cmd, const char *lvid_s, unsigned origin_only, const struct logical_volume *lv);
@@ -137,8 +136,6 @@ int lv_activate_with_filter(struct cmd_context *cmd, const char *lvid_s, int exc
 int lv_deactivate(struct cmd_context *cmd, const char *lvid_s, const struct logical_volume *lv);
 
 int lv_mknodes(struct cmd_context *cmd, const struct logical_volume *lv);
-
-int lv_deactivate_any_missing_subdevs(const struct logical_volume *lv);
 
 int activate_lv(struct cmd_context *cmd, const struct logical_volume *lv);
 int activate_lv_temporary(struct cmd_context *cmd, struct logical_volume *lv);
@@ -181,9 +178,9 @@ int lv_activation_filter(struct cmd_context *cmd, const char *lvid_s,
  * Checks against the auto_activation_volume_list and
  * returns 1 if the LV should be activated, 0 otherwise.
  */
-int lv_passes_auto_activation_filter(struct cmd_context *cmd, struct logical_volume *lv);
+int lv_passes_auto_activation_filter(struct cmd_context *cmd, const struct logical_volume *lv);
 
-int lv_check_transient(struct logical_volume *lv);
+int lv_check_transient(const struct logical_volume *lv);
 /*
  * Returns 1 if percent has been set, else 0.
  */
@@ -208,11 +205,11 @@ int lv_cache_status(const struct logical_volume *cache_lv,
 		    struct lv_status_cache **status);
 int lv_thin_device_id(const struct logical_volume *lv, uint32_t *device_id);
 int lv_thin_status(const struct logical_volume *lv, int flush,
-		   struct lv_status_thin **status);
+		   struct lv_status_thin **thin_status);
 int lv_thin_pool_status(const struct logical_volume *lv, int flush,
-			struct lv_status_thin_pool **status);
+			struct lv_status_thin_pool **thin_pool_status);
 int lv_vdo_pool_status(const struct logical_volume *lv, int flush,
-		       struct lv_status_vdo **status);
+		       struct lv_status_vdo **vdo_status);
 int lv_vdo_pool_percent(const struct logical_volume *lv, dm_percent_t *percent);
 int lv_vdo_pool_size_config(const struct logical_volume *lv,
 			    struct vdo_pool_size_config *cfg);
@@ -294,13 +291,10 @@ void fs_unlock(void);
 #define TARGET_NAME_VDO "vdo"
 #define TARGET_NAME_ZERO "zero"
 
-#define MODULE_NAME_CLUSTERED_MIRROR "clog"
 #define MODULE_NAME_CACHE TARGET_NAME_CACHE
 #define MODULE_NAME_WRITECACHE TARGET_NAME_WRITECACHE
 #define MODULE_NAME_INTEGRITY TARGET_NAME_INTEGRITY
 #define MODULE_NAME_ERROR TARGET_NAME_ERROR
-#define MODULE_NAME_LOG_CLUSTERED "log-clustered"
-#define MODULE_NAME_LOG_USERSPACE "log-userspace"
 #define MODULE_NAME_MIRROR TARGET_NAME_MIRROR
 #define MODULE_NAME_SNAPSHOT TARGET_NAME_SNAPSHOT
 #define MODULE_NAME_RAID TARGET_NAME_RAID

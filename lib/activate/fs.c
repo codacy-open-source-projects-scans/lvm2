@@ -78,7 +78,8 @@ static int _rm_dir(const char *dev_dir, const char *vg_name)
 
 	if (dir_exists(vg_path) && dm_is_empty_dir(vg_path)) {
 		log_very_verbose("Removing directory %s", vg_path);
-		rmdir(vg_path);
+		if (rmdir(vg_path) && errno != ENOENT)
+			log_sys_debug("rmdir", vg_path);
 	}
 
 	return 1;
@@ -163,8 +164,8 @@ static int _mk_link(const char *dev_dir, const char *vg_name,
 	 * (as well as any existing LVM2 symlink). */
 	if (!lstat(lvm1_group_path, &buf)) {
 		if (!S_ISCHR(buf.st_mode)) {
-			log_error("Non-LVM1 character device found at %s",
-				  lvm1_group_path);
+			log_warn("WARNING: Non-LVM1 character device found at %s.",
+				 lvm1_group_path);
 		} else {
 			_rm_blks(vg_path);
 
@@ -318,7 +319,7 @@ struct fs_op_parms {
 	char *lv_name;
 	char *dev;
 	char *old_lv_name;
-	char names[0];
+	char names[];
 };
 
 static void _store_str(char **pos, char **ptr, const char *str)

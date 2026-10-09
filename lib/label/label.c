@@ -189,7 +189,7 @@ int label_write(struct device *dev, struct label *label)
 	}
 
 	if ((LABEL_SIZE + (label->sector << SECTOR_SHIFT)) > LABEL_SCAN_SIZE) {
-		log_error("Label sector %" PRIu64 " beyond range (%ld)",
+		log_error("Label sector %" PRIu64 " beyond range (%llu).",
 			  label->sector, LABEL_SCAN_SECTORS);
 		return 0;
 	}
@@ -211,7 +211,11 @@ int label_write(struct device *dev, struct label *label)
 			 htole32(lh->offset_xl));
 
 	if (!label_scan_open(dev)) {
-		log_error("Failed to open device %s", dev_name(dev));
+		if (dev_scan_io_failed(dev))
+			log_debug_devs("Skipping label write on %s: excluded after earlier I/O error.",
+				       dev_name(dev));
+		else
+			log_error("Failed to open device %s", dev_name(dev));
 		return 0;
 	}
 
@@ -760,7 +764,7 @@ static int _scan_list(struct cmd_context *cmd, struct dev_filter *f,
 }
 
 /*
- * We don't know ahead of time if we will find some VG metadata 
+ * We don't know ahead of time if we will find some VG metadata
  * that is larger than the total size of the bcache, which would
  * prevent us from reading/writing the VG since we do not dynamically
  * increase the bcache size when we find it's too small.  In these
@@ -873,7 +877,7 @@ void prepare_open_file_limit(struct cmd_context *cmd, unsigned int num_devs)
  * anything has the pvid, even a dev that might be filtered.
  */
 
-int label_scan_for_pvid(struct cmd_context *cmd, char *pvid, struct device **dev_out)
+int label_scan_for_pvid(struct cmd_context *cmd, const char *pvid, struct device **dev_out)
 {
 	char buf[LABEL_SIZE] __attribute__((aligned(8)));
 	struct dev_iter *iter;
@@ -971,7 +975,7 @@ static void _clear_scan_state(struct cmd_context *cmd, struct dm_list *devs)
  * system startup when the hints file is not useful, but he pvs_online
  * files can provide a similar optimization to the hints file.
  */
- 
+
 int label_scan_vg_online(struct cmd_context *cmd, const char *vgname,
 			 int *found_none, int *found_all, int *found_incomplete)
 {
@@ -1128,7 +1132,8 @@ int label_scan_vg_online(struct cmd_context *cmd, const char *vgname,
 
 	log_debug("label_scan_vg_online: read and filter devs");
 
-	label_scan_setup_bcache();
+	if (!label_scan_setup_bcache())
+		goto_bad;
 
 	dm_list_iterate_items_safe(devl, devl2, &devs) {
 		struct dev_use *du;
@@ -1304,8 +1309,15 @@ int label_scan(struct cmd_context *cmd)
 		return 0;
 	}
 	while ((dev = dev_iter_get(cmd, iter))) {
-		if (!(devl = zalloc(sizeof(*devl))))
-			continue;
+		if (!(devl = zalloc(sizeof(*devl)))) {
+			log_error("Failed to allocate device list entry.");
+			dev_iter_destroy(iter);
+			dm_list_iterate_items_safe(devl, devl2, &all_devs) {
+				dm_list_del(&devl->list);
+				free(devl);
+			}
+			return 0;
+		}
 		devl->dev = dev;
 		dm_list_add(&all_devs, &devl->list);
 
@@ -1543,6 +1555,16 @@ int label_read_pvid(struct device *dev, int *has_pvid)
 
 	pvh = (struct pv_header *)(buf + SECTOR_SIZE + sizeof(struct label_header));
 	memcpy(dev->pvid, pvh->pv_uuid, ID_LEN);
+
+	if (!id_valid((const struct id *)dev->pvid)) {
+		log_warn("WARNING: Ignoring PV with invalid UUID on %s.", dev_name(dev));
+		memset(dev->pvid, 0, sizeof(dev->pvid));
+		if (has_pvid)
+			*has_pvid = 0;
+		label_scan_invalidate(dev);
+		return 1;
+	}
+
 	return 1;
 }
 
@@ -1608,6 +1630,9 @@ int label_scan_devs_excl(struct cmd_context *cmd, struct dev_filter *f, struct d
 {
 	struct device_list *devl;
 	int failed = 0;
+
+	if (!label_scan_setup_bcache())
+		return_0;
 
 	dm_list_iterate_items(devl, devs) {
 		label_scan_invalidate(devl->dev);
@@ -1754,6 +1779,12 @@ int label_scan_dev(struct cmd_context *cmd, struct device *dev)
 
 int label_scan_open(struct device *dev)
 {
+	if (dev_scan_io_failed(dev)) {
+		log_debug_devs("Skipping open on %s: excluded after earlier I/O error.",
+			       dev_name(dev));
+		return 0;
+	}
+
 	if (!_in_bcache(dev))
 		return _scan_dev_open(dev);
 	return 1;
@@ -1862,6 +1893,17 @@ int label_scan_reopen_rw(struct device *dev)
 
 bool dev_read_bytes(struct device *dev, uint64_t start, size_t len, void *data)
 {
+	/*
+	 * Skip further reads after scan I/O failure (see DEV_SCAN_NOT_READ).
+	 * Filters still treat I/O errors like "not found"; full fix is tri-state
+	 * propagation in dev_is_partitioned() and related checks.
+	 */
+	if (dev_scan_io_failed(dev)) {
+		log_debug_devs("Skipping read from %s: excluded after earlier I/O error.",
+			       dev_name(dev));
+		return false;
+	}
+
 	if (!scan_bcache) {
 		/* Should not happen */
 		log_error("dev_read bcache not set up %s", dev_name(dev));
@@ -1871,15 +1913,17 @@ bool dev_read_bytes(struct device *dev, uint64_t start, size_t len, void *data)
 	if (dev->bcache_di < 0) {
 		/* This is not often needed. */
 		if (!label_scan_open(dev)) {
-			log_error("Error opening device %s for reading at %llu length %u.",
-				  dev_name(dev), (unsigned long long)start, (uint32_t)len);
+			log_error("Error opening device %s for reading at %llu length %zu.",
+				  dev_name(dev), (unsigned long long)start, len);
+			dev->flags |= DEV_SCAN_NOT_READ;
 			return false;
 		}
 	}
 
 	if (!bcache_read_bytes(scan_bcache, dev->bcache_di, start, len, data)) {
-		log_error("Error reading device %s at %llu length %u.",
-			  dev_name(dev), (unsigned long long)start, (uint32_t)len);
+		log_error("Error reading device %s at %llu length %zu.",
+			  dev_name(dev), (unsigned long long)start, len);
+		dev->flags |= DEV_SCAN_NOT_READ;
 		label_scan_invalidate(dev);
 		return false;
 	}
@@ -1912,23 +1956,27 @@ bool dev_write_bytes(struct device *dev, uint64_t start, size_t len, void *data)
 		/* This is not often needed. */
 		dev->flags |= DEV_BCACHE_WRITE;
 		if (!label_scan_open(dev)) {
-			log_error("Error opening device %s for writing at %llu length %u.",
-				  dev_name(dev), (unsigned long long)start, (uint32_t)len);
+			if (dev_scan_io_failed(dev))
+				log_debug_devs("Skipping write to %s: excluded after earlier I/O error.",
+					       dev_name(dev));
+			else
+				log_error("Error opening device %s for writing at %llu length %zu.",
+					  dev_name(dev), (unsigned long long)start, len);
 			return false;
 		}
 	}
 
 	if (!bcache_write_bytes(scan_bcache, dev->bcache_di, start, len, data)) {
-		log_error("Error writing device %s at %llu length %u.",
-			  dev_name(dev), (unsigned long long)start, (uint32_t)len);
+		log_error("Error writing device %s at %llu length %zu.",
+			  dev_name(dev), (unsigned long long)start, len);
 		dev_unset_last_byte(dev);
 		label_scan_invalidate(dev);
 		return false;
 	}
 
 	if (!bcache_flush(scan_bcache)) {
-		log_error("Error writing device %s at %llu length %u.",
-			  dev_name(dev), (unsigned long long)start, (uint32_t)len);
+		log_error("Error writing device %s at %llu length %zu.",
+			  dev_name(dev), (unsigned long long)start, len);
 		dev_unset_last_byte(dev);
 		label_scan_invalidate(dev);
 		return false;
@@ -1978,8 +2026,12 @@ bool dev_set_bytes(struct device *dev, uint64_t start, size_t len, uint8_t val)
 		/* This is not often needed. */
 		dev->flags |= DEV_BCACHE_WRITE;
 		if (!label_scan_open(dev)) {
-			log_error("Error opening device %s for writing at %llu length %u.",
-				  dev_name(dev), (unsigned long long)start, (uint32_t)len);
+			if (dev_scan_io_failed(dev))
+				log_debug_devs("Skipping write to %s: excluded after earlier I/O error.",
+					       dev_name(dev));
+			else
+				log_error("Error opening device %s for writing at %llu length %zu.",
+					  dev_name(dev), (unsigned long long)start, len);
 			return false;
 		}
 	}
@@ -1992,14 +2044,14 @@ bool dev_set_bytes(struct device *dev, uint64_t start, size_t len, uint8_t val)
 		rv = bcache_set_bytes(scan_bcache, dev->bcache_di, start, len, val);
 
 	if (!rv) {
-		log_error("Error writing device value %s at %llu length %u.",
-			  dev_name(dev), (unsigned long long)start, (uint32_t)len);
+		log_error("Error writing device value %s at %llu length %zu.",
+			  dev_name(dev), (unsigned long long)start, len);
 		goto fail;
 	}
 
 	if (!bcache_flush(scan_bcache)) {
-		log_error("Error writing device %s at %llu length %u.",
-			  dev_name(dev), (unsigned long long)start, (uint32_t)len);
+		log_error("Error writing device %s at %llu length %zu.",
+			  dev_name(dev), (unsigned long long)start, len);
 		goto fail;
 	}
 

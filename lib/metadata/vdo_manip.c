@@ -16,6 +16,7 @@
 #include "lib/metadata/metadata.h"
 #include "lib/locking/locking.h"
 #include "lib/misc/lvm-string.h"
+#include "lib/misc/lvm-signal.h"
 #include "lib/commands/toolcontext.h"
 #include "lib/display/display.h"
 #include "lib/metadata/segtype.h"
@@ -35,7 +36,7 @@
 #define VDO_BASE_MEMORY_OVERHEAD_MB		38	/* 38 MiB VDO memory overhead */
 
 /* Memory calculation fractions */
-#define VDO_SWAP_USAGE_FRACTION			2/3	/* Use 2/3 of available swap */
+#define VDO_SWAP_USAGE_FRACTION(x)		(((x) * 2) / 3)	/* Use 2/3 of available swap */
 
 /* Buffer sizes */
 #define VDO_FORMAT_OUTPUT_BUF_SIZE		256	/* For output line from vdoformat */
@@ -293,7 +294,11 @@ static int _format_vdo_pool_data_lv(struct logical_volume *data_lv,
 					   (*logical_size / 2));
 	}
 
-	slabbits = 31 - clz(vtp->slab_size_mb / DM_VDO_BLOCK_SIZE * 2 * 1024);  /* to KiB / block_size */
+	/* Convert slab_size from MiB to KiB / block_size */
+	slabbits = vtp->slab_size_mb / DM_VDO_BLOCK_SIZE * 2 * 1024;
+	if (!slabbits)
+		slabbits = 1;
+	slabbits = 31 - clz(slabbits);
 	log_debug("Slab size %s converted to %u bits.",
 		  display_mb_size(data_lv->vg->cmd, vtp->slab_size_mb), slabbits);
 
@@ -302,13 +307,13 @@ static int _format_vdo_pool_data_lv(struct logical_volume *data_lv,
 
 	/* Convert size to GiB units or one of these strings: 0.25, 0.50, 0.75 */
 	argv[++args] = buf_pos;
-	if (vtp->index_memory_size_mb >= 1024)
+	if (vtp->index_memory_size_mb > 768)
 		buf_pos += 1 + dm_snprintf(buf_pos, 30, "--uds-memory-size=%u",
-					   vtp->index_memory_size_mb / 1024);
+					   (vtp->index_memory_size_mb + 1023) / 1024);
 	else
 		buf_pos += 1 + dm_snprintf(buf_pos, 30, "--uds-memory-size=0.%2u",
-					   (vtp->index_memory_size_mb < 512) ? 25U :
-					   (vtp->index_memory_size_mb < 768) ? 50U : 75U);
+					   (vtp->index_memory_size_mb <= 256) ? 25U :
+					   (vtp->index_memory_size_mb <= 512) ? 50U : 75U);
 
 	if (vtp->use_sparse_index)
 		argv[++args] = "--uds-sparse";
@@ -363,6 +368,98 @@ static int _format_vdo_pool_data_lv(struct logical_volume *data_lv,
 	return 1;
 }
 
+static int _format_vdo_pool_kernel(struct logical_volume *vdo_pool_lv)
+{
+	struct cmd_context *cmd = vdo_pool_lv->vg->cmd;
+	struct lv_status_vdo *vdo_status;
+	enum dm_vdo_index_state index_state;
+	int r = 0;
+
+	if (!vg_write(vdo_pool_lv->vg) || !vg_commit(vdo_pool_lv->vg))
+		return_0;
+
+	if (!activate_lv(cmd, vdo_pool_lv)) {
+		log_error("Failed to activate VDO pool %s for kernel formatting.",
+			  display_lvname(vdo_pool_lv));
+		goto out;
+	}
+
+	sync_local_dev_names(cmd);
+
+	/* Wait for the UDS index to finish initializing */
+	for (;;) {
+		if (!lv_vdo_pool_status(vdo_pool_lv, 0, &vdo_status)) {
+			stack;
+			break;
+		}
+
+		index_state = vdo_status->vdo->index_state;
+		dm_pool_destroy(vdo_status->mem);
+
+		if (index_state == DM_VDO_INDEX_ERROR) {
+			log_error("Failed to format VDO pool %s, index error.",
+				  display_lvname(vdo_pool_lv));
+			break;
+		}
+
+		log_verbose("VDO pool %s index state: %s.",
+			    display_lvname(vdo_pool_lv),
+			    get_vdo_index_state_name(index_state));
+
+		if (index_state != DM_VDO_INDEX_OPENING) {
+			r = 1; /* Initialized */
+			break;
+		}
+
+		/* 50ms: formatting is typically fast, avoid unnecessary delay */
+		if (!sigint_usleep(50000)) {
+			log_warn("WARNING: Interrupted waiting for VDO index on %s.",
+				 display_lvname(vdo_pool_lv));
+			break;
+		}
+	}
+
+	if (!deactivate_lv(cmd, vdo_pool_lv)) {
+		log_error("Failed to deactivate VDO pool %s after kernel formatting.",
+			  display_lvname(vdo_pool_lv));
+		r = 0;
+	}
+out:
+	vdo_pool_lv->status &= ~LV_VDOFORMAT;
+
+	if (!vg_write(vdo_pool_lv->vg) || !vg_commit(vdo_pool_lv->vg))
+		return_0;
+
+	sync_local_dev_names(cmd);
+
+	return r;
+}
+
+/*
+ * Validate the data LV is large enough to hold a VDO pool for the given
+ * target parameters.  On success, optionally returns the computed pool
+ * geometry in @info.  Returns 0 and logs the minimum required pool size
+ * when the LV is too small.
+ */
+int vdo_pool_validate_size(struct logical_volume *lv,
+			   const struct dm_vdo_target_params *vtp,
+			   struct vdo_pool_info *info)
+{
+	struct vdo_pool_info local = { 0 };
+
+	if (!info)
+		info = &local;
+
+	if (vdo_pool_info(lv->size, vtp, info))
+		return 1;
+
+	log_error("Pool %s is too small (%s) for the given VDO configuration, needs at least %s.",
+		  display_lvname(lv),
+		  display_size(lv->vg->cmd, lv->size),
+		  display_size(lv->vg->cmd, info->min_pool_sectors));
+	return 0;
+}
+
 /*
  * convert_vdo_pool_lv
  * @data_lv
@@ -384,8 +481,11 @@ int convert_vdo_pool_lv(struct logical_volume *data_lv,
 	struct logical_volume *vdo_pool_lv = data_lv;
 	const struct segment_type *vdo_pool_segtype;
 	struct lv_segment *vdo_pool_seg;
+	struct vdo_pool_info pinfo = { 0 };
 	uint64_t vdo_logical_size = 0;
 	uint64_t adjust;
+	unsigned attrs = 0;
+	int use_kernel = format && vtp->use_kernel_format;
 
 	if (!(vdo_pool_segtype = get_segtype_from_string(cmd, SEG_TYPE_NAME_VDO_POOL)))
 		return_0;
@@ -408,9 +508,63 @@ int convert_vdo_pool_lv(struct logical_volume *data_lv,
 	if (format) {
 		if (test_mode()) {
 			log_verbose("Test mode: Skipping formatting of VDO pool volume.");
-		} else if (!_format_vdo_pool_data_lv(data_lv, vtp, &vdo_logical_size)) {
-			log_error("Cannot format VDO pool volume %s.", display_lvname(data_lv));
-			return 0;
+		} else {
+			if (use_kernel &&
+			    (!vdo_pool_segtype->ops->target_present ||
+			     !vdo_pool_segtype->ops->target_present(cmd, NULL, &attrs) ||
+			     !(attrs & VDO_FEATURE_KERNEL_FORMAT))) {
+				log_verbose("Kernel formatting requires VDO target version 9.2.0 or newer, using vdoformat.");
+				use_kernel = 0;
+			}
+
+			/*
+			 * Validate size before wipe/format for both kernel and
+			 * userspace paths.  Undersized pools used to reach
+			 * vdoformat and fail with "Out of space" after partial
+			 * conversion (rename, metadata LV, spare).
+			 */
+			if (!vdo_pool_validate_size(data_lv, vtp, &pinfo))
+				return 0;
+
+			if (use_kernel) {
+				/* Kernel decides to format if the first 4k are zeroes */
+				if (!activate_and_wipe_lv(data_lv, WIPE_MODE_DO_ZERO, 0, PROMPT)) {
+					log_error("Aborting. Failed to wipe first 4 KiB of VDO pool volume %s.",
+						  display_lvname(data_lv));
+					return 0;
+				}
+
+				if (!*virtual_extents)
+					vdo_logical_size = pinfo.data_blocks * DM_VDO_BLOCK_SIZE;
+			} else {
+				/*
+				 * The data LV was zeroed and its known signatures
+				 * wiped before we got here.  On thin-provisioned
+				 * storage that zeroing may have only now provisioned
+				 * the first chunk, making a stale signature from a
+				 * previously freed block visible.  wipe_lv() reads
+				 * signatures before it zeroes, so it could not have
+				 * seen that one.  Wipe again, just before userspace
+				 * vdoformat runs its own blkid check, so that what
+				 * vdoformat would find is already gone.
+				 */
+				if (!wipe_lv(data_lv, (struct wipe_params)
+					     {
+						     .do_wipe_signatures = 1,
+						     .yes = 1,
+						     .force = DONT_PROMPT,
+					     })) {
+					log_error("Failed to wipe signatures on VDO data volume %s.",
+						  display_lvname(data_lv));
+					return 0;
+				}
+
+				/* Traditional userspace vdoformat */
+				if (!_format_vdo_pool_data_lv(data_lv, vtp, &vdo_logical_size)) {
+					log_error("Cannot format VDO pool volume %s.", display_lvname(data_lv));
+					return 0;
+				}
+			}
 		}
 	} else {
 		log_verbose("Skipping VDO formatting %s.", display_lvname(data_lv));
@@ -451,11 +605,39 @@ int convert_vdo_pool_lv(struct logical_volume *data_lv,
 	vdo_pool_seg = first_seg(vdo_pool_lv);
 	vdo_pool_seg->segtype = vdo_pool_segtype;
 	vdo_pool_seg->vdo_params = *vtp;
+	vdo_pool_seg->vdo_params.use_kernel_format = use_kernel;
 	vdo_pool_seg->vdo_pool_header_size = vdo_pool_header_size;
 	vdo_pool_seg->vdo_pool_virtual_extents = *virtual_extents;
 
 	vdo_pool_lv->status |= LV_VDO_POOL;
 	data_lv->status |= LV_VDO_POOL_DATA;
+
+	if (use_kernel) {
+		vdo_pool_lv->status |= LV_VDOFORMAT;
+
+		if (!_format_vdo_pool_kernel(vdo_pool_lv)) {
+			log_error("Failed to kernel format VDO pool %s, reverting.",
+				  display_lvname(vdo_pool_lv));
+			vdo_pool_lv->status &= ~LV_VDO_POOL;
+			data_lv->status &= ~LV_VDO_POOL_DATA;
+			if (!remove_layer_from_lv(vdo_pool_lv, data_lv))
+				return_0;
+			if (!lv_remove(data_lv))
+				return_0;
+			if (!vg_write(vdo_pool_lv->vg) || !vg_commit(vdo_pool_lv->vg))
+				return_0;
+			return 0;
+		}
+
+		log_print_unless_silent("  The VDO volume can address %s in %u data slabs, each %s.",
+					display_size(cmd, (uint64_t)pinfo.data_per_slab * pinfo.slab_count * DM_VDO_BLOCK_SIZE),
+					pinfo.slab_count,
+					display_mb_size(cmd, vtp->slab_size_mb));
+		log_print_unless_silent("  It can grow to address at most %s of physical storage in %u slabs.",
+					display_mb_size(cmd, (uint64_t)DM_VDO_SLABS_MAXIMUM * vtp->slab_size_mb),
+					(unsigned)DM_VDO_SLABS_MAXIMUM);
+		log_print_unless_silent("  If a larger maximum size might be needed, use bigger slabs.");
+	}
 
 	return 1;
 }
@@ -498,6 +680,15 @@ struct logical_volume *convert_vdo_lv(struct logical_volume *lv,
 			  lvc.segtype->name);
 		return NULL;
 	}
+
+	/*
+	 * Fail before renaming / formatting when the LV cannot hold a VDO
+	 * pool for the configured slab/index sizes.  Validated even in test
+	 * mode so a dry run reports the same size failure as a real run.
+	 */
+	if (vcp->do_zero &&
+	    !vdo_pool_validate_size(lv, &vcp->vdo_params, NULL))
+		return NULL;
 
 	if (!vcp->lv_name) {
 		/* TODO: maybe  _vpool would be sufficient */
@@ -604,11 +795,11 @@ int fill_vdo_target_params(struct cmd_context *cmd,
 	/* TODO: Maybe add more lvm cmdline switches to set profile settings. */
 
 	vtp->use_compression =
-		find_config_tree_int(cmd, allocation_vdo_use_compression_CFG, profile);
+		find_config_tree_bool(cmd, allocation_vdo_use_compression_CFG, profile);
 	vtp->use_deduplication =
-		find_config_tree_int(cmd, allocation_vdo_use_deduplication_CFG, profile);
+		find_config_tree_bool(cmd, allocation_vdo_use_deduplication_CFG, profile);
 	vtp->use_metadata_hints =
-		find_config_tree_int(cmd, allocation_vdo_use_metadata_hints_CFG, profile);
+		find_config_tree_bool(cmd, allocation_vdo_use_metadata_hints_CFG, profile);
 	vtp->minimum_io_size =
 		find_config_tree_int(cmd, allocation_vdo_minimum_io_size_CFG, profile) >> SECTOR_SHIFT;
 	vtp->block_map_cache_size_mb =
@@ -616,7 +807,9 @@ int fill_vdo_target_params(struct cmd_context *cmd,
 	vtp->block_map_era_length =
 		find_config_tree_int(cmd, allocation_vdo_block_map_era_length_CFG, profile);
 	vtp->use_sparse_index =
-		find_config_tree_int(cmd, allocation_vdo_use_sparse_index_CFG, profile);
+		find_config_tree_bool(cmd, allocation_vdo_use_sparse_index_CFG, profile);
+	vtp->use_kernel_format =
+		find_config_tree_bool(cmd, allocation_vdo_use_kernel_format_CFG, profile);
 	vtp->index_memory_size_mb =
 		find_config_tree_int64(cmd, allocation_vdo_index_memory_size_mb_CFG, profile);
 	vtp->slab_size_mb =
@@ -730,8 +923,8 @@ static int _get_memory_info(struct cmd_context *cmd, uint64_t *total_mb, uint64_
 	(void)fclose(fp);
 
 	/* use at most 2/3 of swap space to keep machine usable */
-	can_swap = (anon_pages + shmem) * VDO_SWAP_USAGE_FRACTION;
-	swap_free = swap_free * VDO_SWAP_USAGE_FRACTION;
+	can_swap = VDO_SWAP_USAGE_FRACTION(anon_pages + shmem);
+	swap_free = VDO_SWAP_USAGE_FRACTION(swap_free);
 
 	if (can_swap > swap_free)
 		can_swap = swap_free;

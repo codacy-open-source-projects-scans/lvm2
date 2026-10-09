@@ -150,7 +150,7 @@ vgextend \(em Add physical volumes to a volume group
 .
 .nh
 .TP
-\fBvgextend\fP \fIposition_args\fP
+\fBvgextend\fP \fIoption_args\fP \fIposition_args\fP
 [ \fIoption_args\fP ]
 .hy
 .
@@ -219,18 +219,28 @@ will initialize them. In this case pvcreate options can be used, e.g.
 .O_pvmetadatacopies
 ]
 .br
-[
-.O_reportformat
-]
-.br
-[
+[ COMMON_OPTIONS ]
+.RE
+.
+.P
+\(em
+.P
+.
+.B vgextend
 .O_restoremissing
-]
-.br
+\fIVG\fP \fIPV\fP\ .\|.\|.\&
+.RS
 [ COMMON_OPTIONS ]
 .RE
 .P
 \(em
+.P
+Common options for command:
+.RS
+[
+.O_reportformat
+]
+.RE
 .P
 Common options for lvm:
 .RS
@@ -350,7 +360,7 @@ messages sent to the log file and/or syslog (if configured).
 .O_devices
 Restricts the devices that are visible and accessible to the command.
 Devices not listed will appear to be missing. This option can be
-repeated, or accepts a comma separated list of devices. This overrides
+repeated, or accepts a comma-separated list of devices. This overrides
 the devices file.
 .
 .TP
@@ -457,7 +467,7 @@ the report/output_format setting in \fBlvm.conf\fP(5).
 If there is more than one report per command, each report is prefixed
 with the report name for identification. \fBjson\fP produces report
 output in JSON format. \fBjson_std\fP produces report output in
-JSON format which is more compliant with JSON standard.
+JSON format which is more compliant with the JSON standard.
 See \fBlvmreport\fP(7) for more information.
 .
 .TP
@@ -490,7 +500,7 @@ answer yes. Use with extreme caution.
 .
 .TP
 .O_zero
-Controls if the first 4 sectors (2048 bytes) of the device are wiped.
+Controls whether the first 4 sectors (2048 bytes) of the device are wiped.
 The default is to wipe these sectors unless either or both of
 --restorefile or --uuid are specified.
 .
@@ -506,7 +516,7 @@ Physical Volume name, a device path under /dev.
 For commands managing physical extents, a PV positional arg
 generally accepts a suffix indicating a range (or multiple ranges)
 of physical extents (PEs). When the first PE is omitted, it defaults
-to the start of the device, and when the last PE is omitted it defaults to end.
+to the start of the device, and when the last PE is omitted it defaults to the end.
 .br
 Start and end range (inclusive):
 \fIPV\fP[\fB:\fP\fIPE\fP\fB-\fP\fIPE\fP]\ .\|.\|.\&

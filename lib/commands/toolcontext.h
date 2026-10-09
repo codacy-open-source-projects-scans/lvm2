@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2009 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_TOOLCONTEXT_H
-#define _LVM_TOOLCONTEXT_H
+#ifndef LVM_TOOLCONTEXT_H
+#define LVM_TOOLCONTEXT_H
 
 #include "lib/device/dev-cache.h"
 #include "lib/device/dev-type.h"
@@ -52,7 +52,6 @@ struct config_info {
 	uint64_t unit_factor;
 	mode_t umask;
 	char unit_type;
-	char _padding[1];
 };
 
 struct dm_config_tree;
@@ -140,7 +139,6 @@ struct cmd_context {
 	/*
 	 * Switches.
 	 */
-	unsigned is_long_lived:1;		/* optimises persistent_filter handling */
 	unsigned is_interactive:1;
 	unsigned running_on_valgrind:1;
 	unsigned check_pv_dev_sizes:1;
@@ -188,7 +186,6 @@ struct cmd_context {
 	unsigned mirror_warn_printed:1;		/* command already printed warning about non-monitored mirrors */
 	unsigned expect_missing_vg_device:1;	/* when reading a vg it's expected that a dev for a pv isn't found */
 	unsigned can_use_one_scan:1;
-	unsigned is_clvmd:1;
 	unsigned md_component_detection:1;
 	unsigned use_full_md_check:1;
 	unsigned is_activating:1;
@@ -296,14 +293,15 @@ struct cmd_context {
 	struct dm_pool *pending_delete_mem;	/* memory pool for pending deletes */
 	struct vdo_convert_params *lvcreate_vcp;/* params for LV to VDO conversion */
 	uint32_t lockopt;			/* LOCKOPT_* from --lockopt string */
+	int lockopt_retries;			/* retries=N from --lockopt, -1 if not set */
+	int lockopt_removeretry;		/* removeretry=SECONDS from --lockopt, 0 if not set */
 };
 
 /*
  * system_dir may be NULL to use the default value.
  * The environment variable LVM_SYSTEM_DIR always takes precedence.
  */
-struct cmd_context *create_toolcontext(unsigned is_clvmd,
-				       const char *system_dir,
+struct cmd_context *create_toolcontext(const char *system_dir,
 				       unsigned set_buffering,
 				       unsigned threaded,
 				       unsigned set_connections,

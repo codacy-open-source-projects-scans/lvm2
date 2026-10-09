@@ -49,7 +49,6 @@
 #define r10_r01  _takeover_from_raid10_to_raid01
 #define r10_r0m  _takeover_from_raid10_to_raid0_meta
 #define r10_r1   _takeover_from_raid10_to_raid1
-#define r10_r10  _takeover_from_raid10_to_raid10
 #define r10_str  _takeover_from_raid10_to_striped
 #define r1__lin  _takeover_from_raid1_to_linear
 #define r1__mir  _takeover_from_raid1_to_mirrored
@@ -85,7 +84,7 @@ static const uint64_t _segtype_index[] = {
 	SEG_RAID0,
 	SEG_RAID0_META,
 	SEG_RAID1,
-	SEG_RAID4 | SEG_RAID5_LS | SEG_RAID5_LA | SEG_RAID5_LS | SEG_RAID5_RS | SEG_RAID5_RA | SEG_RAID5_N,
+	SEG_RAID4 | SEG_RAID5_LS | SEG_RAID5_LA | SEG_RAID5_RS | SEG_RAID5_RA | SEG_RAID5_N,
 	SEG_RAID6_LS_6 | SEG_RAID6_LA_6 | SEG_RAID6_RS_6 | SEG_RAID6_RA_6 | SEG_RAID6_NC | SEG_RAID6_NR | SEG_RAID6_ZR | SEG_RAID6_N_6,
 	0, // SEG_RAID10_NEAR | SEG_RAID10_FAR | SEG_RAID10_OFFSET,
 	0, // SEG_RAID01,

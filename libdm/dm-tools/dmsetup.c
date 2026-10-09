@@ -41,11 +41,14 @@
 #include <time.h>
 #include <unistd.h>
 
+#if defined(ENABLE_ASAN) && defined(__linux__)
+#  include <sys/ptrace.h>
+#endif
+
 #ifdef UDEV_SYNC_SUPPORT
 #  include <sys/types.h>
 #  include <sys/ipc.h>
 #  include <sys/sem.h>
-#  include <libudev.h>
 #endif
 
 /* FIXME Unused so far */
@@ -1520,9 +1523,9 @@ static int _rename(CMD_ARGS)
 static int _message(CMD_ARGS)
 {
 	int r = 0, i;
-	size_t sz = 1;
+	size_t sz = 1, len;
 	struct dm_task *dmt;
-	char *str;
+	char *str, *pos;
 	const char *response;
 	uint64_t sector;
 	char *endptr;
@@ -1565,10 +1568,13 @@ static int _message(CMD_ARGS)
 		goto out;
 	}
 
+	pos = str;
 	for (i = 0; i < argc; i++) {
 		if (i)
-			strcat(str, " ");
-		strcat(str, argv[i]);
+			*pos++ = ' ';
+		len = strlen(argv[i]);
+		memcpy(pos, argv[i], len);
+		pos += len;
 	}
 
 	i = dm_task_set_message(dmt, str);
@@ -3700,8 +3706,9 @@ static int _dm_stats_region_id_disp(struct dm_report *rh,
 		group_id = dm_stats_get_group_id(dms, dm_stats_get_current_region(dms));
 		if (!dm_stats_get_group_descriptor(dms, group_id, &group_buf))
 			return 0;
-		/* group_buf will disappear with the current handle */
+		/* group_buf is caller-owned; copy it out and release it. */
 		repstr = dm_pool_strdup(mem, group_buf);
+		dm_stats_buffer_destroy((struct dm_stats *) dms, group_buf);
 		dm_report_field_set_value(field, repstr, &group_id);
 		return 1;
 	}
@@ -4609,7 +4616,9 @@ static int _report_init(const struct command *cmd, const char *subcommand)
 	if (columns_as_rows)
 		flags |= DM_REPORT_OUTPUT_COLUMNS_AS_ROWS;
 
-	if (cmd && !strcmp(cmd->name, "vdostats")) {
+	if ((cmd && !strcmp(cmd->name, "vdostats")) ||
+	    _base_command_type == VDOSTATS_TYPE ||
+	    (_command && !strcmp(_command, "vdostats"))) {
 		const char *vdo_opts =
 			(_switches[OPTIONS_ARG] && _string_args[OPTIONS_ARG])
 				? options : NULL;
@@ -4971,7 +4980,7 @@ static int _do_stats_create_regions(struct dm_stats *dms,
 				    const char *program_id,
 				    const char *user_data)
 {
-	uint64_t this_start = 0, this_len = len, region_id = UINT64_C(0);
+	uint64_t this_start = 0, this_len = len, region_id[1] = { 0 };
 	const char *devname = NULL, *histogram = _string_args[BOUNDS_ARG];
 	int r = 0, count = 0, precise = _switches[PRECISE_ARG];
 	struct dm_histogram *bounds = NULL; /* histogram bounds */
@@ -5015,7 +5024,7 @@ static int _do_stats_create_regions(struct dm_stats *dms,
 		goto_out;
 
 	if (!segments || (info.target_count == 1))
-		region_ids = &region_id;
+		region_ids = region_id;
 	else
 		if (!(region_ids = malloc(info.target_count * sizeof(*region_ids)))) {
 			log_error("Failed to allocated region IDs.");
@@ -5064,7 +5073,7 @@ static int _do_stats_create_regions(struct dm_stats *dms,
 					  _string_args[ALIAS_ARG]);
 
 out:
-	if (region_ids != &region_id)
+	if (region_ids != region_id)
 		free(region_ids);
 
 	dm_task_destroy(dmt);
@@ -5247,8 +5256,6 @@ static int _stats_create_file(CMD_ARGS)
 
 	if (close(fd))
 		log_sys_debug("close", abspath);
-
-	fd = -1;
 
 	for (region = regions; *region != DM_STATS_REGIONS_ALL; region++)
 		count++;
@@ -5994,8 +6001,25 @@ static const struct command _stats_subcommands[] = {
 static int _dmsetup_help(CMD_ARGS);
 
 /*
- * VDO stats command.
+ * VDO stats: whitelist sysfs-derived names (alnum and . _ - +) before
+ * dm_task_set_name() so path separators and other unexpected characters
+ * are rejected.
  */
+/* coverity[+tainted_string_sanitize_content:arg-0] */
+static int _vdo_dm_name_valid(const char *name)
+{
+	unsigned char c;
+
+	if (!*name)
+		return 0;
+
+	while ((c = *name++))
+		if (!isalnum(c) && c != '.' && c != '_' &&
+		    c != '-' && c != '+')
+			return 0;
+
+	return 1;
+}
 
 static int _vdostats_process_device(const char *name)
 {
@@ -6051,9 +6075,119 @@ out:
 	return r;
 }
 
+/* Resolve a device name to its (major, minor) without emitting ioctl noise. */
+static int _vdo_device_info(const char *name, int *major, int *minor)
+{
+	struct dm_task *dmt;
+	struct dm_info info;
+	int r = 0;
+
+	if (!(dmt = dm_task_create(DM_DEVICE_INFO)))
+		return_0;
+	if (!dm_task_set_name(dmt, name))
+		goto_out;
+	if (!dm_task_no_open_count(dmt))
+		goto_out;
+	if (!_task_run(dmt))
+		goto_out;
+	if (dm_task_get_info(dmt, &info) && info.exists) {
+		*major = info.major;
+		*minor = info.minor;
+		r = 1;
+	}
+out:
+	dm_task_destroy(dmt);
+	return r;
+}
+
+#define VDO_WALK_MAX_DEPTH 64
+#define VDO_WALK_MAX_SEEN 256
+
+/* State threaded through the recursive dependency-tree descent below. */
+struct vdo_walk {
+	unsigned depth;			/* current recursion depth */
+	unsigned nseen;			/* number of visited devices */
+	int found;			/* any VDO device reported yet? */
+	uint64_t seen[VDO_WALK_MAX_SEEN]; /* visited devt set (diamond deps) */
+};
+
+/*
+ * Descend the dependency tree below a (major, minor) device and report every
+ * underlying VDO device found.  This lets 'vdostats' accept a device layered
+ * above a VDO (e.g. an LVM VDO LV, or a thin LV whose pool data is a VDO)
+ * instead of requiring the exact name of the hidden VDO pool device.
+ */
+static int _vdostats_walk(int major, int minor, struct vdo_walk *w)
+{
+	struct dm_task *dmt;
+	struct dm_deps *deps;
+	char dev_name[PATH_MAX];
+	unsigned i, j;
+	int cmajor, cminor;
+	int r = 0;
+
+	if (w->depth >= VDO_WALK_MAX_DEPTH) {
+		log_debug("Reached VDO_WALK_MAX_DEPTH (%u).", VDO_WALK_MAX_DEPTH);
+		return 1;
+	}
+
+	if (!(dmt = _get_deps_task(major, minor)))
+		return 1; /* no dependencies to descend into */
+
+	if (!(deps = dm_task_get_deps(dmt)))
+		goto_out;
+
+	for (i = 0; i < deps->count; i++) {
+		cmajor = (int) MAJOR(deps->device[i]);
+		cminor = (int) MINOR(deps->device[i]);
+
+		/* Only device-mapper devices can be a VDO or stack above one */
+		if (!dm_is_dm_major((uint32_t) cmajor))
+			continue;
+
+		/* Skip already visited devices (diamond dependencies) */
+		for (j = 0; j < w->nseen; j++)
+			if (w->seen[j] == deps->device[i])
+				break;
+
+		if (j < w->nseen)
+			continue;
+
+		if (w->nseen < VDO_WALK_MAX_SEEN)
+			w->seen[w->nseen++] = deps->device[i];
+
+		if (!dm_device_get_name((uint32_t) cmajor, (uint32_t) cminor, 0,
+					dev_name, sizeof(dev_name)))
+			continue;
+
+		if (_vdo_dm_name_valid(dev_name) && _vdo_check_device(dev_name)) {
+			/* Separate multiple verbose reports for readability */
+			if (w->found && _switches[VERBOSE_ARG])
+				putchar('\n');
+			if (!_vdostats_process_device(dev_name))
+				goto_out;
+			w->found = 1;
+		} else {
+			w->depth++;
+			r = _vdostats_walk(cmajor, cminor, w);
+			w->depth--;
+			if (!r)
+				goto_out;
+		}
+	}
+
+	r = 1;
+out:
+	dm_task_destroy(dmt);
+	return r;
+}
+
 static int _vdostats(CMD_ARGS)
 {
 	const char *name = NULL;
+	char vpool_name[PATH_MAX];
+	struct vdo_walk walk = { 0 };
+	int major, minor;
 
 	if (names)
 		name = names->name;
@@ -6064,13 +6198,47 @@ static int _vdostats(CMD_ARGS)
 		name = argv[0];
 	}
 
-	if (!_vdo_check_device(name)) {
-		if (!names)
-			log_error("Device %s is not a VDO device.", name);
-		return names ? 1 : 0;
+	/*
+	 * Enumeration over all existing devices (no device argument):
+	 * report VDO devices and silently skip everything else.
+	 */
+	if (names)
+		return _vdo_check_device(name) ?
+			_vdostats_process_device(name) : 1;
+
+	/* Explicitly named device */
+	if (!_vdo_device_info(name, &major, &minor)) {
+		/*
+		 * Name does not resolve to any device - try the LVM naming
+		 * convention for the hidden VDO pool device '<name>-vpool'.
+		 *
+		 * This is a purely LVM2-specific shortcut: '<name>-vpool' is by
+		 * definition the VDO layer itself, so we only check it directly
+		 * and deliberately do not descend its dependency tree.
+		 */
+		if ((dm_snprintf(vpool_name, sizeof(vpool_name), "%s-vpool",
+				 name) >= 0) &&
+		    _vdo_device_info(vpool_name, &major, &minor) &&
+		    _vdo_check_device(vpool_name))
+			return _vdostats_process_device(vpool_name);
+
+		log_error("Device %s not found.", name);
+		return 0;
 	}
 
-	return _vdostats_process_device(name);
+	/* The named device is itself a VDO device */
+	if (_vdo_check_device(name))
+		return _vdostats_process_device(name);
+
+	/* Otherwise descend to the underlying VDO device(s) */
+	if (!_vdostats_walk(major, minor, &walk))
+		return_0;
+
+	if (walk.found)
+		return 1;
+
+	log_error("Device %s is not a VDO device.", name);
+	return 0;
 }
 
 static const struct command _dmsetup_commands[] = {
@@ -7077,6 +7245,67 @@ static int _do_report_wait(void)
 	return _do_timer_wait();
 }
 
+#ifdef ENABLE_ASAN
+/*
+ * LeakSanitizer's exit-time check starts a helper that ptrace-attaches to
+ * this process.  That fails with EPERM inside a systemd-udevd worker and can
+ * turn a successful udev cookie completion into a non-zero exit.
+ *
+ * Sanitizer defaults hooks (__lsan_default_options) run before the C runtime
+ * is initialised, so they cannot probe anything: getenv() returns NULL there
+ * and file I/O crashes the process.  Instead probe from main(), where
+ * everything works, whether ptrace is actually permitted.  If it is not,
+ * force detect_leaks=0 and re-exec ourselves so that LSan picks the option up
+ * at startup.  ASan and UBSan stay active; only leak detection is turned off.
+ *
+ * The guard variable prevents an endless re-exec loop.
+ */
+#define LSAN_REEXEC_ENV "LVM_LSAN_REEXEC"
+
+static int _ptrace_allowed(void)
+{
+	pid_t pid = fork();
+	int status;
+
+	if (pid < 0)
+		return 1;	/* cannot tell, assume allowed */
+
+	if (!pid) {
+		/* Probe in a child so we do not become traceable ourselves. */
+		if (ptrace(PTRACE_TRACEME, 0, 0, 0) == -1)
+			_exit(1);
+		_exit(0);
+	}
+
+	if (waitpid(pid, &status, 0) < 0)
+		return 1;
+
+	return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+static void _disable_lsan_without_ptrace(char *const argv[])
+{
+	const char *lsan;
+	char opts[256];
+
+	if (getenv(LSAN_REEXEC_ENV) || _ptrace_allowed())
+		return;
+
+	lsan = getenv("LSAN_OPTIONS");
+	if (lsan && *lsan)
+		snprintf(opts, sizeof(opts), "%s:detect_leaks=0", lsan);
+	else
+		snprintf(opts, sizeof(opts), "detect_leaks=0");
+
+	if (setenv("LSAN_OPTIONS", opts, 1) ||
+	    setenv(LSAN_REEXEC_ENV, "1", 1))
+		return;
+
+	execv("/proc/self/exe", argv);
+	/* Re-exec failed: fall back to running with leak detection enabled. */
+}
+#endif
+
 int main(int argc, char **argv)
 {
 	int ret = 1, r;
@@ -7084,6 +7313,10 @@ int main(int argc, char **argv)
 	const struct command *cmd;
 	const char *subcommand = "";
 	int multiple_devices;
+
+#ifdef ENABLE_ASAN
+	_disable_lsan_without_ptrace(argv);
+#endif
 
 	(void) setlocale(LC_ALL, "");
 

@@ -185,6 +185,7 @@ static int _get_val_enum(const struct command_name *cname, int opt_enum)
 {
 	return _update_relative_opt(cname->name, opt_enum, opt_names[opt_enum].val_enum);
 }
+
 /*
  * FIXME: this just replicates the val usage strings
  * that officially lives in vals.h.  Should there
@@ -242,6 +243,10 @@ static void _print_val_man(const struct command_name *cname, int opt_enum, int v
 		return;
 	case pnumber_VAL:
 		printf("[\\fB+\\fP]\\fINumber\\fP");
+		return;
+	case locktype_VAL:
+		/* make substitutes the list of enabled backends (SUBSTVARS) */
+		printf("#LOCKTYPE_ARG#");
 		return;
 	}
 
@@ -729,7 +734,7 @@ static void _print_man_usage(char *lvmname, struct command *cmd)
 			}
 		}
 
-		printf_hyphen(']');
+		_printf_hyphen(']');
 	}
 
 	if (lv_type_bits) {
@@ -863,12 +868,12 @@ static void _print_man_option_desc(const struct command_name *cname, int opt_enu
 	unsigned bi = 0;
 
 	while (*desc) {
-		buf[bi++] = *desc;
-
-		if (bi == DESC_LINE) {
+		if (bi >= (sizeof(buf) - 1)) {
 			log_error("Parsing command defs: print_man_option_desc line too long.");
 			exit(EXIT_FAILURE);
 		}
+
+		buf[bi++] = *desc;
 
 		if (*desc++ != '\n' && *desc)
 			continue;  /* read until '\n' or end of description */
@@ -1061,7 +1066,7 @@ static void _print_man_all_positions_desc(const struct command_name *cname)
 		       "For commands managing physical extents, a PV positional arg\n"
 		       "generally accepts a suffix indicating a range (or multiple ranges)\n"
 		       "of physical extents (PEs). When the first PE is omitted, it defaults\n"
-		       "to the start of the device, and when the last PE is omitted it defaults to end.\n"
+		       "to the start of the device, and when the last PE is omitted it defaults to the end.\n"
                        ".br\n"
 		       "Start and end range (inclusive):\n"
 		       "\\fIPV\\fP[\\fB:\\fP\\fIPE\\fP\\fB-\\fP\\fIPE\\fP]\\ .\\|.\\|.\\&\n"
@@ -1151,7 +1156,7 @@ static void _print_desc_man(const char *desc)
 		printf("%s\n", buf);
 }
 
-static const char *_upper_command_name(char *str)
+static const char *_upper_command_name(const char *str)
 {
 	static char str_upper[32];
 	int i = 0;
@@ -1352,7 +1357,7 @@ static int _print_man(char *name, char *des_file, int secondary)
 			}
 
 			/* listing them all when there's only 1 or 2 is just repetitive */
-			if (cname && cna->variants > 2) {
+			if (cna->variants > 2) {
 				printf(".P\n"
 				       ".na\n");
 				_print_man_all_options_list(cname);
@@ -1434,7 +1439,7 @@ static void _print_man_secondary(char *name)
 	}
 }
 
-static void _print_opt_list(const char *prefix, int *opt_list, int opt_count)
+static void _print_opt_list(const char *prefix, const int *opt_list, int opt_count)
 {
 	int i;
 	int opt_enum;
@@ -1521,6 +1526,7 @@ static int _get_category_index(const char *value)
  * Returns 1 if the field was found, 0 if not found, -1 on error.
  * The value is copied into buf with the trailing newline stripped.
  */
+__attribute__((nonnull(1, 2, 3)))
 static int _read_meta_field(FILE *fp, const char *key,
 			    char *buf, size_t buf_size)
 {
@@ -2227,12 +2233,12 @@ static void _print_man_option_desc_generic(int opt_enum)
 	unsigned bi = 0;
 
 	while (*desc) {
-		buf[bi++] = *desc;
-
-		if (bi == DESC_LINE) {
+		if (bi >= (sizeof(buf) - 1)) {
 			log_error("Parsing command defs: print_man_option_desc line too long.");
 			exit(EXIT_FAILURE);
 		}
+
+		buf[bi++] = *desc;
 
 		if (*desc++ != '\n' && *desc)
 			continue;

@@ -199,11 +199,15 @@ struct dm_config_node *make_text_node(struct dm_config_tree *cft,
 				      struct dm_config_node *pre_sib)
 {
 	struct dm_config_node *cn;
+	struct dm_config_value *cv;
 
-	if (!(cn = make_config_node(cft, key, parent, pre_sib)) ||
-	    !(cn->v = dm_config_create_value(cft)))
-		return NULL;
+	if (!(cv = dm_config_create_value(cft)))
+		return_NULL;
 
+	if (!(cn = make_config_node(cft, key, parent, pre_sib)))
+		return_NULL;
+
+	cn->v = cv;
 	cn->v->type = DM_CFG_STRING;
 	cn->v->v.str = value;
 	return cn;
@@ -216,11 +220,15 @@ struct dm_config_node *make_int_node(struct dm_config_tree *cft,
 				     struct dm_config_node *pre_sib)
 {
 	struct dm_config_node *cn;
+	struct dm_config_value *cv;
 
-	if (!(cn = make_config_node(cft, key, parent, pre_sib)) ||
-	    !(cn->v = dm_config_create_value(cft)))
-		return NULL;
+	if (!(cv = dm_config_create_value(cft)))
+		return_NULL;
 
+	if (!(cn = make_config_node(cft, key, parent, pre_sib)))
+		return_NULL;
+
+	cn->v = cv;
 	cn->v->type = DM_CFG_INT;
 	cn->v->v.i = value;
 	return cn;
@@ -261,16 +269,16 @@ struct dm_config_node *config_make_nodes_v(struct dm_config_tree *cft,
 		if (!strcmp(fmt, FMTd64)) {
 			int64_t value = va_arg(ap, int64_t);
 			if (!(cn = make_int_node(cft, key, value, parent, pre_sib)))
-				return 0;
+				return NULL;
 		} else if (!strcmp(fmt, "%s")) {
 			char *value = va_arg(ap, char *);
 			if (!(cn = make_text_node(cft, key, value, parent, pre_sib)))
-				return 0;
+				return NULL;
 		} else if (!strcmp(fmt, "%t")) {
 			struct dm_config_tree *tree = va_arg(ap, struct dm_config_tree *);
 			cn = dm_config_clone_node(cft, tree->root, 1);
 			if (!cn)
-				return 0;
+				return NULL;
 			cn->key = key;
 			chain_node(cn, parent, pre_sib);
 		} else {
@@ -325,6 +333,10 @@ int compare_value(struct dm_config_value *a, struct dm_config_value *b)
 
 	if (r == 0 && a->next && b->next)
 		r = compare_value(a->next, b->next);
+	if (r == 0 && a->next && !b->next)
+		r = 1;
+	if (r == 0 && !a->next && b->next)
+		r = -1;
 	return r;
 }
 
@@ -337,8 +349,14 @@ int compare_config(struct dm_config_node *a, struct dm_config_node *b)
 		result = 1;
 	if (!a->v && b->v)
 		result = -1;
-	if (a->child && b->child)
-		result = compare_config(a->child, b->child);
+	if (!result) {
+		if (a->child && b->child)
+			result = compare_config(a->child, b->child);
+		else if (a->child)
+			result = 1;
+		else if (b->child)
+			result = -1;
+	}
 
 	if (result) {
 		// DEBUGLOG("config inequality at %s / %s", a->key, b->key);

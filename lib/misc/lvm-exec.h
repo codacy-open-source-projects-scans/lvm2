@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.  
+ * Copyright (C) 2001-2004 Sistina Software, Inc. All rights reserved.
  * Copyright (C) 2004-2011 Red Hat, Inc. All rights reserved.
  *
  * This file is part of LVM2.
@@ -13,8 +13,8 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef _LVM_EXEC_H
-#define _LVM_EXEC_H
+#ifndef LVM_EXEC_H
+#define LVM_EXEC_H
 
 #include "lib/misc/lib.h"
 
@@ -34,11 +34,11 @@ struct cmd_context;
  * \return
  * 1 (success) or 0 (failure).
  */
+__attribute__((nonnull(1, 2)))
 int exec_cmd(struct cmd_context *cmd, const char *const argv[],
 	     int *rstatus, int sync_needed);
 
 
-struct FILE;
 struct pipe_data {
 	FILE *fp;
 	pid_t pid;
