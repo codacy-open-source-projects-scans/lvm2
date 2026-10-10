@@ -1166,6 +1166,10 @@ static int _stats_load_list_rows(struct dm_stats *dms, FILE *list_rows)
 		if (!_stats_parse_list_region(dms, &cur, line))
 			return_0;
 
+		if (cur.region_id > dms->max_region)
+			/* failure validated  _stats_scan_list_response_ids() */
+			continue;
+
 		if (cur.aux_data &&
 		    !_parse_aux_data_group(dms, &cur,
 					   &dms->groups[cur.region_id])) {
@@ -4174,7 +4178,7 @@ static int _stats_create_group(struct dm_stats *dms, dm_bitset_t regions,
 
 	/* force an update of the group tag stored in aux_data */
 	if (!_stats_set_aux(dms, *group_id, dms->regions[*group_id].aux_data))
-		goto bad;
+		goto_bad;
 
 	return 1;
 bad:
@@ -4364,7 +4368,7 @@ int dm_stats_create_group(struct dm_stats *dms, const char *members,
 		log_very_verbose("Creating group with overlapping regions.");
 
 	if (!_stats_create_group(dms, regions, alias, group_id))
-		goto bad;
+		goto_bad;
 
 	return 1;
 
@@ -4534,11 +4538,11 @@ static int _stats_group_file_regions(struct dm_stats *dms, uint64_t *region_ids,
 	if (!members) {
 		log_error("Cannot map file: failed to allocate group "
 			  "descriptor.");
-		return 0;
+		goto bad;
 	}
 
 	if (!_stats_group_tag_fill(dms, regions, members, buflen))
-		goto bad;
+		goto_bad;
 
 	/*
 	 * overlaps should not be possible: overlapping file extents
@@ -4548,12 +4552,13 @@ static int _stats_group_file_regions(struct dm_stats *dms, uint64_t *region_ids,
 		log_very_verbose("Creating group with overlapping regions.");
 
 	if (!_stats_create_group(dms, regions, alias, &group_id))
-		goto bad;
+		goto_bad;
 
 	dm_free(members);
 	return 1;
 bad:
 	dm_free(members);
+	dm_pool_free(dms->mem, regions);
 	return 0;
 }
 
@@ -5080,7 +5085,7 @@ uint64_t *dm_stats_create_regions_from_fd(struct dm_stats *dms, int fd,
 	if (!(regions = _stats_map_file_regions(dms, fd, bounds, precise,
 						DM_STATS_GROUP_NOT_PRESENT,
 						&count, &regroup)))
-		return NULL;
+		return_NULL;
 
 	if (!group)
 		return regions;
