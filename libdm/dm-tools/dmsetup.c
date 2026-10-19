@@ -2384,7 +2384,8 @@ static int _exec_command(const char *name)
 			return 0;
 		}
 
-		args[argc++] = path;
+		args[argc] = path;
+		argc++;
 		args[argc] = NULL;
 	}
 
@@ -6100,7 +6101,7 @@ out:
 	return r;
 }
 
-#define VDO_WALK_MAX_DEPTH 64
+#define VDO_WALK_MAX_DEPTH 64U
 #define VDO_WALK_MAX_SEEN 256
 
 /* State threaded through the recursive dependency-tree descent below. */

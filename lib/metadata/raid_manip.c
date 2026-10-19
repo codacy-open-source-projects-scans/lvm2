@@ -379,6 +379,149 @@ static int _get_dev_health(struct logical_volume *lv, uint32_t *kernel_devs,
 }
 
 /*
+ * dm-raid per-device health char for a raid set component that is alive
+ * but not in-sync (e.g. still recovering).  See dm-raid.c status docs:
+ * 'A' = alive and in-sync, 'a' = alive but not in-sync, 'D' = dead.
+ */
+#define RAID_DEV_HEALTH_ALIVE_NOT_IN_SYNC	'a'
+
+/*
+ * Retry a no-progress status with an exponential backoff -- 50, 100, 200,
+ * 400 ms, ... -- for a ~3 s window in total.  The first probe is quick so an
+ * already-completing transient is caught almost at once, while the doubling
+ * keeps the number of status ioctls (and their debug lines) low when the
+ * target stays stuck for the whole window.
+ */
+#define RAID_IDLE_STATUS_RETRIES	6
+#define RAID_IDLE_STATUS_RETRY_MS	50
+
+/*
+ * Outcome of _raid_status_read_stable().
+ *
+ * RAID_READ_STUCK means the target kept reporting an "idle" action with
+ * out-of-sync legs for the whole retry window instead of starting a
+ * recover, rebuild or resync.  That is either the dead-primary state
+ * _lv_raid_rebuild_or_replace() looks for or a transient the caller
+ * must not act on.  A persistent 0% in-sync with all legs alive is
+ * *not* STUCK: it is handed back as RAID_READ_OK for the caller to judge.
+ */
+enum raid_read_result {
+	RAID_READ_ERROR = 0,	/* read/validation failed; caller reports it */
+	RAID_READ_OK,		/* usable status returned; caller owns the pool */
+	RAID_READ_STUCK,	/* idle + out-of-sync persisted past the retries */
+};
+
+/*
+ * Read RAID status, retrying while the target reports no sync progress: an
+ * "idle" action with out-of-sync legs, or 0% in-sync.  The first may be a
+ * recover, rebuild or resync a moment away from starting (or the
+ * dead-primary state _lv_raid_rebuild_or_replace() looks for);
+ * the second is the 0% dm-raid can report right after a reload while the
+ * legs are already in sync (linux/drivers/md/dm-raid.c rs_get_progress(),
+ * kernel commits 4102d9de6d37 and 41dcf197ad53), and equally a recover or
+ * resync that has not advanced yet.  Only a status whose health string
+ * covers all @expected_count slots is retried: a shorter string omits failed
+ * components, so its 'a' positions cannot be mapped to RAID slots and it is
+ * returned as-is for the caller to reject or skip.
+ *
+ * The caller still validates that the device count matches its segment,
+ * since a mismatched count is handled differently by each caller (skip
+ * versus reject).
+ *
+ * On RAID_READ_OK the caller owns @raid_status and must destroy its pool;
+ * on the other results the pool has already been released.  RAID_READ_ERROR
+ * is not always logged, so the caller must report it.
+ *
+ * Returns: enum raid_read_result.
+ */
+static enum raid_read_result
+_raid_status_read_stable(const struct logical_volume *lv, uint32_t expected_count,
+			 struct lv_status_raid **raid_status)
+{
+	struct dm_status_raid *raid;
+	int retries = RAID_IDLE_STATUS_RETRIES;
+	int out_of_sync;
+	int stuck_candidate;
+	unsigned retry_ms = RAID_IDLE_STATUS_RETRY_MS;
+
+	for (;;) {
+		if (!lv_raid_status(lv, raid_status)) {
+			stack;
+			return RAID_READ_ERROR;
+		}
+
+		raid = (*raid_status)->raid;
+		if (!raid->sync_action || !raid->dev_health) {
+			log_error("Unable to determine RAID sync action or device health.");
+			dm_pool_destroy((*raid_status)->mem);
+			return RAID_READ_ERROR;
+		}
+
+		if (raid->dev_count != expected_count)
+			return RAID_READ_OK;
+
+		out_of_sync = (strchr(raid->dev_health,
+				      RAID_DEV_HEALTH_ALIVE_NOT_IN_SYNC) != NULL);
+		stuck_candidate = (!strcmp(raid->sync_action, "idle") && out_of_sync);
+
+		if (!stuck_candidate && ((*raid_status)->in_sync != DM_PERCENT_0))
+			return RAID_READ_OK;
+
+		if (!retries) {
+			/*
+			 * Only an idle target with out-of-sync legs is a stuck
+			 * recover; a bare 0% is merely not in sync yet and is
+			 * handed back for the caller to judge.
+			 */
+			if (!stuck_candidate)
+				return RAID_READ_OK;
+
+			log_error("RAID status for %s is idle with out-of-sync devices "
+				  "and did not start a sync after %d retries.",
+				  display_lvname(lv), RAID_IDLE_STATUS_RETRIES);
+			dm_pool_destroy((*raid_status)->mem);
+			return RAID_READ_STUCK;
+		}
+		retries--;
+
+		log_debug("RAID status for %s reports no sync progress; "
+			  "retrying in %u ms.",
+			  display_lvname(lv), retry_ms);
+		dm_pool_destroy((*raid_status)->mem);
+
+		if (!sigint_usleep(retry_ms * 1000)) {
+			stack;
+			return RAID_READ_ERROR;
+		}
+
+		retry_ms *= 2;
+	}
+}
+
+/*
+ * Read one stable RAID status snapshot for a caller that only needs the
+ * sync percentage, and release it: on RAID_READ_OK *sync_percent is set
+ * from the snapshot; on the other results the snapshot is already
+ * released and *sync_percent is left untouched.
+ */
+static enum raid_read_result
+_raid_stable_sync_percent(const struct logical_volume *lv,
+			  uint32_t expected_count,
+			  dm_percent_t *sync_percent)
+{
+	struct lv_status_raid *raid_status;
+	enum raid_read_result read_result;
+
+	read_result = _raid_status_read_stable(lv, expected_count, &raid_status);
+	if (read_result == RAID_READ_OK) {
+		*sync_percent = raid_status->in_sync;
+		dm_pool_destroy(raid_status->mem);
+	}
+
+	return read_result;
+}
+
+/*
  * _raid_in_sync
  * @lv
  *
@@ -388,12 +531,10 @@ static int _get_dev_health(struct logical_volume *lv, uint32_t *kernel_devs,
  *
  * Returns: 1 if in-sync, 0 otherwise.
  */
-#define _RAID_IN_SYNC_RETRIES  6
 static int _raid_in_sync(const struct logical_volume *lv)
 {
-	int retries = _RAID_IN_SYNC_RETRIES;
+	enum raid_read_result read_result;
 	dm_percent_t sync_percent;
-	struct lv_status_raid *raid_status;
 
 	if (seg_is_striped(first_seg(lv)))
 		return 1;
@@ -405,29 +546,22 @@ static int _raid_in_sync(const struct logical_volume *lv)
 				  display_lvname(lv));
 			return 0;
 		}
-	} else do {
+	} else {
 		/*
-		 * FIXME We repeat the status read here to workaround an
-		 * unresolved kernel bug when we see 0 even though the
-		 * the array is 100% in sync.
-		 * https://bugzilla.redhat.com/1210637
+		 * A single stable snapshot: _raid_status_read_stable()
+		 * waits out both the 0% in_sync transient (RHBZ 1210637)
+		 * and the idle-with-out-of-sync-legs ambiguity.
 		 */
-		if (!lv_raid_status(lv, &raid_status)) {
-			log_error("Unable to determine sync status of %s.",
-				  display_lvname(lv));
+		read_result = _raid_stable_sync_percent(lv, first_seg(lv)->area_count,
+							&sync_percent);
+		if (read_result != RAID_READ_OK) {
+			if (read_result == RAID_READ_ERROR)
+				log_error("Unable to determine sync status of %s.",
+					  display_lvname(lv));
+			/* RAID_READ_STUCK is already reported. */
 			return 0;
 		}
-		sync_percent = raid_status->in_sync;
-		dm_pool_destroy(raid_status->mem);
-
-		if (sync_percent > DM_PERCENT_0)
-			break;
-		if (retries == _RAID_IN_SYNC_RETRIES)
-			log_warn("WARNING: Sync status for %s is inconsistent.",
-				 display_lvname(lv));
-		if (!sigint_usleep(500000))
-			return_0;
-	} while (--retries);
+	}
 
 	return (sync_percent == DM_PERCENT_100) ? 1 : 0;
 }
@@ -2839,13 +2973,44 @@ fail:
 	return 0;
 }
 
+/*
+ * Remove LV_REBUILD from RAID image components after a reload has
+ * applied rebuild to the kernel, and commit when any flag was cleared.
+ */
+static int _raid_clear_rebuild_flags(struct logical_volume *lv)
+{
+	struct lv_segment *seg = first_seg(lv);
+	uint32_t s;
+	int cleared = 0;
+
+	for (s = 0; s < seg->area_count; s++) {
+		if ((seg_type(seg, s) == AREA_LV) &&
+		    (seg_lv(seg, s)->status & LV_REBUILD)) {
+			seg_lv(seg, s)->status &= ~LV_REBUILD;
+			cleared = 1;
+		}
+		if (seg->meta_areas && (seg_metatype(seg, s) == AREA_LV) &&
+		    (seg_metalv(seg, s)->status & LV_REBUILD)) {
+			seg_metalv(seg, s)->status &= ~LV_REBUILD;
+			cleared = 1;
+		}
+	}
+
+	if (cleared && (!vg_write(lv->vg) || !vg_commit(lv->vg))) {
+		log_error("Failed to clear REBUILD flag for %s components.",
+			  display_lvname(lv));
+		return 0;
+	}
+
+	return 1;
+}
+
 static int _raid_add_images(struct logical_volume *lv,
 			    uint32_t new_count, struct dm_list *pvs,
 			    int commit, int use_existing_area_len)
 {
-	int rebuild_flag_cleared = 0;
 	struct lv_segment *seg = first_seg(lv);
-	uint32_t region_size = seg->region_size, s;
+	uint32_t region_size = seg->region_size;
 
 	if (!_raid_add_images_without_commit(lv, new_count, pvs, use_existing_area_len))
 		return_0;
@@ -2858,27 +3023,9 @@ static int _raid_add_images(struct logical_volume *lv,
 	if (!lv_update_and_reload_origin(lv))
 		return_0;
 
-	/*
-	 * Now that the 'REBUILD' has made its way to the kernel, we must
-	 * remove the flag so that the individual devices are not rebuilt
-	 * upon every activation.
-	 */
-	seg = first_seg(lv);
-	for (s = 0; s < seg->area_count; s++) {
-		if ((seg_lv(seg, s)->status & LV_REBUILD) ||
-		    (seg_metalv(seg, s)->status & LV_REBUILD)) {
-			seg_metalv(seg, s)->status &= ~LV_REBUILD;
-			seg_lv(seg, s)->status &= ~LV_REBUILD;
-			rebuild_flag_cleared = 1;
-		}
-	}
-	if (rebuild_flag_cleared) {
-		if (!vg_write(lv->vg) || !vg_commit(lv->vg)) {
-			log_error("Failed to clear REBUILD flag for %s components.",
-				  display_lvname(lv));
-			return 0;
-		}
-	}
+	/* REBUILD must not persist in metadata after the kernel has seen it. */
+	if (!_raid_clear_rebuild_flags(lv))
+		return_0;
 
 	return 1;
 }
@@ -2945,25 +3092,49 @@ static int _extract_image_components(struct lv_segment *seg, uint32_t idx,
 }
 
 /*
+ * dm-raid sync actions where RAID1 image removal may proceed.  Targets may
+ * briefly report "idle" before starting either recovery or resync.
+ */
+static int _raid_sync_action_allows_image_change(const char *sync_action)
+{
+	return !strcmp(sync_action, "recover") ||
+	       !strcmp(sync_action, "rebuild") ||
+	       !strcmp(sync_action, "idle");
+}
+
+/*
  * _raid_allow_extraction
  * @lv
  * @extract_count
  * @target_pvs
+ * @known_in_sync:  The caller has already read the status and found the
+ *		    array fully in sync, so the read can be skipped; only
+ *		    honored when @out_status is NULL.
+ * @out_status:  If non-NULL, set to NULL on entry and, on success, to the
+ *		 status snapshot the caller then owns and must release
+ *		 with dm_pool_destroy(status->mem); when NULL the
+ *		 snapshot is released here.
  *
  * returns: 0 if no, 1 if yes
  */
 static int _raid_allow_extraction(struct logical_volume *lv,
 				  int extract_count,
-				  struct dm_list *target_pvs)
+				  struct dm_list *target_pvs,
+				  int known_in_sync,
+				  struct lv_status_raid **out_status)
 {
 	int redundancy = 0;
 	unsigned s;
 	char *dev_health;
 	char *sync_action;
+	struct lv_status_raid *raid_status;
 	struct lv_segment *seg = first_seg(lv);
 
-	/* If in-sync or handling repairs, allow to proceed. */
-	if (_raid_in_sync(lv) || lv->vg->cmd->handles_missing_pvs)
+	if (out_status)
+		*out_status = NULL;
+
+	/* If handling repairs, allow to proceed. */
+	if (lv->vg->cmd->handles_missing_pvs)
 		return 1;
 
 	/*
@@ -2978,36 +3149,55 @@ static int _raid_allow_extraction(struct logical_volume *lv,
 		return 1;
 
 	/*
-	 * We can allow extracting images if the array is performing a
-	 * sync operation as long as it is "recover" and the image is not
-	 * a primary image or if "resync".
+	 * The caller has already established the array is fully in sync
+	 * (e.g. the split path called _raid_in_sync()), so a 100% in-sync
+	 * array passes every check below unconditionally and the read can
+	 * be skipped.  A requested snapshot is still read for: the caller
+	 * explicitly asked for it, so the read is not optional.
 	 */
-	if (!lv_raid_sync_action(lv, &sync_action) ||
-	    !lv_raid_dev_health(lv, &dev_health))
+	if (known_in_sync && !out_status)
+		return 1;
+
+	/*
+	 * Base the whole decision on a single status snapshot instead of a
+	 * separate in-sync probe followed by a second read: the array may
+	 * change between two reads, so acting on a secondary, possibly
+	 * conflicting view would be wrong.  _raid_status_read_stable() waits
+	 * out the ambiguous idle/0% states before returning.
+	 *
+	 * We can allow extracting images if the array is performing a sync
+	 * operation as long as it is "recover" and the image is not a primary
+	 * image or if "resync".
+	 */
+	if (_raid_status_read_stable(lv, seg->area_count, &raid_status) != RAID_READ_OK)
 		return_0;
+
+	/* If in-sync allow to proceed. */
+	if (raid_status->in_sync == DM_PERCENT_100)
+		goto out;
+
+	sync_action = raid_status->raid->sync_action;
+	dev_health = raid_status->raid->dev_health;
 
 	if (!strcmp("resync", sync_action)) {
 		if (!lv_is_on_pvs(seg_lv(seg, 0), target_pvs) &&
 		    !lv_is_on_pvs(seg_metalv(seg, 0), target_pvs))
-			return 1;
+			goto out;
+
 		log_error("Unable to remove primary RAID image while array resyncing.");
-		return 0;
+		goto bad;
 	}
 
-	/* If anything other than "recover", rebuild or "idle" */
-	/* Targets reports for a while 'idle' state, before recover starts */
-	if (strcmp("recover", sync_action) &&
-	    strcmp("rebuild", sync_action) &&
-	    strcmp("idle", sync_action)) {
+	if (!_raid_sync_action_allows_image_change(sync_action)) {
 		log_error("Unable to remove RAID image while array"
 			  " is performing \"%s\"", sync_action);
-		return 0;
+		goto bad;
 	}
 
 	if (seg->area_count != strlen(dev_health)) {
 		log_error(INTERNAL_ERROR
 			  "RAID LV area_count differs from number of health characters");
-		return 0;
+		goto bad;
 	}
 
 	for (s = 0; s < seg->area_count; s++)
@@ -3020,12 +3210,28 @@ static int _raid_allow_extraction(struct logical_volume *lv,
 			continue;
 		if ((dev_health[s] == 'A') && !--redundancy) {
 			log_error("Unable to remove all primary source devices");
-			return 0;
+			goto bad;
 		}
 		extract_count--;
 	}
+out:
+	if (out_status) {
+		/* Hand the snapshot to the caller, which owns the pool. */
+		*out_status = raid_status;
+		return 1;
+	}
+	dm_pool_destroy(raid_status->mem);
 	return 1;
+
+bad:
+	dm_pool_destroy(raid_status->mem);
+	return 0;
 }
+
+static uint32_t _lv_get_nr_failed_components(const struct logical_volume *lv);
+static int _raid_apply_recovering_image_rebuild_flags(struct logical_volume *lv,
+						      int *flags_set,
+						      struct lv_status_raid *raid_status);
 
 /*
  * _raid_extract_images
@@ -3036,6 +3242,13 @@ static int _raid_allow_extraction(struct logical_volume *lv,
  * @shift:  If set, use _shift_and_rename_image_components().
  *	  Otherwise, leave the [meta_]areas as AREA_UNASSIGNED and
  *	  seg->area_count unchanged.
+ * @known_in_sync:  Passed to _raid_allow_extraction(); set when the caller
+ *		    has already established the array is fully in sync.
+ * @rebuild_flags_set:  If non-NULL, mark recovering RAID1 images after
+ *		      extraction has been validated and return whether any
+ *		      LV_REBUILD flags were set.  Also requests the status
+ *		      snapshot from _raid_allow_extraction(), which this
+ *		      function then owns and releases.
  * @extracted_[meta|data]_lvs:  The LVs removed from the array.  If 'shift'
  *			      is set, then there will likely be name conflicts.
  *
@@ -3048,23 +3261,23 @@ static int _raid_allow_extraction(struct logical_volume *lv,
 static int _raid_extract_images(struct logical_volume *lv,
 				int force, uint32_t new_count,
 				struct dm_list *target_pvs, int shift,
+				int known_in_sync,
+				int *rebuild_flags_set,
 				struct dm_list *extracted_meta_lvs,
 				struct dm_list *extracted_data_lvs)
 {
 	int ss, s, extract, lvl_idx = 0;
+	int ok;
 	struct lv_list *lvl_array;
+	struct lv_status_raid *raid_status = NULL;
 	struct lv_segment *seg = first_seg(lv);
 	struct logical_volume *rmeta_lv, *rimage_lv;
 	struct segment_type *error_segtype;
 
 	extract = seg->area_count - new_count;
+	if (rebuild_flags_set)
+		*rebuild_flags_set = 0;
 
-	if (!_raid_allow_extraction(lv, extract, target_pvs))
-		return_0;
-
-	log_verbose("Extracting %d %s from %s.", extract,
-		    (extract > 1) ? "images" : "image",
-		    display_lvname(lv));
 	if ((int) dm_list_size(target_pvs) < extract) {
 		log_error("Unable to remove %d images: Only %u device%s given.",
 			  extract, dm_list_size(target_pvs),
@@ -3078,6 +3291,28 @@ static int _raid_extract_images(struct logical_volume *lv,
 
 	if (!(error_segtype = get_segtype_from_string(lv->vg->cmd, SEG_TYPE_NAME_ERROR)))
 		return_0;
+
+	/*
+	 * _raid_allow_extraction() reads one status snapshot; hand it on so
+	 * the recovering-image rebuild marking below reuses the same view
+	 * instead of taking a second, possibly conflicting one.
+	 */
+	if (!_raid_allow_extraction(lv, extract, target_pvs, known_in_sync,
+				    rebuild_flags_set ? &raid_status : NULL))
+		return_0;
+
+	log_verbose("Extracting %d %s from %s.", extract,
+		    (extract > 1) ? "images" : "image",
+		    display_lvname(lv));
+
+	/* Reuse the snapshot taken during extraction validation. */
+	if (raid_status) {
+		ok = _raid_apply_recovering_image_rebuild_flags(lv, rebuild_flags_set,
+								raid_status);
+		dm_pool_destroy(raid_status->mem);
+		if (!ok)
+			return_0;
+	}
 
 	/*
 	 * We make two passes over the devices.
@@ -3138,6 +3373,7 @@ static int _raid_extract_images(struct logical_volume *lv,
 
 		extract--;
 	}
+
 	if (extract) {
 		log_error("Unable to extract enough images to satisfy request.");
 		return 0;
@@ -3146,15 +3382,173 @@ static int _raid_extract_images(struct logical_volume *lv,
 	return 1;
 }
 
+/*
+ * An image added immediately before a RAID1 reduction may still be
+ * recovering.  Temporarily re-mark legs whose kernel dev_health is 'a'
+ * (alive but not in-sync, not 'A') while the target explicitly reports
+ * "recover" or "rebuild".  Legacy dm-raid restarts recovery from 0%; newer
+ * targets keep the progress, but still require the marker when the new leg
+ * does not yet have a valid superblock (see lvconvert-raid1.sh).
+ * An "idle" action with out-of-sync legs is retried because it may be a
+ * transient state before recovery, rebuild or array-wide resync; the latter
+ * rejects a rebuild parameter.  Legs whose data or metadata LV already has
+ * LV_REBUILD in VG metadata are skipped; the rest are flagged.
+ *
+ * Targets that keep recovery progress (dm-raid 1.14.0+) cannot be excluded
+ * from re-marking either: a leg whose recovery was committed but has not
+ * really started yet has no valid superblock to resume from, so dm-raid
+ * rejects the reload injecting it into an existing set without 'rebuild'.
+ * Distinguishing that from an already running recovery would require
+ * evaluating the MD superblocks on the _rmeta LVs from user space -
+ * complexity not worth avoiding a parameter those targets handle without
+ * losing progress.
+ *
+ * This is not a persistent progress marker: dm-raid's "rebuild <idx>"
+ * option resets that device's recovery offset; without it, the offset
+ * is restored from the superblock.  Also, 'a' health may describe all
+ * devices during array-wide resync, not just an individual rebuild.
+ * Recheck this behavior before broadening the workaround.  See
+ * dm-raid.c:parse_raid_params()/super_load() and kernel commits
+ * 11e472320668 (copy active progress without rebuild) and
+ * 38b0bd0cda07 (remove that copy to avoid stale reshape state).
+ *
+ * Sets @flags_set when LV_REBUILD would be added to any component.
+ * Use _raid_probe_recovering_images() before prompting and
+ * _raid_apply_recovering_image_rebuild_flags() to update metadata.
+ */
+static int _raid_target_rebuild_keeps_recovery(const struct logical_volume *lv)
+{
+	struct lv_segment *seg = first_seg(lv);
+	unsigned attrs = 0;
+
+	if (!seg->segtype->ops->target_present ||
+	    !seg->segtype->ops->target_present(lv->vg->cmd, NULL, &attrs))
+		return 0;
+
+	return (attrs & RAID_FEATURE_REBUILD_KEEPS_RECOVERY) ? 1 : 0;
+}
+
+static int _raid_recovering_images_rebuild_work(struct logical_volume *lv,
+						int apply_flags,
+						int *flags_set,
+						dm_percent_t *sync_percent,
+						struct lv_status_raid *raid_status)
+{
+	struct lv_segment *seg = first_seg(lv);
+	struct lv_status_raid *own_status = NULL;
+	struct dm_status_raid *raid;
+	uint32_t s;
+	int r = 0;
+
+	*flags_set = 0;
+	if (sync_percent)
+		*sync_percent = DM_PERCENT_INVALID;
+
+	if (!seg_is_raid1(seg))
+		return 1;
+
+	/*
+	 * Only legacy targets need the pre-prompt warning about lost
+	 * progress; the marker below still applies to every target.
+	 */
+	if (!apply_flags && _raid_target_rebuild_keeps_recovery(lv))
+		return 1;
+
+	/* Recovery state exists only on a live device */
+	if (!lv_is_active(lv))
+		return 1;
+
+	if (!raid_status) {
+		if (_raid_status_read_stable(lv, seg->area_count, &raid_status) != RAID_READ_OK)
+			return_0;
+		own_status = raid_status;
+	}
+
+	raid = raid_status->raid;
+	if (raid->dev_count != seg->area_count) {
+		/*
+		 * An in-sync degraded array can reach this workaround after
+		 * _raid_allow_extraction() has accepted it.  Only treat a short
+		 * health string as omitted failed components when the target's
+		 * advertised count matches metadata slots and metadata records
+		 * a failed component.  The shortened string cannot be mapped to
+		 * metadata slots, so skip only rebuild marking and let extraction
+		 * remove known failed components first.
+		 */
+		if ((raid->advertised_dev_count == seg->area_count) &&
+		    (raid->dev_count < raid->advertised_dev_count) &&
+		    _lv_get_nr_failed_components(lv)) {
+			log_debug("Skipping RAID rebuild marking for degraded %s.",
+				  display_lvname(lv));
+			goto out;
+		}
+
+		log_error("Active raid has a wrong number of raid images!");
+		goto bad;
+	}
+
+	if (!strcmp(raid->sync_action, "recover") ||
+	    !strcmp(raid->sync_action, "rebuild")) {
+		for (s = 0; s < seg->area_count; s++) {
+			if (raid->dev_health[s] !=
+			    RAID_DEV_HEALTH_ALIVE_NOT_IN_SYNC)
+				continue;
+
+			/* Leave legs that already carry the flag untouched */
+			if ((seg_type(seg, s) == AREA_LV) &&
+			    !(seg_lv(seg, s)->status & LV_REBUILD)) {
+				*flags_set = 1;
+				if (apply_flags)
+					seg_lv(seg, s)->status |= LV_REBUILD;
+			}
+			if (seg->meta_areas &&
+			    (seg_metatype(seg, s) == AREA_LV) &&
+			    !(seg_metalv(seg, s)->status & LV_REBUILD)) {
+				*flags_set = 1;
+				if (apply_flags)
+					seg_metalv(seg, s)->status |= LV_REBUILD;
+			}
+		}
+	}
+
+	if (*flags_set && sync_percent)
+		*sync_percent = raid_status->in_sync;
+
+out:
+	r = 1;
+bad:
+	if (own_status)
+		dm_pool_destroy(own_status->mem);
+
+	return r;
+}
+
+static int _raid_probe_recovering_images(struct logical_volume *lv,
+					 int *flags_set,
+					 dm_percent_t *sync_percent)
+{
+	return _raid_recovering_images_rebuild_work(lv, 0, flags_set, sync_percent, NULL);
+}
+
+static int _raid_apply_recovering_image_rebuild_flags(struct logical_volume *lv,
+						      int *flags_set,
+						      struct lv_status_raid *raid_status)
+{
+	/* Reuse @raid_status when the caller already read one; it owns the pool. */
+	return _raid_recovering_images_rebuild_work(lv, 1, flags_set, NULL, raid_status);
+}
+
 static int _raid_remove_images(struct logical_volume *lv, int yes,
 			       uint32_t new_count, struct dm_list *allocate_pvs,
 			       struct dm_list *removal_lvs, int commit)
 {
 	struct dm_list removed_lvs;
+	struct lv_segment *seg;
+	uint32_t s;
+	int rebuild_flags_set = 0;
 
 	if (new_count == 1) {
-		uint32_t s;
-		struct lv_segment *seg = first_seg(lv);
+		seg = first_seg(lv);
 
 		if (!seg_is_raid1(seg)) {
 			log_error("%s called on non-raid1 LV.", display_lvname(lv));
@@ -3186,7 +3580,8 @@ static int _raid_remove_images(struct logical_volume *lv, int yes,
 	if (!archive(lv->vg))
 		return_0;
 
-	if (!_raid_extract_images(lv, 0, new_count, allocate_pvs, 1,
+	if (!_raid_extract_images(lv, 0, new_count, allocate_pvs, 1, 0,
+				 (commit && (new_count > 1)) ? &rebuild_flags_set : NULL,
 				 removal_lvs, removal_lvs)) {
 		log_error("Failed to extract images from %s.",
 			  display_lvname(lv));
@@ -3230,6 +3625,9 @@ static int _raid_remove_images(struct logical_volume *lv, int yes,
 		return_0;
 
 	if (!lv_update_and_reload_origin(lv))
+		return_0;
+
+	if (rebuild_flags_set && !_raid_clear_rebuild_flags(lv))
 		return_0;
 
 	return 1;
@@ -3310,6 +3708,8 @@ int lv_raid_change_image_count(struct logical_volume *lv, int yes, uint32_t new_
 	struct lv_segment *seg = first_seg(lv);
 	const char *level = seg->area_count == 1 ? "raid1 with " : "";
 	const char *resil = new_count < seg->area_count ? "reducing" : "enhancing";
+	int rebuild_workaround_needed = 0;
+	dm_percent_t sync_percent = DM_PERCENT_INVALID;
 
 	/* LV must be active to perform raid conversion operations */
 	if (!lv_is_active(lv)) {
@@ -3324,11 +3724,27 @@ int lv_raid_change_image_count(struct logical_volume *lv, int yes, uint32_t new_
 		return 1;
 	}
 
-	if (new_count != 1 && /* Already prompted for in _raid_remove_images() */
-	    !yes && yes_no_prompt("Are you sure you want to convert %s LV %s to %s%u images %s resilience? [y/n]: ",
-				  lvseg_name(first_seg(lv)), display_lvname(lv), level, new_count, resil) == 'n') {
-		log_error("Logical volume %s NOT converted.", display_lvname(lv));
+	/* Include recovery loss in the existing confirmation, before changing metadata. */
+	if (!yes && (new_count > 1) && (new_count < seg->area_count) &&
+	    !_raid_probe_recovering_images(lv, &rebuild_workaround_needed, &sync_percent)) {
+		log_error("Unable to determine sync status of %s.", display_lvname(lv));
 		return 0;
+	}
+
+	if (new_count != 1 && !yes) {
+		char recovery_note[256] = "";
+
+		if (rebuild_workaround_needed)
+			(void) snprintf(recovery_note, sizeof(recovery_note),
+					" dm-raid reports recovery at %s%%; if recovery is still active when the reload begins, it will restart from 0%%.",
+					display_percent(lv->vg->cmd, sync_percent));
+
+		if ('n' == yes_no_prompt("Are you sure you want to convert %s LV %s to %s%u images %s resilience?%s [y/n]: ",
+					 lvseg_name(first_seg(lv)), display_lvname(lv), level,
+					 new_count, resil, recovery_note)) {
+			log_error("Logical volume %s NOT converted.", display_lvname(lv));
+			return 0;
+		}
 	}
 	if (new_region_size) {
 		seg->region_size = new_region_size;
@@ -3419,7 +3835,7 @@ int lv_raid_split(struct logical_volume *lv, int yes, const char *split_name,
 			return_0;
 	}
 
-	if (!_raid_extract_images(lv, 0, new_count, splittable_pvs, 1,
+	if (!_raid_extract_images(lv, 0, new_count, splittable_pvs, 1, 1, NULL,
 				 &removal_lvs, &data_list)) {
 		log_error("Failed to extract images from %s.",
 			  display_lvname(lv));
@@ -6803,39 +7219,6 @@ has_enough_space:
 }
 
 /*
- * _lv_raid_has_primary_failure_on_recover
- * @lv
- *
- * The kernel behaves strangely in the presence of a primary failure
- * during a "recover" sync operation.  It's not technically a bug, I
- * suppose, but the output of the status line can make it difficult
- * to determine that we are in this state.  The sync ratio will be
- * 100% and the sync action will be "idle", but the health characters
- * will be e.g. "Aaa" or "Aa", where the 'A' is the dead
- * primary source that cannot be marked dead by the kernel b/c
- * it is the only source for the remainder of data.
- *
- * This function helps to detect that condition.
- *
- * Returns: 1 if the state is detected, 0 otherwise.
- * FIXME: would be better to return -1,0,1 to allow error report.
- */
-static int _lv_raid_has_primary_failure_on_recover(struct logical_volume *lv)
-{
-	char *tmp_dev_health;
-	char *tmp_sync_action;
-
-	if (!lv_raid_sync_action(lv, &tmp_sync_action) ||
-	    !lv_raid_dev_health(lv, &tmp_dev_health))
-		return_0;
-
-	if (!strcmp(tmp_sync_action, "idle") && strchr(tmp_dev_health, 'a'))
-		return 1;
-
-	return 0;
-}
-
-/*
  * Helper:
  *
  * _lv_raid_rebuild_or_replace
@@ -6867,6 +7250,9 @@ static int _lv_raid_rebuild_or_replace(struct logical_volume *lv,
 	char *tmp_name_dup;
 	const char *action_str = rebuild ? "rebuild" : "replace";
 	int has_integrity;
+	int known_in_sync;
+	enum raid_read_result read_result;
+	dm_percent_t sync_percent = DM_PERCENT_INVALID;
 
 	tmp_names = alloca(raid_seg->area_count * 2 * sizeof(*tmp_names));
 
@@ -6895,7 +7281,44 @@ static int _lv_raid_rebuild_or_replace(struct logical_volume *lv,
 		return 0;
 	}
 
-	if (!_raid_in_sync(lv)) {
+	/*
+	 * One status read decides both whether the array is in sync and
+	 * whether it is stuck in the dead-primary-after-"recover" state;
+	 * that state and the retry rules are documented at
+	 * _raid_status_read_stable().
+	 *
+	 * This unifies the two reads that used to answer these questions (the
+	 * in-sync gate and the dead-primary probe).  The verdict is the same,
+	 * but a single query cannot report inconsistent results when the
+	 * array changes in between.
+	 */
+	read_result = _raid_stable_sync_percent(lv, raid_seg->area_count,
+						&sync_percent);
+	if (read_result == RAID_READ_ERROR) {
+		log_error("Unable to determine sync status of %s.",
+			  display_lvname(lv));
+		return 0;
+	}
+
+	if (read_result == RAID_READ_STUCK) {
+		/*
+		 * I hate having multiple error lines, but this
+		 * seems to work best for syslog and CLI.
+		 */
+		log_error("Unable to repair %s.  Source devices failed"
+			  " before the RAID could synchronize.",
+			  display_lvname(lv));
+		log_error("You should choose one of the following:");
+		log_error("  1) deactivate %s, revive failed "
+			  "device, re-activate LV, and proceed.",
+			  display_lvname(lv));
+		log_error("  2) remove the LV (all data is lost).");
+		log_error("  3) Seek expert advice to attempt to salvage any"
+			  " data from remaining devices.");
+		return 0;
+	}
+
+	if (sync_percent != DM_PERCENT_100) {
 		/*
 		 * FIXME: There is a bug in the kernel that prevents 'rebuild'
 		 *        from being specified when the array is not in-sync.
@@ -6903,30 +7326,38 @@ static int _lv_raid_rebuild_or_replace(struct logical_volume *lv,
 		 *        but only when we are doing a repair - as indicated by
 		 *        'lv->vg->cmd->handles_missing_pvs'.  The above
 		 *        conditional should be:
-		 (!lv->vg->cmd->handles_missing_pvs && !_raid_in_sync(lv))
+		 (!lv->vg->cmd->handles_missing_pvs &&
+		  sync_percent != DM_PERCENT_100)
+		 *
+		 * Left as-is for now; if it is ever enabled, note:
+		 *        - 'handles_missing_pvs' is a broad "tolerate absent
+		 *          PVs" flag set by many commands.  Only lvconvert
+		 *          --repair sets it among the callers reaching here,
+		 *          so the effect is scoped to repair today, but the
+		 *          'force' argument is the real opt-in and the safer
+		 *          gate.
+		 *        - 'known_in_sync' passed to _raid_extract_images()
+		 *          below hard-codes that this gate proved the array
+		 *          in-sync.  With the gate relaxed that claim is no
+		 *          longer true, so it must be derived from
+		 *          'sync_percent' instead (and the comment above the
+		 *          call updated).
+		 *        - the kernel refusal referenced here must be
+		 *          re-verified against the kernel in use first.
 		 */
 		log_error("Unable to replace devices in %s while it is "
 			  "not in-sync.", display_lvname(lv));
 		return 0;
 	}
 
-	if (_lv_raid_has_primary_failure_on_recover(lv)) {
-		/*
-		 * I hate having multiple error lines, but this
-		 * seems to work best for syslog and CLI.
-		 */
-		log_error("Unable to repair %s/%s.  Source devices failed"
-			  " before the RAID could synchronize.",
-			  lv->vg->name, lv->name);
-		log_error("You should choose one of the following:");
-		log_error("  1) deactivate %s/%s, revive failed "
-			  "device, re-activate LV, and proceed.",
-			  lv->vg->name, lv->name);
-		log_error("  2) remove the LV (all data is lost).");
-		log_error("  3) Seek expert advice to attempt to salvage any"
-			  " data from remaining devices.");
-		return 0;
-	}
+	/*
+	 * Reaching here means the in-sync gate above found the array fully
+	 * in sync, and the LV is not reloaded before _raid_extract_images(),
+	 * so the extraction path may skip its own status read.  If the gate
+	 * is ever relaxed (see its FIXME), this must be derived from
+	 * 'sync_percent' instead of being hard-coded.
+	 */
+	known_in_sync = 1;
 
 	/*
 	 * How many sub-LVs are being removed?
@@ -7078,7 +7509,7 @@ try_again:
 	if (!_raid_extract_images(lv, force,
 				  raid_seg->area_count - match_count,
 				  (partial_segment_removed || dm_list_empty(remove_pvs)) ?
-				  &lv->vg->pvs : remove_pvs, 0,
+				  &lv->vg->pvs : remove_pvs, 0, known_in_sync, NULL,
 				  &old_lvs, &old_lvs)) {
 		log_error("Failed to remove the specified images from %s.",
 			  display_lvname(lv));

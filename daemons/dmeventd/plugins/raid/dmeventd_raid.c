@@ -53,6 +53,8 @@ struct dso_state {
 	unsigned warned;
 	/* Set once per idle primary-source episode after lvconvert is tried. */
 	unsigned idle_primary_attempted;
+	/* Warn once while the kernel reports an incomplete health string. */
+	unsigned incomplete_warned;
 	/* Whether the preceding event reported a complete sync ratio. */
 	unsigned in_sync;
 	/* Device count the positional state above belongs to; a change
@@ -80,7 +82,7 @@ DM_EVENT_LOG_FN("raid")
  *
  * This is simply the way the kernel works...
  *
- * Two signatures are known (see _lv_raid_has_primary_failure_on_recover in
+ * Two signatures are known (see _lv_raid_rebuild_or_replace in
  * lib/metadata/raid_manip.c): the array is not in-sync yet and a leg is the
  * leading 'a' -- or the kernel gave up on the recover and reports the ratio
  * as complete while a leg has not reached 'A'.  There is no 'D' to key on in
@@ -208,7 +210,7 @@ static int _raid_run_repair(struct dso_state *state,
 
 /*
  * Idle primary-source failure during linear->raid recover (see
- * _lv_raid_has_primary_failure_on_recover in lib/metadata/raid_manip.c).
+ * _lv_raid_rebuild_or_replace in lib/metadata/raid_manip.c).
  */
 static enum raid_idle_primary_result _raid_handle_idle_primary(struct dso_state *state,
 							       const struct dm_status_raid *status,
@@ -265,8 +267,8 @@ static int _raid_should_run_repair(struct dso_state *state,
 	}
 
 	if (!_raid_has_repair_transition(state, event)) {
-		log_debug("RAID %s: no repair transition (in_sync=%u resynced=%d "
-			  "recovered=%d).", device, state->in_sync,
+		log_debug("RAID %s: no repair transition (in_sync=%u resynced=%u "
+			  "recovered=%u).", device, state->in_sync,
 			  event->resynced, event->recovered);
 		return 0;
 	}
@@ -302,6 +304,19 @@ static int _process_raid_event(struct dso_state *state, const char *params, cons
 		r = 0;
 		goto out;
 	}
+
+	if (status->dev_count < status->advertised_dev_count) {
+		if (!state->incomplete_warned) {
+			state->incomplete_warned = 1;
+			log_warn("WARNING: RAID device %s has incomplete health status (%u of %u"
+				 " chars); skipping positional handling and automatic repair."
+				 " dm-raid 1.9.0/1.9.1 has a known short-health bug; check the"
+				 " target version and upgrade if affected.",
+				 device, status->dev_count, status->advertised_dev_count);
+		}
+		goto out;
+	}
+	state->incomplete_warned = 0;
 
 	/* New dev_count: leg indexes changed; forget positional repair state. */
 	_raid_reset_epoch(state, status, device);

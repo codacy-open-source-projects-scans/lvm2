@@ -32,6 +32,7 @@
 #include <sys/wait.h>
 #include <sys/resource.h>
 #include <signal.h>
+#include <limits.h>		/* for UINT_MAX */
 #include <arpa/inet.h>		/* for htonl, ntohl */
 #include <fcntl.h>		/* for musl libc */
 #include <poll.h>
@@ -101,6 +102,25 @@ static const time_t DMEVENTD_IDLE_EXIT_TIMEOUT = 60 * 60;
 
 /* Sanity limit for client message size */
 #define DM_EVENT_MAX_MSG_SIZE (16 * 1024 * 1024)
+
+/* Maximum time (seconds) to wait for the rest of a partially received
+ * client message before discarding it */
+#define DM_EVENT_MSG_READ_TIMEOUT 5
+
+/* Maximum time (seconds) to wait for a client to accept a reply */
+#define DM_EVENT_MSG_WRITE_TIMEOUT 30
+
+/* Replies are written in chunks small enough to never block in write() */
+#define DM_EVENT_MSG_WRITE_CHUNK 4096
+
+/* A zero timeout is replaced by DM_EVENT_DEFAULT_TIMEOUT only where a
+ * timeout is requested (SET_TIMEOUT, or REGISTER with the timeout event
+ * bit), so that default must stay nonzero or a requested timeout could
+ * be left unarmed.  Event-only registrations keep a zero timeout. */
+#if DM_EVENT_DEFAULT_TIMEOUT < 1
+#error DM_EVENT_DEFAULT_TIMEOUT must be nonzero
+#endif
+
 static int _grace_period = DMEVENTD_DEFAULT_GRACE_PERIOD;
 
 static int _systemd_activation = 0;
@@ -276,6 +296,7 @@ struct thread_status {
 
 	/* === Fields protected by thread->mutex === */
 	unsigned status;		/* DM_THREAD_{REGISTERING,RUNNING,GRACE_PERIOD,DONE} */
+	unsigned registered;		/* Device is registered with the DSO */
 	pthread_mutex_t mutex;		/* The lock protecting fields */
 	int current_events;		/* Occurred events bitfield */
 	int events;			/* Event filter bitfield */
@@ -431,6 +452,11 @@ static struct dso_data *_load_dso(struct message_data *data)
 	void *dl;
 	struct dso_data *ret;
 	const char *dlerr;
+
+	if (!data->dso_name || !*data->dso_name) {
+		dlerr = "no plugin name";
+		goto_bad;
+	}
 
 	if (!(dl = dlopen(data->dso_name, RTLD_NOW))) {
 		dlerr = dlerror();
@@ -629,12 +655,17 @@ static int _fetch_string(char **ptr, char **src, const int delimiter)
 		}
 		(*src)++; /* Skip delimiter, next field */
 	} else if ((len = strlen(*src))) {
-		/* No delimiter, item ends with '\0' */
+		/* No delimiter, item ends with '\0'.
+		 * Leave the cursor on the terminating NUL: advancing past it
+		 * would make the next field read out of bounds whenever the
+		 * message has fewer fields than the caller asks for.  All
+		 * following fields are then parsed as empty.
+		 */
 		if (!(*ptr = strdup(*src))) {
 			log_error("Failed to fetch last item %s.", *src);
 			ret = 0; /* Fail */
 		}
-		*src += len + 1;
+		*src += len;
 	}
 out:
 	return ret;
@@ -650,12 +681,43 @@ static void _free_message(struct message_data *message_data)
 	free(message_data->timeout_str);
 }
 
+/*
+ * Parse an unsigned decimal field of a client message.
+ *
+ * Returns 0 when the field is empty (no value), 1 on success and
+ * -1 when the field is not a valid unsigned number.
+ */
+static int _fetch_unsigned(const char *str, unsigned *value)
+{
+	char *end;
+	unsigned long v;
+
+	*value = 0;
+
+	if (!str)
+		return 0;	/* Empty field ('-') */
+
+	errno = 0;
+	v = strtoul(str, &end, 10);
+
+	if ((*str < '0') || (*str > '9') ||
+	    errno || (end == str) || *end || (v > UINT_MAX)) {
+		log_error("Failed to parse unsigned field %s.", str);
+		return -1;
+	}
+
+	*value = (unsigned) v;
+
+	return 1;
+}
+
 /* Parse a register message from the client. */
 static int _parse_message(struct message_data *message_data)
 {
 	int ret = 0;
 	struct dm_event_daemon_message *msg = message_data->msg;
 	char *p = msg->data;
+	unsigned events, timeout;
 
 	if (!msg->data)
 		return 0;
@@ -668,14 +730,22 @@ static int _parse_message(struct message_data *message_data)
 	    _fetch_string(&message_data->dso_name, &p, ' ') &&
 	    _fetch_string(&message_data->device_uuid, &p, ' ') &&
 	    _fetch_string(&message_data->events_str, &p, ' ') &&
-	    _fetch_string(&message_data->timeout_str, &p, ' ')) {
-		if (message_data->events_str)
-			message_data->events_field =
-				atoi(message_data->events_str);
-		if (message_data->timeout_str)
-			message_data->timeout_secs =
-				atoi(message_data->timeout_str)
-				? : DM_EVENT_DEFAULT_TIMEOUT;
+	    _fetch_string(&message_data->timeout_str, &p, ' ') &&
+	    _fetch_unsigned(message_data->events_str, &events) >= 0 &&
+	    _fetch_unsigned(message_data->timeout_str, &timeout) >= 0) {
+		message_data->events_field = events;
+		/*
+		 * A zero timeout means DM_EVENT_DEFAULT_TIMEOUT when a
+		 * timeout is requested: SET_TIMEOUT, or REGISTER with
+		 * DM_EVENT_TIMEOUT in the mask.  A REGISTER without that
+		 * bit is purely event based and keeps a zero timeout.
+		 */
+		if (!timeout &&
+		    (msg->cmd != DM_EVENT_CMD_REGISTER_FOR_EVENT ||
+		     (events & DM_EVENT_TIMEOUT)))
+			message_data->timeout_secs = DM_EVENT_DEFAULT_TIMEOUT;
+		else
+			message_data->timeout_secs = timeout;
 		ret = 1;
 	}
 
@@ -871,7 +941,13 @@ static struct thread_status *_lookup_grace_thread_status(const struct message_da
 	/* Grace threads stay in active registry */
 	dm_list_iterate_items(thread, &_thread_registry) {
 		_lock_thread(thread);
+		/*
+		 * inode 0 means it could not be determined, which must not be
+		 * treated as a match: the uuid may have been reused for a
+		 * different device in the meantime.
+		 */
 		if ((thread->status == DM_THREAD_GRACE_PERIOD) &&
+		    thread->inode &&
 		    !strcmp(data->device_uuid, thread->device.uuid) &&
 		    !strcmp(data->dso_name, thread->dso_data->dso_name) &&
 		    (thread->inode == _get_device_inode(thread))) {
@@ -1025,7 +1101,16 @@ static void *_timeout_thread(void *unused __attribute__((unused)))
 		dm_list_iterate_items_gen(thread, &_timeout_registry, timeout_list) {
 			/* coverity[lock_order] we always lock timeout mutex first */
 			_lock_thread(thread);
-			if (thread->next_time <= curr_time) {
+			/*
+			 * next_time == 0 means no timeout is scheduled.  That
+			 * should not happen for a registered timeout (parsed
+			 * timeouts are nonzero and armed before being listed),
+			 * but never treat an unexpected zero as "due now":
+			 * that would spin this loop at 100% CPU and storm the
+			 * thread with SIGALRM.
+			 */
+			if (thread->next_time &&
+			    thread->next_time <= curr_time) {
 				thread->next_time = curr_time + thread->timeout;
 				if (thread->processing) {
 					/* Cannot signal processing monitoring thread */
@@ -1040,7 +1125,8 @@ static void *_timeout_thread(void *unused __attribute__((unused)))
 				}
 			}
 
-			if (thread->next_time < timeout.tv_sec)
+			if (thread->next_time &&
+			    thread->next_time < timeout.tv_sec)
 				timeout.tv_sec = thread->next_time;
 			_unlock_thread(thread);
 		}
@@ -1118,35 +1204,38 @@ enum {
 	DM_WAIT_FATAL
 };
 
-/* Reset pending signal for a task/thread */
+/*
+ * Consume a pending signal for the calling thread.
+ *
+ * Note: the (process wide) signal disposition must not be changed here.
+ * SIGALRM is also used to wake up other monitoring threads, and an
+ * ignored signal is discarded instead of being delivered.
+ */
 static int _reset_pending_signal(int signal)
 {
-	sigset_t prev_mask, mask;
-	struct sigaction prev_act, act = { .sa_handler = SIG_IGN };
+	sigset_t prev_mask, mask, pending;
+	struct timespec ts = { .tv_sec = 0, .tv_nsec = 0 };
 	int r = 1;
 
-	sigemptyset(&act.sa_mask);
-	sigemptyset(&prev_mask);
 	sigemptyset(&mask);
 	sigaddset(&mask, signal);
 
-	if (pthread_sigmask(SIG_SETMASK, &mask, &prev_mask) != 0) {
-		log_sys_error("pthread_sigmask", "ignore signal");
+	/* The signal must be blocked before it can be consumed */
+	if (pthread_sigmask(SIG_BLOCK, &mask, &prev_mask) != 0) {
+		log_sys_error("pthread_sigmask", "block signal");
 		return 0; /* What better */
 	}
 
-	if (sigaction(signal, &act, &prev_act) < 0) {
-		log_sys_error("sigaction", "ignore signal");
+	if (sigpending(&pending) < 0) {
+		log_sys_error("sigpending", "");
 		r = 0;
-		goto restore_mask;
+	} else if (sigismember(&pending, signal) &&
+		   (sigtimedwait(&mask, NULL, &ts) < 0) &&
+		   (errno != EAGAIN) && (errno != EINTR)) {
+		log_sys_error("sigtimedwait", "");
+		r = 0;
 	}
 
-	if (sigaction(signal, &prev_act, NULL) < 0) {
-		log_sys_error("sigaction", "restore signal");
-		r = 0;
-	}
-
-restore_mask:
 	/* Restore the process's original sigmask */
 	if (pthread_sigmask(SIG_SETMASK, &prev_mask, NULL) < 0) {
 		log_sys_error("pthread_sigmask", "restore signal");
@@ -1288,12 +1377,13 @@ static void _thread_unused(struct thread_status *thread)
 static void _monitor_unregister(void *arg)
 {
 	struct thread_status *thread = arg;
-	int status;
+	int registered;
 
 	thread->events = 0;	/* Filter is now empty */
 	thread->pending = 0;	/* Event pending resolved */
 	thread->processing = 1;	/* Process unregistering */
-	status = thread->status;
+	registered = thread->registered;
+	thread->registered = 0;
 	/* coverity[missing_lock] thread->mutex held by caller */
 	thread->status = DM_THREAD_TERMINATING;
 	_unlock_thread(thread);
@@ -1306,7 +1396,12 @@ static void _monitor_unregister(void *arg)
 	DEBUGLOG("Unregistering monitor for %s.", thread->device.name);
 	_unregister_for_timeout(thread);
 
-	if ((status != DM_THREAD_REGISTERING) &&
+	/*
+	 * Release the DSO registration whenever it was taken, even if the
+	 * thread is still REGISTERING: _do_register_device() may already
+	 * have succeeded before events were cleared.
+	 */
+	if (registered &&
 	    !_do_unregister_device(thread))
 		log_error("%s: %s unregister failed.", __func__,
 			  thread->device.name);
@@ -1380,16 +1475,30 @@ static int _monitor_events(struct thread_status *thread)
 static void _monitor_grace_period_wait(struct thread_status *thread)
 {
 	struct timespec grace_timeout = { .tv_sec = _get_curr_time() + _grace_period };
+	int r;
 
 	DEBUGLOG("Thread %lx entering grace period for %d seconds.",
 		 (unsigned long) thread->thread, _grace_period);
 
 	/* Wait on per-thread condition variable with thread mutex
 	 * pthread_cond_timedwait atomically releases and reacquires the mutex */
-	while (!_exit_now && !thread->events &&
-	       (ETIMEDOUT != pthread_cond_timedwait(&thread->grace_cond,
-						    &thread->mutex, &grace_timeout)))
-		/* Waiting */;
+	for (;;) {
+		if (_exit_now || thread->events)
+			break;			/* New registration or exit */
+
+		r = pthread_cond_timedwait(&thread->grace_cond,
+					   &thread->mutex, &grace_timeout);
+		if (r == ETIMEDOUT)
+			break;			/* Grace period expired */
+
+		if (!r)
+			continue;		/* Spurious wake-up */
+
+		/* Any other error would make this loop spin */
+		log_error("Failed to wait for grace period of Thr %lx: %s.",
+			  (unsigned long) thread->thread, strerror(r));
+		break;
+	}
 
 	DEBUGLOG("Thread %lx wakeup grace period.", (unsigned long) thread->thread);
 }
@@ -1427,10 +1536,21 @@ static void *_monitor_thread(void *arg)
 	/* Now with resolved major:minor store also device inode */
 	thread->inode = _get_device_inode(thread);
 
-	if (!_do_register_device(thread)) {
+	/*
+	 * Register with the DSO without holding thread->mutex: plugin code
+	 * may do I/O and take locks, and _lookup_thread_status() locks each
+	 * thread while holding _global_mutex (same reasoning as in
+	 * _do_process_event()).
+	 */
+	_unlock_thread(thread);
+	ret = _do_register_device(thread);
+	_lock_thread(thread);
+
+	if (!ret) {
 		log_error("Failed to register device %s.", thread->device.name);
 		goto out;
 	}
+	thread->registered = 1;
 
 	/* Main monitoring loop with grace period support */
 	while (thread->events) {
@@ -1686,6 +1806,12 @@ static int _register_for_event(struct message_data *message_data)
 	struct thread_status *thread;
 	struct dso_data *dso_data;
 
+	/* A registration must name the DSO and the device to monitor */
+	if (!message_data->dso_name || !message_data->device_uuid) {
+		stack;
+		return -EINVAL;
+	}
+
 	if (!(dso_data = _lookup_dso(message_data)) &&
 	    !(dso_data = _load_dso(message_data))) {
 		stack;
@@ -1725,20 +1851,25 @@ static int _register_for_event(struct message_data *message_data)
 		/* Set next timeout for new thread before it starts */
 		_set_timeout_to_thread(thread, message_data->timeout_secs);
 
+		/*
+		 * Create the thread and link it under _global_mutex: a
+		 * monitoring thread that fails early moves itself to
+		 * _thread_registry_unused through _monitor_unregister(),
+		 * which needs _global_mutex, so it cannot run before the
+		 * thread is linked here.
+		 *
+		 * Events cleared while the thread is still REGISTERING are
+		 * handled by _monitor_unregister() through thread->registered.
+		 */
+		_lock_mutex();
+
 		if ((ret = _create_thread(thread))) {
 			stack;
+			_unlock_mutex();
 			_free_thread_status(thread);
 			return ret;
 		}
 
-		_lock_mutex();
-		/*
-		 * Thread must NOT be linked before _create_thread():
-		 * an early UNREGISTER would clear events while the
-		 * thread is still in REGISTERING state, leaving the
-		 * device registered with the DSO but never unregistered
-		 * (_monitor_unregister skips REGISTERING threads).
-		 */
 		LINK_THREAD(thread);
 	}
 
@@ -1901,12 +2032,12 @@ static int _set_timeout(const struct message_data *message_data)
 
 	/* _lookup_thread_status returns with both _global_mutex and thread->mutex held */
 
-	/* Update timeout value and event mask */
-	_set_timeout_to_thread(thread, timeout);
+	/* Update event mask first, then (re)arm or clear the timeout */
 	if (timeout)
 		_add_events_to_thread(thread, DM_EVENT_TIMEOUT);
 	else if (_remove_events_from_thread(thread, DM_EVENT_TIMEOUT))
 		_update_events(thread);
+	_set_timeout_to_thread(thread, timeout);
 
 	/* Unlock in reverse order: thread mutex, then global mutex */
 	_unlock_thread(thread);
@@ -1949,15 +2080,41 @@ static int _get_timeout(struct message_data *message_data)
 	return (msg->data && msg->size) ? 0 : -ENOMEM;
 }
 
+/*
+ * Warn about parent directories of the fifo path that other users can
+ * replace entries in: they could plant a fifo or a symlink for the daemon
+ * to use.  Sticky directories are fine: only the owner can remove entries
+ * from them.
+ */
+static void _check_fifo_path_security(const char *path)
+{
+	char buf[PATH_MAX];
+	struct stat st;
+	char *slash;
+
+	if (dm_snprintf(buf, sizeof(buf), "%s", path) < 0)
+		return;
+
+	for (slash = strchr(buf + 1, '/'); slash; slash = strchr(slash + 1, '/')) {
+		*slash = '\0';
+
+		if (!stat(buf, &st) && S_ISDIR(st.st_mode) &&
+		    !(st.st_mode & S_ISVTX) &&
+		    (((st.st_uid != 0) && (st.st_uid != geteuid())) ||
+		     (st.st_mode & (S_IWGRP | S_IWOTH))))
+			log_warn("WARNING: %s: directory %s is not secure.",
+				 path, buf);
+
+		*slash = '/';
+	}
+}
+
 static int _open_fifo(const char *path)
 {
 	struct stat st;
 	int fd = -1;
 
-	/*
-	 * FIXME Explicitly verify the code's requirement that path is secure:
-	 * - All parent directories owned by root without group/other write access unless sticky.
-	 */
+	_check_fifo_path_security(path);
 
 	/* If path exists, only use it if it is root-owned fifo mode 0600 */
 	if ((lstat(path, &st) < 0)) {
@@ -2009,6 +2166,16 @@ static int _open_fifo(const char *path)
 		goto fail;
 	}
 
+	/*
+	 * Non-blocking I/O: _client_read() and _client_write() use poll()
+	 * with deadlines and must not be stuck in read()/write() by a
+	 * client that goes away or never reads its reply.
+	 */
+	if (fcntl(fd, F_SETFL, O_NONBLOCK)) {
+		log_sys_error("fcntl(O_NONBLOCK)", path);
+		goto fail;
+	}
+
 	return fd;
 
 fail:
@@ -2039,11 +2206,28 @@ static int _open_fifos(struct dm_event_fifos *fifos)
  * Read message from client making sure that data is available
  * and a complete message is read.  Must not block indefinitely.
  */
+static void _drain_client_fifo(struct dm_event_fifos *fifos)
+{
+	char buf[256];
+	struct pollfd pfd = { .fd = fifos->client, .events = POLLIN };
+
+	/*
+	 * A message that was not read in full is not followed by a message
+	 * boundary, so the only way to get back in sync is to drop
+	 * everything that is buffered.  That includes any complete messages
+	 * that already followed the bad one in the kernel pipe buffer.
+	 */
+	while ((poll(&pfd, 1, 0) > 0) && (pfd.revents & POLLIN) &&
+	       (read(fifos->client, buf, sizeof(buf)) > 0))
+		;
+}
+
 static int _client_read(struct dm_event_fifos *fifos,
 			struct dm_event_daemon_message *msg)
 {
 	unsigned bytes = 0;
 	int ret;
+	time_t deadline = 0;
 	struct pollfd pfd = { .fd = fifos->client, .events = POLLIN };
 	size_t size = 2 * sizeof(uint32_t);	/* status + size */
 	uint32_t *header = alloca(size);
@@ -2056,19 +2240,42 @@ static int _client_read(struct dm_event_fifos *fifos,
 		ret = poll(&pfd, 1,
 			   (_exit_now > DM_SIGNALED_EXIT) ? 10 : 1000);
 
-		if (!ret && bytes)
-			continue; /* trying to finish read */
+		if (!ret) {
+			if (!bytes && !msg->data)
+				goto bad;	/* nothing to read */
 
-		if (ret <= 0)	/* nothing to read */
+			if (!deadline)
+				deadline = _get_curr_time() +
+					   (_exit_now ? 1 : DM_EVENT_MSG_READ_TIMEOUT);
+			else if (_get_curr_time() >= deadline) {
+				/* Client died or stalled mid message */
+				log_warn("WARNING: Discarding truncated message on %s.",
+					 fifos->client_path);
+				goto desync;
+			}
+			continue;	/* trying to finish read */
+		}
+
+		if (ret < 0) {
+			if (errno == EINTR)
+				continue;	/* interrupted, retry */
 			goto bad;
+		}
 
 		if (pfd.revents & (POLLHUP | POLLERR))
 			goto bad;
 
 		ret = read(fifos->client, buf + bytes, size - bytes);
-		if (ret <= 0)
+		if (ret < 0) {
+			if ((errno == EINTR) || (errno == EAGAIN))
+				continue;
 			goto bad;
+		}
+		if (!ret)
+			goto bad;	/* EOF */
+
 		bytes += ret;
+		deadline = 0;		/* Progress made */
 		if (!msg->data && (bytes == 2 * sizeof(uint32_t))) {
 			msg->cmd = ntohl(header[0]);
 			bytes = 0;
@@ -2077,7 +2284,7 @@ static int _client_read(struct dm_event_fifos *fifos,
 				break;
 
 			if (msg->size > (DM_EVENT_MAX_MSG_SIZE))
-				goto bad;
+				goto desync;
 
 			if (!(buf = msg->data = malloc(msg->size + 1)))
 				goto bad;
@@ -2095,6 +2302,12 @@ bad:
 	msg->data = NULL;
 
 	return 0;
+
+desync:
+	/* Left-overs would be parsed as part of the next request */
+	_drain_client_fifo(fifos);
+
+	goto bad;
 }
 
 /*
@@ -2106,6 +2319,8 @@ static int _client_write(struct dm_event_fifos *fifos,
 	uint32_t temp[2];
 	unsigned bytes = 0;
 	int ret;
+	time_t deadline = 0;
+	size_t chunk;
 	struct pollfd pfd = { .fd = fifos->server, .events = POLLOUT };
 
 	size_t size = 2 * sizeof(uint32_t) + ((msg->data) ? msg->size : 0);
@@ -2129,20 +2344,45 @@ static int _client_write(struct dm_event_fifos *fifos,
 
 	while (bytes < size) {
 		/* Watch client write FIFO to be ready for output. */
-		ret = poll(&pfd, 1, -1);
+		ret = poll(&pfd, 1, 1000);
 
-		if ((ret < 0) && (errno != EINTR)) {
+		if (ret < 0) {
+			if (errno == EINTR)
+				continue;
 			log_sys_debug("poll", fifos->server_path);
 			break;
 		}
 
-		if (ret < 1)
+		if (!ret) {
+			if (!deadline)
+				deadline = _get_curr_time() +
+					   (_exit_now ? 1 : DM_EVENT_MSG_WRITE_TIMEOUT);
+			else if (_get_curr_time() >= deadline) {
+				/* Client is not reading its reply */
+				log_error("Client does not read reply on %s: giving up.",
+					  fifos->server_path);
+				break;
+			}
 			continue;
+		}
 
-		if ((ret = write(fifos->server, buf + bytes, size - bytes)) > 0)
+		/* Bounded chunk: a blocking write() of more could block forever */
+		chunk = size - bytes;
+		if (chunk > DM_EVENT_MSG_WRITE_CHUNK)
+			chunk = DM_EVENT_MSG_WRITE_CHUNK;
+
+		if ((ret = write(fifos->server, buf + bytes, chunk)) > 0) {
 			bytes += ret;
-		else if (errno == EIO)
+			deadline = 0;		/* Progress made */
+		} else if (ret < 0) {
+			if ((errno == EINTR) || (errno == EAGAIN))
+				continue;
+			if (errno == EIO)
+				break;	/* Client went away */
+			log_sys_debug("write", fifos->server_path);
 			break;
+		} else
+			break;		/* write() returned 0 */
 	}
 
 	if (header != temp)
@@ -2427,24 +2667,70 @@ static int _protect_against_oom_killer(void)
 static int _handle_preloaded_fifo(int fd, const char *path)
 {
 	struct stat st_fd, st_path;
-	int flags;
+	int flags, oflags;
 
-	if ((flags = fcntl(fd, F_GETFD)) < 0)
+	_check_fifo_path_security(path);
+
+	if ((flags = fcntl(fd, F_GETFD)) < 0) {
+		log_sys_error("fcntl(F_GETFD)", path);
 		return 0;
+	}
 
 	if (flags & FD_CLOEXEC)
 		return 0;
 
-	if (fstat(fd, &st_fd) < 0 || !S_ISFIFO(st_fd.st_mode))
+	if ((oflags = fcntl(fd, F_GETFL)) < 0) {
+		log_sys_error("fcntl(F_GETFL)", path);
 		return 0;
+	}
 
-	if (stat(path, &st_path) < 0 ||
-	    st_path.st_dev != st_fd.st_dev ||
-	    st_path.st_ino != st_fd.st_ino)
+	if ((oflags & O_ACCMODE) != O_RDWR) {
+		log_error("%s: fifo is not open read-write.", path);
 		return 0;
+	}
 
-	if (fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0)
+	if (fstat(fd, &st_fd) < 0) {
+		log_sys_error("fstat", path);
 		return 0;
+	}
+
+	if (!S_ISFIFO(st_fd.st_mode)) {
+		log_error("%s: activated fd is not a fifo.", path);
+		return 0;
+	}
+
+	/*
+	 * Enforce the same invariant as _open_fifo(): the daemon trusts
+	 * whoever can write to these fifos, so they have to be owned by
+	 * root and not accessible, executable or writable by others.
+	 */
+	if (st_fd.st_uid ||
+	    (st_fd.st_mode & (S_IEXEC | S_IRWXG | S_IRWXO))) {
+		log_error("%s: fifo has incorrect attributes.", path);
+		return 0;
+	}
+
+	if (stat(path, &st_path) < 0) {
+		log_sys_error("stat", path);
+		return 0;
+	}
+
+	if (st_path.st_dev != st_fd.st_dev ||
+	    st_path.st_ino != st_fd.st_ino) {
+		log_error("%s: activated fifo does not match path.", path);
+		return 0;
+	}
+
+	if (fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0) {
+		log_sys_error("fcntl(FD_CLOEXEC)", path);
+		return 0;
+	}
+
+	/* Read/write paths rely on poll() deadlines, not on blocking I/O */
+	if (fcntl(fd, F_SETFL, oflags | O_NONBLOCK) < 0) {
+		log_sys_error("fcntl(O_NONBLOCK)", path);
+		return 0;
+	}
 
 	return 1;
 }
@@ -2688,10 +2974,14 @@ static int _info_dmeventd(const char *name, struct dm_event_fifos *fifos)
 		goto out;
 	}
 
-	if (!(line = strchr(msg.data, ' '))) {
-		free(msg.data);
+	if (!msg.data) {
+		fprintf(stderr, "No status reply from existing dmeventd.\n");
 		goto out;
 	}
+
+	if (!(line = strchr(msg.data, ' ')))
+		goto out;
+
 	line++;
 	for (i = 0; msg.data[i]; ++i)
 		if (msg.data[i] == ';') {
@@ -2703,22 +2993,22 @@ static int _info_dmeventd(const char *name, struct dm_event_fifos *fifos)
 			++count;
 		}
 
-	free(msg.data);
-
 	if (!count)
 		printf("%s does not monitor any device.\n", name);
 
 	if (version >= 2) {
+		free(msg.data);
 		if (daemon_talk(fifos, &msg, DM_EVENT_CMD_GET_PARAMETERS, "-", "-", 0, 0)) {
 			fprintf(stderr, "Failed to acquire parameters from existing dmeventd.\n");
 			goto out;
 		}
-		printf("%s internal status: %s\n", name, msg.data);
-		free(msg.data);
+		if (msg.data)
+			printf("%s internal status: %s\n", name, msg.data);
 	}
 
 	ret = 1;
 out:
+	free(msg.data);
 	fini_fifos(fifos);
 
 	return ret;
@@ -2761,7 +3051,7 @@ static int _restart_dmeventd(struct dm_event_fifos *fifos,
 	if (daemon_talk(fifos, &msg, DM_EVENT_CMD_GET_STATUS, "-", "-", 0, 0))
 		goto bad;
 
-	if (!(message = strchr(msg.data, ' ')))
+	if (!msg.data || !(message = strchr(msg.data, ' ')))
 		goto bad;
 	message++;
 	for (i = 0; msg.data[i]; ++i)

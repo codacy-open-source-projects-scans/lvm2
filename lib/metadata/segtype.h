@@ -330,6 +330,24 @@ struct segment_type *init_unknown_segtype(struct cmd_context *cmd,
  */
 #define RAID_FEATURE_NEW_DEVICES_ACCEPT_REBUILD	(1U << 6) /* version 1.9.0 */
 #define RAID_FEATURE_FIXED_HEALTH_CHARS		(1U << 7) /* version 1.9.2 stale health chars fixed */
+/*
+ * RAID_FEATURE_REBUILD_KEEPS_RECOVERY
+ * dm-raid keeps the array's recovery progress when a reload carries
+ * 'rebuild <idx>' for a device: the sync resumes from the superblock
+ * recovery offset instead of restarting from zero.  Set from upstream
+ * kernel commit c44a5ee803d2 ("dm raid: fix rebuild of specific devices
+ * by updating superblock") and later, which is target version 1.14.0.
+ *
+ * Targets without this bit restart the sync on 'rebuild', so only they
+ * warn about lost progress before the reload.  LV_REBUILD is still
+ * re-marked on targets with this bit: a leg whose recovery was
+ * committed but has not really started yet has no valid superblock to
+ * resume from, and dm-raid rejects the reload without 'rebuild' -
+ * there is no way to exclude any target version.  Telling the cases
+ * apart would require evaluating the MD superblocks on the _rmeta LVs
+ * from user space; not worth the complexity.
+ */
+#define RAID_FEATURE_REBUILD_KEEPS_RECOVERY	(1U << 8) /* version 1.14.0 */
 
 bool raid_is_available(const struct logical_volume *lv);
 #ifdef RAID_INTERNAL

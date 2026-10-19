@@ -5580,7 +5580,7 @@ static int _lvresize_adjust_extents(struct logical_volume *lv,
 					lp->stripe_size = seg_stripesize;
 				} else {
 					lp->stripe_size =
-						find_config_tree_int(cmd, metadata_stripesize_CFG, NULL) * 2;
+						(uint64_t) find_config_tree_int(cmd, metadata_stripesize_CFG, NULL) * 2;
 					log_print_unless_silent("Using default stripesize %s.",
 								display_size(cmd, (uint64_t) lp->stripe_size));
 				}
@@ -6810,6 +6810,25 @@ int lv_resize(struct cmd_context *cmd, struct logical_volume *lv,
 		return_0;
 
 	/*
+	 * Resizing the caching device is not supported for any cache type
+	 * LVM supports, i.e. cache pool, cachevol or writecache.  A cache
+	 * pool would additionally require resizing its metadata device and
+	 * keeping the embedded-metadata layout in sync.
+	 *
+	 * Cachevol and writecache cache devices are hidden sub-LVs and are
+	 * already rejected as internal LVs below.  An unused cache pool is
+	 * a nameable visible LV and would otherwise reach allocation with a
+	 * cache-pool segment and fail there with an internal error, so
+	 * reject it here for a clear message.
+	 */
+	if (lv_is_cache_pool(lv) ||
+	    lv_is_cache_pool_data(lv) ||
+	    lv_is_cache_pool_metadata(lv)) {
+		log_error("Resize of cache pool %s is not supported.", display_lvname(lv));
+		return 0;
+	}
+
+	/*
 	 * The only types of !visible/internal/non-top LVs that can be directly
 	 * resized via the command arg.  Other internal LVs are resized
 	 * indirectly when resizing a top LV.
@@ -7667,6 +7686,8 @@ struct dm_list *build_parallel_areas_from_lv(struct logical_volume *lv,
 	uint32_t raid_multiple;
 	struct lv_segment *seg = first_seg(lv);
 	struct lv_segment *src_seg;
+	struct logical_volume *search_lv;
+	uint32_t search_le, search_len;
 
 	if (!(parallel_areas = dm_pool_alloc(lv->vg->vgmem, sizeof(*parallel_areas)))) {
 		log_error("parallel_areas allocation failed");
@@ -7697,12 +7718,19 @@ struct dm_list *build_parallel_areas_from_lv(struct logical_volume *lv,
 
 		src_seg = use_pvmove_parent_lv ? seg->pvmove_source_seg : NULL;
 
+		search_lv = lv;
+		search_le = current_le;
+		search_len = spvs->len;
+
+		if (src_seg) {
+			search_lv = src_seg->lv;
+			search_le = src_seg->le;
+			search_len = spvs->len * _calc_area_multiple(src_seg->segtype, src_seg->area_count, 0);
+		}
+
 		/* Find next segment end */
 		/* FIXME Unnecessary nesting! */
-		if (!_for_each_pv(cmd, src_seg ? src_seg->lv : lv,
-				  src_seg ? src_seg->le : current_le,
-				  src_seg ? spvs->len * _calc_area_multiple(src_seg->segtype, src_seg->area_count, 0) : spvs->len,
-				  src_seg,
+		if (!_for_each_pv(cmd, search_lv, search_le, search_len, src_seg,
 				  &spvs->len,
 				  0, 0, -1, 0, _add_pvs, (void *) spvs))
 			return_NULL;
